@@ -325,59 +325,31 @@ class EdupageService:
                 except Exception:  # noqa: BLE001
                     pass  # 缓存损坏则重新计算
 
-        def norm(s: str) -> str:
-            return re.sub(r"\s+", " ", (s or "").strip()).lower()
-
-        def subj_key(s: str) -> str:
-            """科目归一键: 去掉尾部轮次序号(HL1/SL2/1(G3) 等)。
-
-            周五下午 12:45 起是走班轮换课, 课名带轮次号且可能换老师
-            (如选课时的 Physics HL1 → 周五的 Physics HL2, 老师也不同),
-            按全名+老师精确匹配会把整段下午滤掉。
-            """
-            return re.sub(r"\d+\s*(\([^)]*\))?$", "", norm(s)).strip()
-
-        sel_by_key: dict[str, dict] = {}
-        for sel in selected:
-            sel_by_key.setdefault(subj_key(sel.get("subject")), sel)
-        auto_subjects = {"class meeting", "班会"}   # 全年级统一安排, 无需选课
-
-        # 同一时刻+同一科目键的全部课卡聚在一起, 再决定保留哪张:
-        # ① 优先课名与选课完全一致的卡; ② 其次归一键相同(轮换)的卡;
-        # ③ 组内优先老师匹配的卡, 匹配不上(轮换换老师)也保留, 不再丢弃。
-        slots: dict[tuple, list] = {}
-        for l in self.master_plan(day):
-            if l.is_cancelled or not l.start_time:
-                continue
-            subject = l.subject.name if l.subject else ""
-            key = subj_key(subject)
-            sel = sel_by_key.get(key)
-            if sel is None:
-                if norm(subject) not in auto_subjects:
-                    continue
-                exact, want = 0, ""
-            else:
-                exact = 2 if norm(subject) == norm(sel.get("subject")) else 1
-                want = (sel.get("teacher") or "").replace("(未指定老师)", "")
-            row = {
-                "start": l.start_time.strftime("%H:%M") if l.start_time else "",
-                "end": l.end_time.strftime("%H:%M") if l.end_time else "",
-                "subject": subject,
-                "teacher": l.teachers[0].name if l.teachers else "",
-                "room": l.classrooms[0].name if l.classrooms else "",
-                "groups": ",".join(l.groups) if l.groups else "",
-                "cancelled": bool(l.is_cancelled),
-                "curriculum": getattr(l, "curriculum", None) or "",
-            }
-            slots.setdefault((row["start"], key), {}).setdefault(
-                exact, []).append((want, row))
-
+        # 严格匹配: 课名与老师都必须与选课完全一致(仅去首尾空白),
+        # 不做任何模糊/归一化 —— 选课里没有的课一律不进个人课表。
+        # 选课时老师为 "(未指定老师)" 的, 该课任何老师的卡都算匹配。
         out = []
-        for (_start, _key), tiers in slots.items():
-            # 同一时段: 精确名匹配的卡优先于轮换名匹配的卡, 不混排
-            top = tiers[max(tiers)]
-            strict = [r for want, r in top if want and r["teacher"] == want]
-            out.extend(strict or [r for _, r in top])
+        for l in self.master_plan(day):
+            subject = (l.subject.name if l.subject else "").strip()
+            teacher = (l.teachers[0].name if l.teachers else "").strip()
+            for sel in selected:
+                if (sel.get("subject") or "").strip() != subject:
+                    continue
+                want_teacher = (sel.get("teacher") or "").replace(
+                    "(未指定老师)", "").strip()
+                if want_teacher and teacher != want_teacher:
+                    continue
+                out.append({
+                    "start": l.start_time.strftime("%H:%M") if l.start_time else "",
+                    "end": l.end_time.strftime("%H:%M") if l.end_time else "",
+                    "subject": subject,
+                    "teacher": teacher,
+                    "room": l.classrooms[0].name if l.classrooms else "",
+                    "groups": ",".join(l.groups) if l.groups else "",
+                    "cancelled": bool(l.is_cancelled),
+                    "curriculum": getattr(l, "curriculum", None) or "",
+                })
+                break
         out.sort(key=lambda x: (x["start"], x["subject"]))
         try:
             cache_dir.mkdir(parents=True, exist_ok=True)
