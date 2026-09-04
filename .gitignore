@@ -12,3 +12,4 @@ _perf_*.py
 _splash_*.py
 _ui_*.py
 *.log
+msi_extract
