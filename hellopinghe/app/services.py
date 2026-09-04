@@ -20,6 +20,19 @@ from .. import storage
 
 KEYRING_SERVICE = "hellopinghe"
 
+# HL/SL 层级后缀(HL1/SL2/HL/SL1), 可后跟 (G3) 这类班别括号
+_LEVEL_RE = re.compile(r"\s*(?:HL\s*/\s*SL|HL|SL)\s*\d?\s*(\([^)]*\))?\s*$")
+
+
+def subject_family(name: str) -> str:
+    """科目族: 去掉课名里的 HL/SL 层级后缀(保留 (G3) 这类班别括号).
+
+    同一个教学组一周内的课卡会换名(History HL/SL2 ↔ History HL2),
+    按课名精确匹配会丢卡 —— 选课匹配一律用科目族, 层级由 组号+老师 区分。
+    """
+    n = (name or "").strip()
+    return _LEVEL_RE.sub(r"\1", n).strip()
+
 
 # ---------------------------------------------------------------- keyring
 def secret_set(key: str, secret: str) -> bool:
@@ -321,13 +334,13 @@ class EdupageService:
         return any(getattr(c, "class_id", None) == cid for c in classes)
 
     def subject_options(self, progress=None) -> list[dict]:
-        """向导用: 跨整周聚合 (科目 → 老师 → 班级段[组+教室+上课时间]).
+        """选课来源: 按"教学组"聚合 (科目族 + 组号 + 老师 = 一个选项).
 
-        只看一天会漏掉当天没排课的科目(如 English B SL),
-        因此用 gcall 区间接口一次拉整周, 再聚合全部科目。
-        分段键是教学组(Edupage 卡片上的 groupnames, 如 A-O / G1-G3):
-        同老师同课名不同组 = 不同的班; 同组、周内多张课卡 = 同一个班。
-        教室只作展示(经常为空), 不作分段键。
+        学校自己的课表页每个时段列的就是 组|教室|老师|课名; 同一个教学组
+        全周多张课卡 = 同一个选项, 勾一次全周生效。
+        聚合键是 (科目族, 组号, 老师): 组号会被复用(Psychology 组F 有两个
+        教学组、TOK 组O 有两个), 所以老师参与构成身份; 课名会换
+        (History HL/SL2 ↔ History HL2), 所以用科目族; 教室只展示不参与。
         """
         monday = self.week_monday(date.today())
         if progress:
@@ -339,8 +352,8 @@ class EdupageService:
                 progress({"day": f"{monday + timedelta(days=7)} 起", "attempt": 2, "total": 2})
             plans = self.week_plans(monday + timedelta(days=7), days=6)
 
-        # subject -> teacher -> group -> [(day_iso, start, end, room)]
-        grouped: dict[str, dict[str, dict[str, list]]] = {}
+        # (family, group, teacher) -> {display, rooms, times}
+        grouped: dict[tuple, dict] = {}
         for day_iso in sorted(plans):
             day_name = f"周{'一二三四五六日'[date.fromisoformat(day_iso).weekday()]}"
             for l in plans[day_iso]:
@@ -348,36 +361,37 @@ class EdupageService:
                     continue
                 if not self._for_my_class(l):
                     continue
-                subject = l.subject.name
-                teacher = l.teachers[0].name if l.teachers else ""
+                fam = subject_family(l.subject.name)
                 group = ",".join(l.groups) if l.groups else ""
+                teacher = l.teachers[0].name.strip() if l.teachers else ""
                 room = l.classrooms[0].name if l.classrooms else ""
-                grouped.setdefault(subject, {}).setdefault(teacher, {}).setdefault(
-                    group, []).append((
-                        day_iso,
-                        l.start_time.strftime("%H:%M"),
-                        l.end_time.strftime("%H:%M") if l.end_time else "",
-                        day_name, room,
-                    ))
+                ent = grouped.setdefault((fam, group, teacher), {
+                    "subject": l.subject.name, "group": group,
+                    "teacher": teacher or "(未指定老师)",
+                    "rooms": set(), "times": []})
+                ent["rooms"].add(room)
+                ent["times"].append({
+                    "_iso": day_iso, "day": day_name,
+                    "start": l.start_time.strftime("%H:%M"),
+                    "end": l.end_time.strftime("%H:%M") if l.end_time else ""})
 
-        result = []
-        for subject in sorted(grouped):
-            options = []
-            for t, groups in sorted(grouped[subject].items()):
-                sections = []
-                for g, times in sorted(groups.items(), key=lambda kv: (kv[0] != "", kv[0])):
-                    seq = sorted(times, key=lambda x: (x[0], x[1]))
-                    sections.append({
-                        "group": g,
-                        "rooms": sorted({x[4] for x in seq if x[4]}),
-                        "times": [
-                            {"day": d, "start": s, "end": e}
-                            for _iso, s, e, d, _r in seq
-                        ],
-                    })
-                options.append({"teacher": t or "(未指定老师)", "sections": sections})
-            result.append({"subject": subject, "options": options})
-        return result
+        by_subject: dict[str, list] = {}
+        for (fam, _g, _t), ent in grouped.items():
+            times = sorted(ent["times"], key=lambda x: (x["_iso"], x["start"]))
+            by_subject.setdefault(fam, []).append({
+                "id": f"{fam}|{ent['teacher']}|{ent['group']}",
+                "group": ent["group"],
+                "teacher": ent["teacher"],
+                "subject": ent["subject"],
+                "rooms": sorted(x for x in ent["rooms"] if x),
+                "times": [{"day": t["day"], "start": t["start"], "end": t["end"]}
+                          for t in times]})
+        return [
+            {"subject": fam,
+             "groups": sorted(rows, key=lambda r: (r["group"] == "", r["group"],
+                                                   r["teacher"]))}
+            for fam, rows in sorted(by_subject.items())
+        ]
 
     def personal(self, day: date) -> list[dict]:
         """按向导选课结果过滤出的个人课表(当天).
@@ -396,7 +410,7 @@ class EdupageService:
             json.dumps(selected, sort_keys=True).encode("utf-8")
         ).hexdigest()[:8]
         cache_dir = Path.home() / ".hellopinghe"
-        cache_file = cache_dir / f"edupage_personal_v3_{day.isoformat()}_{sel_key}.json"
+        cache_file = cache_dir / f"edupage_personal_v4_{day.isoformat()}_{sel_key}.json"
         if cache_file.exists():
             age = _time.time() - cache_file.stat().st_mtime
             if age < 2 * 3600:
@@ -405,15 +419,16 @@ class EdupageService:
                 except Exception:  # noqa: BLE001
                     pass  # 缓存损坏则重新计算
 
-        # 严格匹配: 课名/老师/组都必须与选课完全一致(仅去首尾空白),
-        # 不做任何模糊/归一化 —— 选课里没有的课一律不进个人课表。
-        # 兼容: 旧版选课没有 group 字段(或老师为 "(未指定老师)")时该维度
-        # 不参与过滤。课程来源上先过一遍本班过滤(见 _for_my_class)。
+        # 按"教学组"匹配: 选课 = (科目族, 组号, 老师)。
+        # 课名会换(History HL/SL2 ↔ History HL2), 所以科目用 family 比对;
+        # 老师做宽松匹配(选课老师 ∈ 课卡老师, CS 组P 一周轮换两位老师);
+        # 兼容旧选课: 无 group = 该组维度不筛(如 TOK 全部组), 无 teacher 同理。
+        # 课程来源上先过一遍本班过滤(见 _for_my_class)。
         # 选课去重(同一门课勾了两次只会显示一遍)
         seen_sel = set()
         uniq = []
         for s in selected:
-            k = ((s.get("subject") or "").strip(),
+            k = (subject_family(s.get("subject") or ""),
                  (s.get("teacher") or "").replace("(未指定老师)", "").strip(),
                  (s.get("group") or "").strip())
             if k not in seen_sel:
@@ -424,20 +439,21 @@ class EdupageService:
             if not self._for_my_class(l):
                 continue
             subject = (l.subject.name if l.subject else "").strip()
-            teacher = (l.teachers[0].name if l.teachers else "").strip()
+            card_teachers = {t.name.strip() for t in (l.teachers or [])}
             group = ",".join(l.groups) if l.groups else ""
-            for subj, w_teacher, w_group in uniq:
-                if subj != subject:
+            card_groups = [g.strip() for g in group.split(",") if g.strip()]
+            for fam, w_teacher, w_group in uniq:
+                if fam != subject_family(subject):
                     continue
-                if w_teacher and teacher != w_teacher:
+                if w_teacher and w_teacher not in card_teachers:
                     continue
-                if w_group and w_group not in [g.strip() for g in group.split(",")]:
+                if w_group and w_group not in card_groups:
                     continue
                 out.append({
                     "start": l.start_time.strftime("%H:%M") if l.start_time else "",
                     "end": l.end_time.strftime("%H:%M") if l.end_time else "",
                     "subject": subject,
-                    "teacher": teacher,
+                    "teacher": l.teachers[0].name.strip() if l.teachers else "",
                     "room": l.classrooms[0].name if l.classrooms else "",
                     "group": group,
                     "cancelled": bool(l.is_cancelled),
@@ -452,7 +468,9 @@ class EdupageService:
                 old.unlink(missing_ok=True)   # 旧版缓存(截断数据)直接清理
             for old in cache_dir.glob("edupage_personal_v2_*.json"):
                 old.unlink(missing_ok=True)   # v2(未按班级过滤)整批作废
-            for old in cache_dir.glob(f"edupage_personal_v3_{day.isoformat()}_*.json"):
+            for old in cache_dir.glob("edupage_personal_v3_*.json"):
+                old.unlink(missing_ok=True)   # v3(课名精确匹配, 会丢换名卡)作废
+            for old in cache_dir.glob(f"edupage_personal_v4_{day.isoformat()}_*.json"):
                 if old != cache_file:
                     old.unlink(missing_ok=True)
         except Exception:  # noqa: BLE001

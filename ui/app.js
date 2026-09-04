@@ -1226,60 +1226,53 @@ $("#st-ai-save").onclick = async () => {
 };
 
 /* ---- 选课渲染(向导 + 设置共用) ----
-   结构: 科目 → 老师 → 班级段(按教学组分)。同老师同课名不同组 = 不同的班,
-   同组、周内多张课卡 = 同一个班。多老师/多班时用三角形折叠展开。 */
+   选课按"教学组"构建: 一个教学组 = 一个选项, 身份是 (科目族, 组号, 老师)。
+   学校课表页每个时段列的就是 组|教室|老师|课名; 组号会跨科目复用
+   (Psychology 组F 有两个组), 所以老师参与构成身份; 课名会换
+   (History HL/SL2 ↔ History HL2), 所以匹配/勾选一律用科目族。
+   多个组时用三角形折叠展开(按科目一层)。 */
 const selOpen = new Set();   // 折叠展开状态(重渲染后保持)
+function subjFamily(n) {   /* 与后端 subject_family 保持一致 */
+  return (n || "").trim().replace(/\s*(HL\s*\/\s*SL|HL|SL)\s*\d?\s*(\([^)]*\))?\s*$/, "$2").trim();
+}
 function fmtSecTimes(times) {
   return (times || []).map((t) => `${t.day} ${t.start}`).join(" / ");
 }
-function secChecked(checkedSet, subject, teacher, group) {
-  /* 旧版选课无组字段(sub|teacher|) → 该老师所有班都视为已选 */
-  return checkedSet.has(`${subject}|${teacher}|${group}`) ||
-    checkedSet.has(`${subject}|${teacher}|`);
+function grpChecked(checkedSet, fam, teacher, group) {
+  /* 旧版选课无组字段(fam|teacher|) → 该老师所有组都视为已选 */
+  return checkedSet.has(`${fam}|${teacher}|${group}`) ||
+    checkedSet.has(`${fam}|${teacher}|`);
 }
-function secRowHTML(subject, teacher, sec, checkedSet, pad, lead, autoCheck) {
-  const chk = (autoCheck || secChecked(checkedSet, subject, teacher, sec.group))
+function grpRowHTML(fam, g, checkedSet, pad, lead, autoCheck) {
+  const chk = (autoCheck || grpChecked(checkedSet, fam, g.teacher, g.group))
     ? "checked" : "";
-  const label = sec.group ? `组${sec.group}` : "全班";
-  const rooms = (sec.rooms || []).join(" ");
+  const label = g.group ? `组${g.group}` : "全班";
+  const rooms = (g.rooms || []).join(" ");
   return `<label class="subject-row" style="padding-left:${pad}px">
-    <input type="checkbox" data-sub="${esc(subject)}" data-teacher="${esc(teacher)}"
-      data-group="${esc(sec.group || "")}" ${chk}>
+    <input type="checkbox" data-sub="${esc(g.subject)}" data-teacher="${esc(g.teacher)}"
+      data-group="${esc(g.group || "")}" ${chk}>
     <span class="pick-grow">${lead || ""}<b>${esc(label)}</b>
-    <span class="rooms">${esc(rooms)}${rooms ? " · " : ""}${esc(fmtSecTimes(sec.times))}</span></span></label>`;
+    <span class="rooms">${esc(g.teacher)}${rooms ? " · " + esc(rooms) : ""}${esc(fmtSecTimes(g.times))}</span></span></label>`;
 }
 function subjectPickerHTML(subjects, filter, checkedSet, autoCheck) {
   const f = (filter || "").trim().toLowerCase();
-  return subjects.filter((s) => !f || s.subject.toLowerCase().includes(f))
+  return subjects.filter((s) => !f || s.subject.toLowerCase().includes(f) ||
+      (s.groups || []).some((g) => (g.subject || "").toLowerCase().includes(f)))
     .map((s) => {
-      const flat = s.options.length === 1 && s.options[0].sections.length === 1;
-      if (flat) {   // 只有一个班: 一行搞定, 不用折叠
-        const o = s.options[0];
-        const lead = `<b>${esc(s.subject)}</b> <span class="rooms">${esc(o.teacher)} · </span>`;
-        return secRowHTML(s.subject, o.teacher, o.sections[0], checkedSet, 8, lead, autoCheck);
+      const flat = (s.groups || []).length === 1;
+      if (flat) {   // 只有一个教学组: 一行搞定, 不用折叠
+        const lead = `<b>${esc(s.subject)}</b> <span class="rooms">· </span>`;
+        return grpRowHTML(s.subject, s.groups[0], checkedSet, 8, lead, autoCheck);
       }
       const skey = `s:${s.subject}`;
       const sopen = selOpen.has(skey);
-      const teachers = s.options.map((o) => {
-        if (o.sections.length === 1) {
-          const lead = `${esc(o.teacher)} <span class="rooms">·</span>`;
-          return secRowHTML(s.subject, o.teacher, o.sections[0], checkedSet, 26, lead);
-        }
-        const tkey = `t:${s.subject}|${o.teacher}`;
-        const topen = selOpen.has(tkey);
-        return `<div class="fold-head" style="padding-left:26px" data-fold="${esc(tkey)}">
-            <span class="tri">${topen ? "▼" : "▶"}</span>
-            <span class="pick-grow">${esc(o.teacher)}
-            <span class="rooms">${o.sections.length} 个班, 选你的</span></span></div>
-          <div class="fold-body${topen ? "" : " hidden"}">${
-            o.sections.map((sec) => secRowHTML(s.subject, o.teacher, sec, checkedSet, 52, ""))
-              .join("")}</div>`;
-      }).join("");
       return `<div class="fold-head" data-fold="${esc(skey)}">
           <span class="tri">${sopen ? "▼" : "▶"}</span>
           <span class="pick-grow"><b>${esc(s.subject)}</b>
-          <span class="rooms">${s.options.length} 位老师, 点开选</span></span></div>
-        <div class="fold-body${sopen ? "" : " hidden"}">${teachers}</div>`;
+          <span class="rooms">${s.groups.length} 个教学组, 选你的</span></span></div>
+        <div class="fold-body${sopen ? "" : " hidden"}">${
+          s.groups.map((g) => grpRowHTML(s.subject, g, checkedSet, 26, ""))
+            .join("")}</div>`;
     }).join("") || `<div class="empty">没有匹配的科目</div>`;
 }
 function bindPickerFolds(container) {
@@ -1329,7 +1322,7 @@ $("#sm-save").onclick = async () => {
 };
 function renderSmSubjects(filter) {
   const checked = new Set(selectedLessonsCache.map((s) =>
-    `${s.subject}|${s.teacher}|${s.room || ""}`));
+    `${subjFamily(s.subject)}|${s.teacher || ""}|${s.group || ""}`));
   $("#sm-subjects").innerHTML = subjectPickerHTML(smSubjects, filter, checked);
   bindPickerFolds($("#sm-subjects"));
 }
