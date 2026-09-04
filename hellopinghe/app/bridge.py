@@ -40,6 +40,13 @@ def _snap_drop(*keys: str) -> None:
             _SNAP.pop(k, None)
 
 
+def _snap_drop_prefix(prefix: str) -> None:
+    """按前缀整批失效(tt|0 / tt|-1 … 这种带参数的键没法逐个枚举)."""
+    with _SNAP_LOCK:
+        for k in [k for k in _SNAP if k.startswith(prefix)]:
+            _SNAP.pop(k, None)
+
+
 def _wrap(fn, *args, **kwargs) -> dict:
     try:
         data = fn(*args, **kwargs)
@@ -149,6 +156,10 @@ class Api:
                 })
             self.cfg.selected_lessons = cleaned
             self._save_cfg()
+            # 选课一变, 个人课表/首页(含今日课)立刻作废 —— 不然改完选课
+            # 切到课表页, 快照 TTL 内返回的还是旧课表。
+            _snap_drop_prefix("tt|")
+            _snap_drop("home")
             return {"selected": len(cleaned)}
         return _wrap(job)
 
