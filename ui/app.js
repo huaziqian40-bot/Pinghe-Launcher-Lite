@@ -481,7 +481,7 @@ $("#sch-modal").addEventListener("click", (e) => {
 document.addEventListener("keydown", (e) => {
   if (e.key !== "Escape") return;
   if (!$("#sch-modal").classList.contains("hidden")) closeSchModal();
-  if (!$("#ml-modal").classList.contains("hidden")) $("#ml-modal").classList.add("hidden");
+  if (!$("#ml-modal").classList.contains("hidden")) { acClose(); $("#ml-modal").classList.add("hidden"); }
 });
 $("#schm-add").onclick = async () => {
   const title = $("#schm-title-in").value.trim();
@@ -685,14 +685,77 @@ async function fetchMail() {
 }
 $("#ml-unseen").onclick = () => { mailMode = 1; fetchMail().catch((e) => toast(e.message)); };
 $("#ml-all").onclick = () => { mailMode = 0; fetchMail().catch((e) => toast(e.message)); };
-$("#ml-compose").onclick = () => {
+/* ---- 通讯录自动补全 (输入名字/邮箱片段 → 匹配收件人) ---- */
+let mlContacts = null;   /* null = 尚未加载 */
+const acState = { items: [], idx: -1 };
+
+async function loadMlContacts(force) {
+  if (mlContacts && !force) return;
+  try {
+    const d = await call("mail_contacts", !!force);
+    mlContacts = d.contacts || [];
+  } catch (e) { mlContacts = mlContacts || []; }
+}
+
+function acTokens() {
+  return $("#ml-to").value.split(/[,;，；]/);
+}
+function acSetToken(tok) {
+  const parts = acTokens();
+  parts[parts.length - 1] = tok;
+  $("#ml-to").value = parts.join(", ");
+  $("#ml-to").focus();
+}
+function acClose() {
+  $("#ml-ac").classList.add("hidden");
+  acState.items = []; acState.idx = -1;
+}
+function acRender() {
+  const q = (acTokens().pop() || "").trim().toLowerCase();
+  const box = $("#ml-ac");
+  if (!q || !mlContacts) { acClose(); return; }
+  acState.items = mlContacts.filter((c) =>
+    (c.name || "").toLowerCase().includes(q) ||
+    (c.email || "").toLowerCase().includes(q)).slice(0, 6);
+  if (!acState.items.length) { acClose(); return; }
+  acState.idx = Math.min(Math.max(acState.idx, -1), acState.items.length - 1);
+  box.innerHTML = acState.items.map((c, i) =>
+    `<div class="ac-item ${i === acState.idx ? "on" : ""}" data-i="${i}">
+      <b>${esc(c.name || "(无名)")}</b>
+      <span class="ac-mail">${esc(c.email)}</span></div>`).join("");
+  box.classList.remove("hidden");
+  $$("#ml-ac .ac-item").forEach((el) => {
+    el.onclick = () => { acSetToken(acState.items[+el.dataset.i].email); acClose(); };
+  });
+}
+$("#ml-to").addEventListener("input", () => { acState.idx = -1; acRender(); });
+$("#ml-to").addEventListener("keydown", (e) => {
+  if ($("#ml-ac").classList.contains("hidden")) return;
+  if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+    e.preventDefault();
+    const n = acState.items.length;
+    acState.idx = e.key === "ArrowDown"
+      ? (acState.idx + 1) % n : (acState.idx <= 0 ? n - 1 : acState.idx - 1);
+    acRender();
+  } else if (e.key === "Enter") {
+    e.preventDefault();
+    const pick = acState.items[Math.max(acState.idx, 0)];
+    if (pick) { acSetToken(pick.email); acClose(); }
+  } else if (e.key === "Escape") {
+    e.preventDefault();
+    e.stopPropagation();   /* 只收起下拉, 不关掉整个弹卡 */
+    acClose();
+  }
+});
+$("#ml-compose").onclick = async () => {
   $("#ml-msg").textContent = "";
   $("#ml-modal").classList.remove("hidden");
   $("#ml-body").focus();
+  loadMlContacts();   /* 通讯录未加载则后台拉取(磁盘缓存 24h) */
 };
-$("#ml-cancel").onclick = () => $("#ml-modal").classList.add("hidden");
+$("#ml-cancel").onclick = () => { acClose(); $("#ml-modal").classList.add("hidden"); };
 $("#ml-modal").addEventListener("click", (e) => {
-  if (e.target === $("#ml-modal")) $("#ml-modal").classList.add("hidden");
+  if (e.target === $("#ml-modal")) { acClose(); $("#ml-modal").classList.add("hidden"); }
 });
 $("#ml-send").onclick = async () => {
   const btn = $("#ml-send");

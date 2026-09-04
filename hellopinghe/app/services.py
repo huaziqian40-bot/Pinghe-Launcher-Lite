@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from datetime import date, datetime, time as dtime, timedelta
 from pathlib import Path
 
-from ..config import Config
+from ..config import CONFIG_DIR, Config
 from ..exceptions import LoginRequiredError, PingheError
 from ..managebac.client import ManageBacClient
 from .. import storage
@@ -574,6 +574,230 @@ class MailService:
                 M.logout()
             except Exception:  # noqa: BLE001
                 pass
+
+    # ---- 通讯录 (lbdb 式: 从收件箱+已发送的邮件头收割联系人, 按频率排序) ----
+    _CONTACTS_SKIP = re.compile(
+        r"noreply|no-reply|donotreply|do-not-reply|mailer-daemon|postmaster"
+        r"|bounce|notification|notice|system", re.I)
+
+    @staticmethod
+    def _mutf7_decode(name: str) -> str:
+        """IMAP modified UTF-7 → UTF-8(Coremail 文件夹名如 &XfJT0ZAB- = 已发送)。"""
+        import base64
+
+        out, i = [], 0
+        while i < len(name):
+            ch = name[i]
+            if ch != "&":
+                out.append(ch)
+                i += 1
+                continue
+            j = name.find("-", i + 1)
+            if j < 0:
+                out.append(name[i:])
+                break
+            b64 = name[i + 1:j].replace(",", "/")
+            if not b64:
+                out.append("&")
+            else:
+                try:
+                    out.append(base64.b64decode(
+                        b64 + "=" * (-len(b64) % 4)).decode("utf-16-be"))
+                except Exception:  # noqa: BLE001
+                    out.append(name[i:j + 1])
+            i = j + 1
+        return "".join(out)
+
+    def _sent_folders(self, M) -> list[str]:
+        """探测已发送文件夹(Coremail 常见命名, 含 modified UTF-7 中文名)。"""
+        try:
+            typ, data = M.list()
+            if typ != "OK":
+                return []
+        except Exception:  # noqa: BLE001
+            return []
+
+        out = []
+        for line in data:
+            if not line:
+                continue
+            text = line.decode(errors="replace") if isinstance(line, bytes) else str(line)
+            m = re.search(r'\s"([^"]+)"\s*$', text)
+            name = m.group(1) if m else text.rsplit(" ", 1)[-1].strip('"')
+            decoded = self._mutf7_decode(name)
+            if "sent" in (name + " " + decoded).lower() or "已发送" in decoded:
+                out.append(f'"{name}"' if " " in name else name)
+        return out
+
+    @staticmethod
+    def _envelope_addresses(value: str) -> list[tuple[str, str]]:
+        """解析 Coremail 信封式地址头。
+
+        网易 Coremail 对 BODY[HEADER.FIELDS (FROM TO CC)] 返回的不是
+        标准 RFC5322 头, 而是 IMAP ENVELOPE 地址列表序列化:
+          (("显示名" NIL "local" "domain")) / ((NIL NIL "a" "x") (NIL NIL "b" "y"))
+        email.utils.getaddresses 解析不了, 这里按括号+引号做小分词器。
+        """
+        stack: list[list] = [[]]
+        buf, in_quote, esc = "", False, False
+
+        def push_atom() -> None:
+            nonlocal buf
+            t = buf.strip()
+            if t:
+                stack[-1].append(None if t.upper() == "NIL" else t.strip('"'))
+            buf = ""
+
+        for ch in value:
+            if esc:
+                buf += ch
+                esc = False
+            elif in_quote:
+                if ch == "\\":
+                    esc = True
+                elif ch == '"':
+                    in_quote = False
+                else:
+                    buf += ch
+            elif ch == '"':
+                in_quote = True
+            elif ch == "(":
+                push_atom()
+                stack.append([])
+            elif ch == ")":
+                push_atom()
+                node = stack.pop()
+                stack[-1].append(node)
+            elif ch in " \t":
+                push_atom()
+            else:
+                buf += ch
+        push_atom()
+
+        addrs: list[tuple[str, str]] = []
+
+        def walk(node) -> None:
+            if not isinstance(node, list):
+                return
+            # 地址元组 = [name, adl, mailbox, host], mailbox/host 必为字符串
+            if (len(node) >= 4
+                    and isinstance(node[2], str) and isinstance(node[3], str)):
+                name = node[0] if isinstance(node[0], str) else ""
+                addrs.append((name, f"{node[2]}@{node[3]}"))
+                return
+            for child in node:
+                walk(child)
+
+        walk(stack[0])
+        return addrs
+
+    def contacts(self, force: bool = False, limit: int = 300) -> list[dict]:
+        """从 INBOX + 已发送文件夹收割联系人。
+
+        网易企业邮个人账号没有 CardDAV/通讯录 API(那是管理员端能力),
+        客户端方案与 mutt/lbdb、Gmail 相同: 解析 From/To/Cc 邮件头,
+        (地址→姓名, 出现次数) 聚合, 按频率排序 → 自动补全与 AI 查询。
+        磁盘缓存 24h。
+        """
+        import email as _email
+        from email.utils import getaddresses
+
+        cache = CONFIG_DIR / "mail_contacts.json"
+        if not force and cache.exists():
+            try:
+                raw = json.loads(cache.read_text(encoding="utf-8"))
+                if _time.time() - raw.get("ts", 0) < 86400:
+                    return raw.get("contacts", [])
+            except Exception:  # noqa: BLE001
+                pass
+
+        me = (self.cfg.mail_email or "").strip().lower()
+        agg: dict[str, dict] = {}
+
+        def harvest(header_bytes: bytes) -> None:
+            msg = _email.message_from_bytes(header_bytes)
+            for key, value in msg.items():
+                if key.lower() not in ("from", "to", "cc"):
+                    continue
+                decoded = self._decode(value)
+                pairs = [(n, a) for n, a in getaddresses([decoded])
+                         if a and "@" in a]
+                if not pairs and decoded.lstrip().startswith("("):
+                    pairs = self._envelope_addresses(decoded)
+                for _name, addr in pairs:
+                    addr = (addr or "").strip().strip("<>").lower()
+                    if "@" not in addr or addr == me or not addr.partition("@")[0]:
+                        continue
+                    if self._CONTACTS_SKIP.search(addr):
+                        continue
+                    entry = agg.setdefault(addr, {"names": {}, "count": 0})
+                    entry["count"] += 1
+                    if _name:
+                        _name = _name.strip().strip("\"'").strip()
+                        if _name:
+                            entry["names"][_name] = entry["names"].get(_name, 0) + 1
+
+        M = self._conn()
+        try:
+            folders = ["INBOX"] + self._sent_folders(M)
+            for folder in folders:
+                try:
+                    typ, data = M.select(folder, readonly=True)
+                    if typ != "OK" or not data or not data[0]:
+                        continue
+                    typ, data = M.uid("SEARCH", "ALL")
+                    if typ != "OK":
+                        continue
+                    uids = (data[0] or b"").split()[-400:]
+                    # 批量 FETCH(每批 100), 避免逐封往返拖慢
+                    for i in range(0, len(uids), 100):
+                        batch = b",".join(uids[i:i + 100])
+                        typ, md = M.uid(
+                            "FETCH", batch,
+                            "(BODY.PEEK[HEADER.FIELDS (FROM TO CC)])")
+                        if typ != "OK":
+                            continue
+                        for part in md:
+                            if isinstance(part, tuple) and part[1]:
+                                harvest(part[1])
+                except Exception:  # noqa: BLE001
+                    continue
+        finally:
+            try:
+                M.logout()
+            except Exception:  # noqa: BLE001
+                pass
+
+        contacts = []
+        for addr, entry in sorted(
+                agg.items(), key=lambda kv: -kv[1]["count"])[:limit]:
+            best_name = (max(entry["names"], key=entry["names"].get)
+                         if entry["names"] else "")
+            contacts.append({"name": best_name, "email": addr,
+                             "count": entry["count"]})
+        try:
+            CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+            cache.write_text(json.dumps(
+                {"ts": _time.time(), "contacts": contacts},
+                ensure_ascii=False), encoding="utf-8")
+        except Exception:  # noqa: BLE001
+            pass
+        return contacts
+
+    def contacts_search(self, query: str, limit: int = 8) -> list[dict]:
+        """按姓名/邮箱模糊匹配联系人(供 AI 与前端自动补全)。"""
+        q = (query or "").strip().lower()
+        allc = self.contacts()
+        if not q:
+            return allc[:limit]
+        out = []
+        for c in allc:
+            hay = f"{c.get('name', '')} {c.get('email', '')}".lower()
+            if q in hay:
+                out.append(c)
+                if len(out) >= limit:
+                    break
+        return out
 
     def _smtp_password(self) -> str:
         """获取 SMTP 登录密码（与 IMAP 相同逻辑）。"""

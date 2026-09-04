@@ -93,7 +93,12 @@ def build_tools() -> list[dict]:
               {"day": {"type": "string"}, "time": {"type": "string"},
                "title": {"type": "string"}, "note": {"type": "string"}},
               ["day", "title"]),
-        _tool("send_email", "提案: 用平和邮箱发邮件",
+        _tool("search_contacts",
+              "在邮箱通讯录里按姓名或邮箱片段搜索联系人。"
+              "用户提到人名要发邮件/给谁写信时, 先用本工具把名字变成邮箱地址",
+              {"query": {"type": "string", "maxLength": 80}}, ["query"]),
+        _tool("send_email", "提案: 用平和邮箱发邮件。to 必须是完整邮箱地址, "
+              "如果用户只说了名字, 先调用 search_contacts 查到邮箱",
               {"to": {"type": "string"}, "subject": {"type": "string"}, "body": {"type": "string"}},
               ["to", "subject", "body"]),
         _tool("submit_managebac_task", "提案: 把 workspace 里的文件提交到 ManageBac 作业",
@@ -288,6 +293,10 @@ class AgentEngine:
 
         if name == "read_mail":
             return self.svc.mail.read(str(args["uid"]))
+
+        if name == "search_contacts":
+            return {"contacts": self.svc.mail.contacts_search(
+                str(args.get("query") or ""), limit=8)}
 
         if name == "get_schedule":
             return {"events": self.svc.schedule.list_range(args["day_from"], args["day_to"])}

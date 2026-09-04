@@ -343,7 +343,10 @@
       <b>✉ 写邮件</b>
       <button class="ghost" id="ml-cancel">✕ 关闭</button>
     </div>
-    <div class="form-row"><input type="text" id="ml-to" placeholder="收件人" class="flex1"></div>
+    <div class="form-row" style="position:relative">
+      <input type="text" id="ml-to" placeholder="收件人 (输入名字自动匹配通讯录)" class="flex1" autocomplete="off">
+      <div id="ml-ac" class="ac-list hidden"></div>
+    </div>
     <div class="form-row"><input type="text" id="ml-subject" placeholder="主题" class="flex1"></div>
     <textarea id="ml-body" placeholder="正文…"></textarea>
     <div class="form-row" style="justify-content:flex-end;margin-top:10px">

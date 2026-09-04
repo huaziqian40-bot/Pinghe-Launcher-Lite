@@ -433,6 +433,18 @@ class Api:
             return out
         return _wrap(job)
 
+    def mail_contacts(self, force: bool = False) -> dict:
+        """通讯录(自动补全 + AI 联系人查询共用)。磁盘缓存 24h。"""
+        def job():
+            key = f"contacts|{bool(force)}"
+            cached = _snap_get(key, 600)
+            if cached is not None:
+                return cached
+            out = {"contacts": self.svc.mail.contacts(force=bool(force))}
+            _snap_put(key, out)
+            return out
+        return _wrap(job)
+
     def course_save_order(self, order_json: str) -> dict:
         """保存"我的课程"里拖拽后的课程顺序。"""
         def job():
