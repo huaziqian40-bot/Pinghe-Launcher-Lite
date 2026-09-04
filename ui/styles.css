@@ -282,6 +282,10 @@ textarea{width:100%;resize:vertical}
 .subject-row{display:flex;align-items:center;gap:8px;padding:6px 8px;border-radius:8px}
 .subject-row:hover{background:var(--ivory-100)}
 .subject-row .rooms{color:var(--ink-3);font-size:12px}
+.pick-grow{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.fold-head{display:flex;align-items:center;gap:8px;padding:6px 8px;border-radius:8px;cursor:pointer;user-select:none}
+.fold-head:hover{background:var(--ivory-100)}
+.fold-head .tri{color:var(--ink-3);font-size:10px;width:11px;flex:none;transition:transform .15s ease}
 .wz-step p{margin:6px 0 12px;color:var(--ink-2)}
 
 /* ---------- 其他 ---------- */

@@ -132,13 +132,20 @@ class Api:
         def job():
             items = json.loads(selection_json)
             cleaned = []
+            seen = set()
             for it in items:
                 subject = (it.get("subject") or "").strip()
                 if not subject:
                     continue
+                key = (subject, (it.get("teacher") or "").strip(),
+                       (it.get("room") or "").strip())
+                if key in seen:
+                    continue
+                seen.add(key)
                 cleaned.append({
-                    "subject": subject,
-                    "teacher": (it.get("teacher") or "").strip(),
+                    "subject": key[0],
+                    "teacher": key[1],
+                    "room": key[2],
                 })
             self.cfg.selected_lessons = cleaned
             self._save_cfg()

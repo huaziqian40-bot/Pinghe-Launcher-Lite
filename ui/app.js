@@ -1129,7 +1129,7 @@ async function loadSettings() {
   $("#st-grades-llm").checked = !!d.send_grades_to_llm;
   selectedLessonsCache = d.selected_lessons || [];
   $("#st-subjects").innerHTML = selectedLessonsCache.map((s) =>
-    `<span class="chip on">${esc(s.subject)}${s.teacher ? " · " + esc(s.teacher) : ""}</span>`).join("") ||
+    `<span class="chip on">${esc(s.subject)}${s.teacher ? " · " + esc(s.teacher) : ""}${s.room ? " · " + esc(s.room) : ""}</span>`).join("") ||
     `<span class="muted">尚未选课</span>`;
   const ai = await call("ai_get");
   providersState = (ai.providers || []).map((p) => ({ ...p, api_key: "" }));
@@ -1225,6 +1225,78 @@ $("#st-ai-save").onclick = async () => {
   } catch (e) { toast(e.message); }
 };
 
+/* ---- 选课渲染(向导 + 设置共用) ----
+   结构: 科目 → 老师 → 教室段。同老师同课名不同教室 = 不同的班,
+   教室相同、周内多张课卡 = 同一个班。多老师/多班时用三角形折叠展开。 */
+const selOpen = new Set();   // 折叠展开状态(重渲染后保持)
+function fmtSecTimes(times) {
+  return (times || []).map((t) => `${t.day} ${t.start}`).join(" / ");
+}
+function secChecked(checkedSet, subject, teacher, room) {
+  /* 旧版选课无教室字段(sub|teacher|) → 该老师所有班都视为已选 */
+  return checkedSet.has(`${subject}|${teacher}|${room}`) ||
+    checkedSet.has(`${subject}|${teacher}|`);
+}
+function secRowHTML(subject, teacher, sec, checkedSet, pad, lead, autoCheck) {
+  const chk = (autoCheck || secChecked(checkedSet, subject, teacher, sec.room))
+    ? "checked" : "";
+  return `<label class="subject-row" style="padding-left:${pad}px">
+    <input type="checkbox" data-sub="${esc(subject)}" data-teacher="${esc(teacher)}"
+      data-room="${esc(sec.room)}" ${chk}>
+    <span class="pick-grow">${lead || ""}<b>${esc(sec.room)}</b>
+    <span class="rooms">${esc(fmtSecTimes(sec.times))}</span></span></label>`;
+}
+function subjectPickerHTML(subjects, filter, checkedSet, autoCheck) {
+  const f = (filter || "").trim().toLowerCase();
+  return subjects.filter((s) => !f || s.subject.toLowerCase().includes(f))
+    .map((s) => {
+      const flat = s.options.length === 1 && s.options[0].sections.length === 1;
+      if (flat) {   // 只有一个班: 一行搞定, 不用折叠
+        const o = s.options[0];
+        const lead = `<b>${esc(s.subject)}</b> <span class="rooms">${esc(o.teacher)} · </span>`;
+        return secRowHTML(s.subject, o.teacher, o.sections[0], checkedSet, 8, lead, autoCheck);
+      }
+      const skey = `s:${s.subject}`;
+      const sopen = selOpen.has(skey);
+      const teachers = s.options.map((o) => {
+        if (o.sections.length === 1) {
+          const lead = `${esc(o.teacher)} <span class="rooms">·</span>`;
+          return secRowHTML(s.subject, o.teacher, o.sections[0], checkedSet, 26, lead);
+        }
+        const tkey = `t:${s.subject}|${o.teacher}`;
+        const topen = selOpen.has(tkey);
+        return `<div class="fold-head" style="padding-left:26px" data-fold="${esc(tkey)}">
+            <span class="tri">${topen ? "▼" : "▶"}</span>
+            <span class="pick-grow">${esc(o.teacher)}
+            <span class="rooms">${o.sections.length} 个教室, 选你的</span></span></div>
+          <div class="fold-body${topen ? "" : " hidden"}">${
+            o.sections.map((sec) => secRowHTML(s.subject, o.teacher, sec, checkedSet, 52, ""))
+              .join("")}</div>`;
+      }).join("");
+      return `<div class="fold-head" data-fold="${esc(skey)}">
+          <span class="tri">${sopen ? "▼" : "▶"}</span>
+          <span class="pick-grow"><b>${esc(s.subject)}</b>
+          <span class="rooms">${s.options.length} 位老师, 点开选</span></span></div>
+        <div class="fold-body${sopen ? "" : " hidden"}">${teachers}</div>`;
+    }).join("") || `<div class="empty">没有匹配的科目</div>`;
+}
+function bindPickerFolds(container) {
+  container.querySelectorAll(".fold-head").forEach((h) => {
+    h.onclick = () => {
+      const hidden = h.nextElementSibling.classList.toggle("hidden");
+      h.querySelector(".tri").textContent = hidden ? "▶" : "▼";
+      if (hidden) selOpen.delete(h.dataset.fold); else selOpen.add(h.dataset.fold);
+    };
+  });
+}
+function collectPickerSelection(containerId) {
+  const sel = [];
+  $$(`#${containerId} input[type=checkbox]:checked`).forEach((c) =>
+    sel.push({ subject: c.dataset.sub, teacher: c.dataset.teacher,
+               room: c.dataset.room || "" }));
+  return sel;
+}
+
 /* ---- 设置页 · 修改选课 ---- */
 let smSubjects = [];
 $("#st-repick").onclick = async () => {
@@ -1241,51 +1313,23 @@ $("#st-repick").onclick = async () => {
 $("#sm-filter").addEventListener("input", (e) => renderSmSubjects(e.target.value));
 $("#sm-cancel").onclick = () => $("#subject-modal").classList.add("hidden");
 $("#sm-save").onclick = async () => {
-  const sel = [];
-  $$("#sm-subjects input[type=checkbox]:checked").forEach((c) =>
-    sel.push({ subject: c.dataset.sub, teacher: c.dataset.teacher }));
-  const radios = {};
-  $$("#sm-subjects input[type=radio]:checked").forEach((r) => {
-    radios[r.dataset.sub] = { subject: r.dataset.sub, teacher: r.dataset.teacher };
-  });
-  Object.values(radios).forEach((r) => {
-    if (!sel.some((x) => x.subject === r.subject)) sel.push(r);
-  });
+  const sel = collectPickerSelection("sm-subjects");
   try {
     const r = await call("wizard_save_selection", JSON.stringify(sel));
     selectedLessonsCache = sel;
     $("#st-subjects").innerHTML = sel.map((s) =>
-      `<span class="chip on">${esc(s.subject)}${s.teacher ? " · " + esc(s.teacher) : ""}</span>`).join("") ||
+      `<span class="chip on">${esc(s.subject)}${s.teacher ? " · " + esc(s.teacher) : ""}${s.room ? " · " + esc(s.room) : ""}</span>`).join("") ||
       `<span class="muted">尚未选课</span>`;
     $("#subject-modal").classList.add("hidden");
     toast(`选课已更新(${r.selected} 门)`);
+    Store.drop("tt|"); Store.drop("home");   // 选课变了, 课表缓存失效
   } catch (e) { $("#sm-msg").textContent = `✗ ${e.message}`; }
 };
 function renderSmSubjects(filter) {
-  const current = new Set(selectedLessonsCache.map((s) => `${s.subject}|${s.teacher}`));
-  const f = (filter || "").trim().toLowerCase();
-  $("#sm-subjects").innerHTML = smSubjects
-    .filter((s) => !f || s.subject.toLowerCase().includes(f))
-    .map((s) => {
-      if (s.options.length === 1) {
-        const o = s.options[0];
-        const checked = current.has(`${s.subject}|${o.teacher}`) ? "checked" : "";
-        return `<label class="subject-row"><input type="checkbox" data-sub="${esc(s.subject)}"
-          data-teacher="${esc(o.teacher)}" ${checked}>
-          <span class="grow"><b>${esc(s.subject)}</b>
-          <span class="rooms">${esc(o.teacher)} ${esc(o.rooms.join(" "))}</span></span></label>`;
-      }
-      return `<div class="subject-row" style="flex-wrap:wrap">
-        <b style="width:100%">${esc(s.subject)} <span class="muted small">(多个分组, 选你的)</span></b>
-        ${s.options.map((o) => {
-          const checked = current.has(`${s.subject}|${o.teacher}`) ? "checked" : "";
-          return `<label class="subject-row" style="padding-left:26px">
-            <input type="radio" name="smg:${esc(s.subject)}" data-sub="${esc(s.subject)}"
-              data-teacher="${esc(o.teacher)}" ${checked}>
-            <span class="grow">${esc(o.teacher)} <span class="rooms">${esc(o.rooms.join(" "))}</span></span>
-          </label>`;
-        }).join("")}</div>`;
-    }).join("") || `<div class="empty">没有匹配的科目</div>`;
+  const checked = new Set(selectedLessonsCache.map((s) =>
+    `${s.subject}|${s.teacher}|${s.room || ""}`));
+  $("#sm-subjects").innerHTML = subjectPickerHTML(smSubjects, filter, checked);
+  bindPickerFolds($("#sm-subjects"));
 }
 $("#st-save").onclick = async () => {
   try {
@@ -1355,38 +1399,12 @@ $("#wz-mb-go").onclick = async () => {
 };
 $("#wz-mb-skip").onclick = () => wzShow(3);
 function renderSubjects(filter) {
-  const f = filter.trim().toLowerCase();
-  $("#wz-subjects").innerHTML = wizSubjects
-    .filter((s) => !f || s.subject.toLowerCase().includes(f))
-    .map((s) => {
-      if (s.options.length === 1) {
-        const o = s.options[0];
-        return `<label class="subject-row"><input type="checkbox" data-sub="${esc(s.subject)}"
-          data-teacher="${esc(o.teacher)}" checked>
-          <span class="grow"><b>${esc(s.subject)}</b>
-          <span class="rooms">${esc(o.teacher)} ${esc(o.rooms.join(" "))}</span></span></label>`;
-      }
-      return `<div class="subject-row" style="flex-wrap:wrap">
-        <b style="width:100%">${esc(s.subject)} <span class="muted small">(多个分组, 选你的)</span></b>
-        ${s.options.map((o, i) => `<label class="subject-row" style="padding-left:26px">
-          <input type="radio" name="g:${esc(s.subject)}" data-sub="${esc(s.subject)}"
-            data-teacher="${esc(o.teacher)}" ${i === 0 ? "" : ""}>
-          <span class="grow">${esc(o.teacher)} <span class="rooms">${esc(o.rooms.join(" "))}</span></span>
-        </label>`).join("")}</div>`;
-    }).join("") || `<div class="empty">没有匹配的科目</div>`;
+  $("#wz-subjects").innerHTML = subjectPickerHTML(wizSubjects, filter, new Set(), true);
+  bindPickerFolds($("#wz-subjects"));
 }
 $("#wz-sub-filter").addEventListener("input", (e) => renderSubjects(e.target.value));
 $("#wz-sub-go").onclick = async () => {
-  const sel = [];
-  $$("#wz-subjects input[type=checkbox]:checked").forEach((c) =>
-    sel.push({ subject: c.dataset.sub, teacher: c.dataset.teacher }));
-  const radios = {};
-  $$("#wz-subjects input[type=radio]:checked").forEach((r) => {
-    radios[r.dataset.sub] = { subject: r.dataset.sub, teacher: r.dataset.teacher };
-  });
-  Object.values(radios).forEach((r) => {
-    if (!sel.some((x) => x.subject === r.subject)) sel.push(r);
-  });
+  const sel = collectPickerSelection("wz-subjects");
   try {
     const r = await call("wizard_save_selection", JSON.stringify(sel));
     $("#wz-sub-msg").textContent = `✓ 已选择 ${r.selected} 门`;

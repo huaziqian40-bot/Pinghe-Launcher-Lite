@@ -149,14 +149,14 @@ class EdupageService:
         请求只有周日~周二, 周三~周五落进 get_my_timetable 回退(残缺,
         周五下午整段丢失)。
 
-        带磁盘缓存(6 小时过期, v2 文件名与旧截断缓存隔离)。
+        带磁盘缓存(6 小时过期, v3 文件名与旧截断/泄漏缓存隔离)。
         """
         monday = self.week_monday(start)
         key = monday.isoformat()
         if key in self._week_cache:
             return self._week_cache[key]
 
-        cache_file = Path.home() / ".hellopinghe" / f"edupage_week_v2_{key}.json"
+        cache_file = Path.home() / ".hellopinghe" / f"edupage_week_v3_{key}.json"
         if cache_file.exists():
             age = _time.time() - cache_file.stat().st_mtime
             if age < 6 * 3600:
@@ -200,10 +200,17 @@ class EdupageService:
             return json.loads(payload)
 
         merged: dict = {}
+        last = monday + timedelta(days=days)
         for anchor_off in (0, 3, 6):   # 窗口: 周日~周二 / 周二~周四 / 周五~周日
             try:
                 win = fetch_window(monday + timedelta(days=anchor_off))
-                merged.update(win.get("dates") or {})
+                for day_key, day_data in (win.get("dates") or {}).items():
+                    # 周日锚点的窗口会带出下周周一, 裁剪到请求区间内
+                    try:
+                        if monday <= date.fromisoformat(day_key) < last:
+                            merged[day_key] = day_data
+                    except ValueError:
+                        continue   # 非 ISO 日期键, 忽略
             except Exception:  # noqa: BLE001
                 continue
         if not merged:
@@ -213,8 +220,10 @@ class EdupageService:
         try:
             cache_file.parent.mkdir(parents=True, exist_ok=True)
             cache_file.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
-            # 清掉旧版(截断的)整周缓存
+            # 清掉旧版(截断的 / 含泄漏日的)整周缓存
             for old in cache_file.parent.glob("edupage_week_2*.json"):
+                old.unlink(missing_ok=True)
+            for old in cache_file.parent.glob("edupage_week_v2_*.json"):
                 old.unlink(missing_ok=True)
         except Exception:  # noqa: BLE001
             pass
@@ -264,38 +273,56 @@ class EdupageService:
         return self._rooms_cache
 
     def subject_options(self, progress=None) -> list[dict]:
-        """向导用: 跨整周聚合 (科目 → 老师/教室 选项).
+        """向导用: 跨整周聚合 (科目 → 老师 → 班级段[教室+上课时间]).
 
         只看一天会漏掉当天没排课的科目(如 English B SL),
         因此用 gcall 区间接口一次拉整周, 再聚合全部科目。
+        同老师同课名但不同教室 = 不同的班(平行班); 教室相同、
+        周内多张课卡 = 同一个班(一周多次上课)。
         """
         monday = self.week_monday(date.today())
         if progress:
             progress({"day": f"{monday} ~ {monday + timedelta(days=5)}",
                       "attempt": 1, "total": 2})
         plans = self.week_plans(monday, days=6)
-        all_lessons = [l for ls in plans.values() for l in ls]
-        if not all_lessons:  # 整周无课(假期) → 试下一周
+        if not any(plans.values()):  # 整周无课(假期) → 试下一周
             if progress:
                 progress({"day": f"{monday + timedelta(days=7)} 起", "attempt": 2, "total": 2})
             plans = self.week_plans(monday + timedelta(days=7), days=6)
-            all_lessons = [l for ls in plans.values() for l in ls]
 
-        grouped: dict[str, dict[str, set]] = {}
-        for l in all_lessons:
-            if l.is_cancelled or not l.subject:
-                continue
-            subject = l.subject.name
-            teacher = l.teachers[0].name if l.teachers else ""
-            room = l.classrooms[0].name if l.classrooms else ""
-            grouped.setdefault(subject, {}).setdefault(teacher, set()).add(room)
+        # subject -> teacher -> room -> [(day_iso, start, end)]
+        grouped: dict[str, dict[str, dict[str, list]]] = {}
+        for day_iso in sorted(plans):
+            day_name = f"周{'一二三四五六日'[date.fromisoformat(day_iso).weekday()]}"
+            for l in plans[day_iso]:
+                if l.is_cancelled or not l.subject or not l.start_time:
+                    continue
+                subject = l.subject.name
+                teacher = l.teachers[0].name if l.teachers else ""
+                room = l.classrooms[0].name if l.classrooms else ""
+                grouped.setdefault(subject, {}).setdefault(teacher, {}).setdefault(
+                    room, []).append((
+                        day_iso,
+                        l.start_time.strftime("%H:%M"),
+                        l.end_time.strftime("%H:%M") if l.end_time else "",
+                        day_name,
+                    ))
 
         result = []
         for subject in sorted(grouped):
-            options = [
-                {"teacher": t or "(未指定老师)", "rooms": sorted(rs)}
-                for t, rs in sorted(grouped[subject].items())
-            ]
+            options = []
+            for t, rooms in sorted(grouped[subject].items()):
+                sections = []
+                for r, times in sorted(rooms.items(), key=lambda kv: (kv[0] == "", kv[0])):
+                    seq = sorted(times, key=lambda x: (x[0], x[1]))
+                    sections.append({
+                        "room": r or "(无教室)",
+                        "times": [
+                            {"day": d, "start": s, "end": e}
+                            for _iso, s, e, d in seq
+                        ],
+                    })
+                options.append({"teacher": t or "(未指定老师)", "sections": sections})
             result.append({"subject": subject, "options": options})
         return result
 
@@ -325,19 +352,27 @@ class EdupageService:
                 except Exception:  # noqa: BLE001
                     pass  # 缓存损坏则重新计算
 
-        # 严格匹配: 课名与老师都必须与选课完全一致(仅去首尾空白),
+        # 严格匹配: 课名/老师/教室都必须与选课完全一致(仅去首尾空白),
         # 不做任何模糊/归一化 —— 选课里没有的课一律不进个人课表。
-        # 选课时老师为 "(未指定老师)" 的, 该课任何老师的卡都算匹配。
+        # 兼容: 旧版选课没有 room 字段(或老师为 "(未指定老师)")时该维度不参与过滤,
+        # 重新选课一次即获得精确到教室的结果。
         out = []
         for l in self.master_plan(day):
             subject = (l.subject.name if l.subject else "").strip()
             teacher = (l.teachers[0].name if l.teachers else "").strip()
+            room = (l.classrooms[0].name if l.classrooms else "").strip()
             for sel in selected:
                 if (sel.get("subject") or "").strip() != subject:
                     continue
                 want_teacher = (sel.get("teacher") or "").replace(
                     "(未指定老师)", "").strip()
                 if want_teacher and teacher != want_teacher:
+                    continue
+                want_room = (sel.get("room") or "").strip()
+                if want_room == "(无教室)":
+                    if room:
+                        continue
+                elif want_room and room != want_room:
                     continue
                 out.append({
                     "start": l.start_time.strftime("%H:%M") if l.start_time else "",
