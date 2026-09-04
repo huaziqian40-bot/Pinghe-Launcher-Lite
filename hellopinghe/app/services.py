@@ -272,14 +272,53 @@ class EdupageService:
             self._rooms_cache = [r.name for r in (ed.get_classrooms() or [])]
         return self._rooms_cache
 
-    def drop_personal_cache(self) -> None:
-        """选课/隐藏课段变更后清空个人课表磁盘缓存."""
-        cache_dir = Path.home() / ".hellopinghe"
-        for old in cache_dir.glob("edupage_personal_*.json"):
-            try:
-                old.unlink(missing_ok=True)
-            except OSError:
-                pass
+    # ---- 课程来源: 只取本班的课 ----
+    def my_class_id(self) -> int | None:
+        """当前账号的班级 dbi id(负数, 如 -359 = IB grade 11 class 9).
+
+        学校的 Edupage 服务端不做按班/按人过滤(gcall 只按登录人的可见班级
+        出课卡, 班级课表接口对学生返回权限错误), 过滤只能客户端做。
+        班级 id 优先取 userrow.TriedaID, 回退解析 userGroups 的 "Trieda-N";
+        都取不到时返回 None → 不过滤, 退回整年级行为。
+        """
+        if self._ed is None:
+            return None
+        data = self._ed.data or {}
+        raw = (data.get("userrow") or {}).get("TriedaID")
+        try:
+            if raw:
+                return int(raw)
+        except (TypeError, ValueError):
+            pass
+        groups = data.get("userGroups")
+        if isinstance(groups, dict):
+            keys = list(groups)
+        elif isinstance(groups, (list, tuple)):
+            keys = list(groups)
+        else:
+            return None
+        for key in keys:
+            m = re.fullmatch(r"Trieda-(\d+)", str(key))
+            if m:
+                return -int(m.group(1))
+        return None
+
+    def _for_my_class(self, lesson) -> bool:
+        """课程来源过滤: 别的班级的课不算进来.
+
+        课卡 classids 的三种情况:
+        - 只含本班 id        → 班级专属课(各班的会考课), 保留
+        - 含本班 + 其他班    → 本班参与的合班/走班课, 保留
+        - 不含本班 id        → 纯别的班的课, 丢弃
+        - 无班级标注         → 全年级性的课, 保守保留
+        """
+        cid = self.my_class_id()
+        if cid is None:
+            return True
+        classes = getattr(lesson, "classes", None) or []
+        if not classes:
+            return True
+        return any(getattr(c, "class_id", None) == cid for c in classes)
 
     def subject_options(self, progress=None) -> list[dict]:
         """向导用: 跨整周聚合 (科目 → 老师 → 班级段[组+教室+上课时间]).
@@ -306,6 +345,8 @@ class EdupageService:
             day_name = f"周{'一二三四五六日'[date.fromisoformat(day_iso).weekday()]}"
             for l in plans[day_iso]:
                 if l.is_cancelled or not l.subject or not l.start_time:
+                    continue
+                if not self._for_my_class(l):
                     continue
                 subject = l.subject.name
                 teacher = l.teachers[0].name if l.teachers else ""
@@ -355,7 +396,7 @@ class EdupageService:
             json.dumps(selected, sort_keys=True).encode("utf-8")
         ).hexdigest()[:8]
         cache_dir = Path.home() / ".hellopinghe"
-        cache_file = cache_dir / f"edupage_personal_v2_{day.isoformat()}_{sel_key}.json"
+        cache_file = cache_dir / f"edupage_personal_v3_{day.isoformat()}_{sel_key}.json"
         if cache_file.exists():
             age = _time.time() - cache_file.stat().st_mtime
             if age < 2 * 3600:
@@ -367,8 +408,7 @@ class EdupageService:
         # 严格匹配: 课名/老师/组都必须与选课完全一致(仅去首尾空白),
         # 不做任何模糊/归一化 —— 选课里没有的课一律不进个人课表。
         # 兼容: 旧版选课没有 group 字段(或老师为 "(未指定老师)")时该维度
-        # 不参与过滤; 课表里还可以手动隐藏"不是我的课"的整段(见 timetable_hidden)。
-        hidden = set(self.cfg.timetable_hidden or [])
+        # 不参与过滤。课程来源上先过一遍本班过滤(见 _for_my_class)。
         # 选课去重(同一门课勾了两次只会显示一遍)
         seen_sel = set()
         uniq = []
@@ -381,11 +421,11 @@ class EdupageService:
                 uniq.append(k)
         out = []
         for l in self.master_plan(day):
+            if not self._for_my_class(l):
+                continue
             subject = (l.subject.name if l.subject else "").strip()
             teacher = (l.teachers[0].name if l.teachers else "").strip()
             group = ",".join(l.groups) if l.groups else ""
-            if f"{subject}|{teacher}|{group}" in hidden:
-                continue
             for subj, w_teacher, w_group in uniq:
                 if subj != subject:
                     continue
@@ -410,7 +450,9 @@ class EdupageService:
             cache_file.write_text(json.dumps(out, ensure_ascii=False), encoding="utf-8")
             for old in cache_dir.glob("edupage_personal_2*.json"):
                 old.unlink(missing_ok=True)   # 旧版缓存(截断数据)直接清理
-            for old in cache_dir.glob(f"edupage_personal_v2_{day.isoformat()}_*.json"):
+            for old in cache_dir.glob("edupage_personal_v2_*.json"):
+                old.unlink(missing_ok=True)   # v2(未按班级过滤)整批作废
+            for old in cache_dir.glob(f"edupage_personal_v3_{day.isoformat()}_*.json"):
                 if old != cache_file:
                     old.unlink(missing_ok=True)
         except Exception:  # noqa: BLE001

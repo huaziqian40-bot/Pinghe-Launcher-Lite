@@ -40,13 +40,6 @@ def _snap_drop(*keys: str) -> None:
             _SNAP.pop(k, None)
 
 
-def _snap_drop_prefix(prefix: str) -> None:
-    """按前缀清快照(tt|0 / tt|-1 … 这类带后缀的键)."""
-    with _SNAP_LOCK:
-        for k in [x for x in _SNAP if x.startswith(prefix)]:
-            _SNAP.pop(k, None)
-
-
 def _wrap(fn, *args, **kwargs) -> dict:
     try:
         data = fn(*args, **kwargs)
@@ -311,37 +304,9 @@ class Api:
                     "lessons": lessons,
                     "error": error,
                 })
-            out = {"week": week, "hidden_count": len(self.cfg.timetable_hidden or [])}
+            out = {"week": week}
             _snap_put(key, out)
             return out
-        return _wrap(job)
-
-    # ================================================================ 课表隐藏
-    def timetable_hide(self, key: str) -> dict:
-        """隐藏一段课 "课名|老师|组"(不是我的课), 全周生效."""
-
-        def job():
-            k = (key or "").strip()
-            if not k:
-                raise ValueError("empty key")
-            hidden = list(self.cfg.timetable_hidden or [])
-            if k not in hidden:
-                hidden.append(k)
-            self.cfg.timetable_hidden = hidden
-            self._save_cfg()
-            self.svc.edupage.drop_personal_cache()
-            _snap_drop_prefix("tt|"); _snap_drop("home")
-            return {"hidden": len(hidden), "key": k}
-        return _wrap(job)
-
-    def timetable_unhide_all(self) -> dict:
-        def job():
-            n = len(self.cfg.timetable_hidden or [])
-            self.cfg.timetable_hidden = []
-            self._save_cfg()
-            self.svc.edupage.drop_personal_cache()
-            _snap_drop_prefix("tt|"); _snap_drop("home")
-            return {"restored": n}
         return _wrap(job)
 
     # ================================================================ 我的日程

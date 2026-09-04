@@ -225,14 +225,10 @@ setInterval(() => {
 
 /* ================= 我的课表 ================= */
 function ttLessonHtml(l, withTime) {
-  const key = `${l.subject}|${l.teacher || ""}|${l.group || ""}`;
-  const name = `${l.subject}${l.group ? " 组" + l.group : ""}`;
   return `<div class="tt-lesson ${l.cancelled ? "cancelled" : ""}">
     ${withTime ? `<span class="rm">${esc(l.start)}</span>` : ""}
     <b>${esc(l.subject)}</b>
     <span class="rm">${esc(l.room)}${l.teacher ? " · " + esc(l.teacher) : ""}</span>
-    <button class="tt-x" data-key="${esc(key)}" data-name="${esc(name)}"
-      title="不是我的课: 隐藏这一段(全周生效, 可恢复)">×</button>
   </div>`;
 }
 
@@ -284,23 +280,6 @@ function renderTimetable(d) {
         `<div class="tt-cell">${b.other.map((l) => ttLessonHtml(l, true)).join("")}</div>`).join("");
   }
   $("#tt-week").innerHTML = html;
-  $("#tt-week").onclick = (e) => {
-    const btn = e.target.closest(".tt-x");
-    if (!btn) return;
-    e.stopPropagation();
-    ttHide(btn.dataset.key, btn.dataset.name);
-  };
-  const n = d.hidden_count || 0;
-  $("#tt-restore").classList.toggle("hidden", !n);
-  $("#tt-restore").textContent = `恢复已隐藏(${n})`;
-}
-async function ttHide(key, name) {
-  try {
-    await call("timetable_hide", key);
-    toast(`已隐藏「${name}」整段课, 点"恢复已隐藏"可撤销`);
-    Store.drop("tt|"); Store.drop("home");
-    loadTimetable();
-  } catch (e) { toast(e.message); }
 }
 function loadTimetable() {
   return swr(`tt|${ttOffset}`, TTL.tt,
@@ -311,14 +290,6 @@ function loadTimetable() {
 $("#tt-prev").onclick = () => { ttOffset--; loadTimetable().catch((e) => toast(e.message)); };
 $("#tt-next").onclick = () => { ttOffset++; loadTimetable().catch((e) => toast(e.message)); };
 $("#tt-this").onclick = () => { ttOffset = 0; loadTimetable().catch((e) => toast(e.message)); };
-$("#tt-restore").onclick = async () => {
-  try {
-    const r = await call("timetable_unhide_all");
-    toast(`已恢复 ${r.restored} 段隐藏的课`);
-    Store.drop("tt|"); Store.drop("home");
-    loadTimetable();
-  } catch (e) { toast(e.message); }
-};
 
 /* ================= 我的日程: 周 / 月 / 年 三种视图 =================
  * 点任意一天 → 弹出当天安排的卡片, 卡片里可直接添加/删除。
