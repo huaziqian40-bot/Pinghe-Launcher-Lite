@@ -154,6 +154,7 @@ class Config:
     # --- Agent 工作区 ---
     agent_workspace: str = ""             # agent 的读写根目录
     agent_workspaces: list = field(default_factory=list)   # 历史工作区列表
+    course_class_order: list = field(default_factory=list)  # 我的课程课程排序
 
     # --- 行为开关 ---
     send_grades_to_llm: bool = False      # 隐私: 默认不把成绩发给 LLM

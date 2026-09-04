@@ -138,15 +138,15 @@ function lessonLine(l) {
     <span class="dim">${esc(l.room)} ${esc(l.teacher)}</span></span></div>`;
 }
 
-function ddlItemEl(it) {
+/* 可左滑删除的列表项(首页 DDL 与我的课程共用):
+ * 按住向左拖超过 70px 触发 onSwipe, 项滑出并移除; 不足则弹回。 */
+function swipeableItemEl(className, innerHtml, onSwipe) {
   const el = document.createElement("div");
-  el.className = `item ddl-item ${it.urgent ? "urgent" : ""}`;
-  el.innerHTML = `<span class="dim">${esc((it.due_at || "").slice(5, 16))}</span>
-    <span class="grow">${esc(it.title)}<span class="dim"> · ${esc(it.course)}</span></span>
-    ${badge(it.status || it.category, it.status === "Pending" ? "red" : "")}`;
-  /* 左滑删除(鼠标按住向左拖 / 触屏滑动) */
+  el.className = className;
+  el.innerHTML = innerHtml;
   let startX = 0, dx = 0, dragging = false;
   el.addEventListener("pointerdown", (e) => {
+    if (e.target.closest("button")) return;
     startX = e.clientX; dx = 0; dragging = true;
     el.classList.add("swiping");
   });
@@ -163,7 +163,7 @@ function ddlItemEl(it) {
     dragging = false;
     el.classList.remove("swiping");
     if (dx < -70) {
-      try { await call("ddl_dismiss", it.key); Store.drop("home"); } catch (e) { /* 静默 */ }
+      try { await onSwipe(); } catch (e) { /* 静默 */ }
       el.style.transform = "translateX(-110%)";
       setTimeout(() => el.remove(), 160);
     } else {
@@ -179,15 +179,22 @@ function ddlItemEl(it) {
   return el;
 }
 
+function ddlItemEl(it) {
+  return swipeableItemEl(
+    `item ddl-item ${it.urgent ? "urgent" : ""}`,
+    `<span class="dim">${esc((it.due_at || "").slice(5, 16))}</span>
+    <span class="grow">${esc(it.title)}<span class="dim"> · ${esc(it.course)}</span></span>
+    ${badge(it.status || it.category, it.status === "Pending" ? "red" : "")}`,
+    async () => { await call("ddl_dismiss", it.key); Store.drop("home"); },
+  );
+}
+
 function renderHome(d) {
   $("#home-date").textContent = `${d.now} ${d.weekday}`;
   const cur = d.current_lesson;
   $("#home-current").innerHTML = cur
     ? `${esc(cur.subject)}<small>${esc(cur.start)}-${esc(cur.end)} · ${esc(cur.room)} · ${esc(cur.teacher)}</small>`
     : `<span class="muted">此刻没有课</span>`;
-  $("#home-freerooms").textContent = d.free_rooms_count ?? "–";
-  $("#home-freerooms-list").textContent =
-    d.free_rooms_sample ? `如 ${d.free_rooms_sample.slice(0, 8).join(" / ")}` : (d.free_rooms_error || "");
   $("#home-unread").textContent = d.unread_mail ?? "–";
   $("#home-lessons").innerHTML = (d.today_lessons || []).map(lessonLine).join("") ||
     `<div class="empty">${esc(d.timetable_error || "今天没有课")}</div>`;
@@ -472,7 +479,9 @@ $("#sch-modal").addEventListener("click", (e) => {
   if (e.target === $("#sch-modal")) closeSchModal();
 });
 document.addEventListener("keydown", (e) => {
-  if (e.key === "Escape" && !$("#sch-modal").classList.contains("hidden")) closeSchModal();
+  if (e.key !== "Escape") return;
+  if (!$("#sch-modal").classList.contains("hidden")) closeSchModal();
+  if (!$("#ml-modal").classList.contains("hidden")) $("#ml-modal").classList.add("hidden");
 });
 $("#schm-add").onclick = async () => {
   const title = $("#schm-title-in").value.trim();
@@ -555,17 +564,64 @@ $("#gt-filter").addEventListener("input", renderGradett);
 function renderCourses(d) {
   const chips = [`<span class="chip ${!currentClassFilter ? "on" : ""}" data-cid="">全部</span>`]
     .concat(d.classes.map((c) =>
-      `<span class="chip ${currentClassFilter === c.id ? "on" : ""}" data-cid="${c.id}">${esc(c.name.slice(0, 22))}</span>`));
+      `<span class="chip ${currentClassFilter === c.id ? "on" : ""}" data-cid="${c.id}" draggable="true">${esc(c.name.slice(0, 22))}</span>`));
   $("#co-chips").innerHTML = chips.join("");
   $$("#co-chips .chip").forEach((c) => {
     c.onclick = () => { currentClassFilter = c.dataset.cid; filterTasks(d); };
   });
+  bindChipDrag(d);
   filterTasks(d);
   $("#co-grades").innerHTML = Object.entries(d.grades || {}).map(
     ([name, grade]) => `<div class="item"><span class="grow">${esc(name)}</span>
       ${badge(grade || "未出分", grade ? "green" : "")}</div>`).join("") ||
     `<div class="empty">暂无成绩数据</div>`;
   $("#co-link").href = "https://shph.managebac.cn/student";
+}
+/* 课程 chip 拖拽排序: "全部"固定首位, 松手后把新顺序持久化到后端 */
+function bindChipDrag(d) {
+  const wrap = $("#co-chips");
+  let dragEl = null;
+  const allChips = () => $$("#co-chips .chip");
+  allChips().forEach((chip) => {
+    if (!chip.dataset.cid) return; /* "全部" 固定第一位, 不参与拖拽 */
+    chip.addEventListener("dragstart", () => {
+      dragEl = chip;
+      chip.classList.add("dragging");
+    });
+    chip.addEventListener("dragend", () => {
+      chip.classList.remove("dragging");
+      allChips().forEach((c) => c.classList.remove("drop-target"));
+      dragEl = null;
+      const order = allChips().map((c) => c.dataset.cid).filter(Boolean);
+      d.classes.sort((a, b) => order.indexOf(a.id) - order.indexOf(b.id));
+      call("course_save_order", JSON.stringify(order)).catch(() => {});
+      filterTasks(d);
+    });
+  });
+  wrap.addEventListener("dragover", (e) => {
+    if (!dragEl) return;
+    e.preventDefault();
+    const rest = allChips().filter((c) => c.dataset.cid && c !== dragEl);
+    let after = null;
+    for (const c of rest) {
+      const r = c.getBoundingClientRect();
+      if (e.clientX < r.left + r.width / 2) { after = c; break; }
+    }
+    rest.forEach((c) => c.classList.remove("drop-target"));
+    if (after) { wrap.insertBefore(dragEl, after); after.classList.add("drop-target"); }
+    else wrap.appendChild(dragEl);
+  });
+}
+function taskItemEl(t) {
+  return swipeableItemEl("item ddl-item",
+    `<span class="dim">${esc((t.due_at || "").slice(5, 16))}</span>
+    <span class="grow">${esc(t.title)}<span class="dim"> · ${esc(t.class_name)}</span></span>
+    ${badge(t.status || "?", t.status === "Pending" ? "red" : "green")}`,
+    async () => {
+      await call("ddl_dismiss", `${t.title}|${t.due_at || ""}`);
+      Store.drop("courses"); Store.drop("home");
+      toast("已移出待办, 可在设置里恢复");
+    });
 }
 const loadCourses = swr("courses", TTL.courses,
   () => call("courses_data"), renderCourses,
@@ -578,12 +634,14 @@ const loadCourses = swr("courses", TTL.courses,
 function filterTasks(d) {
   const tasks = (d.tasks_upcoming || []).filter(
     (t) => !currentClassFilter || t.class_id === currentClassFilter);
-  $("#co-tasks").innerHTML = tasks.map(
-    (t) => `<div class="item">
-      <span class="dim">${esc((t.due_at || "").slice(5, 16))}</span>
-      <span class="grow">${esc(t.title)}<span class="dim"> · ${esc(t.class_name)}</span></span>
-      ${badge(t.status || "?", t.status === "Pending" ? "red" : "green")}</div>`).join("") ||
-    `<div class="empty">没有未截止的作业</div>`;
+  $("#co-tasks").innerHTML = "";
+  if (!tasks.length) {
+    $("#co-tasks").innerHTML = `<div class="empty">没有未截止的作业 (左滑作业条目可移除)</div>`;
+    return;
+  }
+  const frag = document.createDocumentFragment();
+  tasks.forEach((t) => frag.appendChild(taskItemEl(t)));
+  $("#co-tasks").appendChild(frag);
 }
 $("#co-refresh").onclick = async () => {
   toast("正在同步 ManageBac…");
@@ -627,16 +685,28 @@ async function fetchMail() {
 }
 $("#ml-unseen").onclick = () => { mailMode = 1; fetchMail().catch((e) => toast(e.message)); };
 $("#ml-all").onclick = () => { mailMode = 0; fetchMail().catch((e) => toast(e.message)); };
-$("#ml-compose").onclick = () => $("#ml-compose-box").classList.toggle("hidden");
-$("#ml-cancel").onclick = () => $("#ml-compose-box").classList.add("hidden");
+$("#ml-compose").onclick = () => {
+  $("#ml-msg").textContent = "";
+  $("#ml-modal").classList.remove("hidden");
+  $("#ml-body").focus();
+};
+$("#ml-cancel").onclick = () => $("#ml-modal").classList.add("hidden");
+$("#ml-modal").addEventListener("click", (e) => {
+  if (e.target === $("#ml-modal")) $("#ml-modal").classList.add("hidden");
+});
 $("#ml-send").onclick = async () => {
+  const btn = $("#ml-send");
+  btn.disabled = true;
+  $("#ml-msg").textContent = "正在发送…";
   try {
     await call("mail_send", $("#ml-to").value, $("#ml-subject").value, $("#ml-body").value);
     Store.drop("mail|"); Store.drop("home");
     toast("已发送");
-    $("#ml-compose-box").classList.add("hidden");
+    $("#ml-modal").classList.add("hidden");
+    $("#ml-to").value = ""; $("#ml-subject").value = ""; $("#ml-body").value = "";
     fetchMail().catch(() => {});
-  } catch (e) { toast(e.message); }
+  } catch (e) { $("#ml-msg").textContent = `✗ ${e.message}`; }
+  btn.disabled = false;
 };
 
 /* ================= Agent ================= */
@@ -831,6 +901,15 @@ $("#ag-new-ws").onclick = async () => {
 };
 $("#ag-open-ws").onclick = async () => {
   try { await call("agent_open_explorer"); } catch (e) { toast(e.message); }
+};
+/* 从资源管理器里选任意文件夹作为 workspace */
+$("#ag-pick-ws").onclick = async () => {
+  try {
+    const r = await call("agent_pick_workspace");
+    if (r.cancelled) return;
+    toast(`Workspace: ${r.workspace}`);
+    await loadAgent();
+  } catch (e) { toast(e.message); }
 };
 async function agentSend() {
   const input = $("#ag-input");

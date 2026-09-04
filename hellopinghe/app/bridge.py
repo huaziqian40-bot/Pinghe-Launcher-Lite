@@ -204,7 +204,7 @@ class Api:
                 "clock": now.strftime("%H:%M:%S"),
             }
 
-            # 三路并行: edupage(课表+教室) / managebac(DDL) / mail(未读),
+            # 三路并行: edupage(课表) / managebac(DDL) / mail(未读),
             # 避免串行时相互拖慢首页首屏。
             def _edupage():
                 try:
@@ -220,14 +220,6 @@ class Api:
                     data["today_lessons"] = []
                     data["current_lesson"] = None
                     data["timetable_error"] = str(exc)
-                try:
-                    occ = self.svc.free_rooms.occupancy(
-                        now.date(), now.time().replace(microsecond=0))
-                    data["free_rooms_count"] = occ["total"] - len(occ["occupied"])
-                    data["free_rooms_sample"] = occ["free"][:18]
-                except Exception as exc:  # noqa: BLE001
-                    data["free_rooms_count"] = None
-                    data["free_rooms_error"] = str(exc)
 
             def _ddl():
                 try:
@@ -417,13 +409,36 @@ class Api:
             tasks = self.svc.courses.all_tasks()
             grades = self.svc.courses.grades()
             upcoming = [t for t in tasks if not t["past_due"]]
+            # 过滤掉用户左滑移除过的 DDL (与首页同一套 dismissed key)
+            host = self.cfg.managebac_base_url.split("//")[-1]
+            dismissed = storage.ddl_dismissed_keys(self.svc._conn(), host)
+            upcoming = [
+                t for t in upcoming
+                if f'{t["title"]}|{t["due_at"] or ""}' not in dismissed
+            ]
+            # 按用户拖拽保存的顺序排课程, 未出现的课程追加在后
+            order = list(self.cfg.course_class_order)
+            rank = {cid: i for i, cid in enumerate(order)}
+            class_list = [{"id": k, "name": v} for k, v in classes.items()]
+            class_list.sort(
+                key=lambda c: (rank.get(c["id"], len(order)), c["name"]))
             out = {
-                "classes": [{"id": k, "name": v} for k, v in classes.items()],
+                "classes": class_list,
                 "tasks_upcoming": upcoming[:40],
                 "grades": grades,
             }
             _snap_put("courses", out)
             return out
+        return _wrap(job)
+
+    def course_save_order(self, order_json: str) -> dict:
+        """保存"我的课程"里拖拽后的课程顺序。"""
+        def job():
+            raw = json.loads(order_json or "[]")
+            order = [str(x) for x in raw if str(x)]
+            self.cfg.course_class_order = order
+            self._save_cfg()
+            return {"saved": len(order)}
         return _wrap(job)
 
     def course_tasks(self, class_id: str) -> dict:
@@ -566,6 +581,23 @@ class Api:
         def job():
             result = self.agent.new_workspace(name)
             self._save_cfg()
+            return result
+        return _wrap(job)
+
+    def agent_pick_workspace(self) -> dict:
+        """弹出系统文件夹选择对话框, 选中后设为 agent workspace。"""
+        import webview
+
+        picked = webview.windows[0].create_file_dialog(
+            webview.FOLDER_DIALOG)
+        if not picked:
+            return {"cancelled": True}
+
+        def job():
+            path = str(picked[0])
+            result = self.agent.set_workspace(path)
+            self._save_cfg()
+            result["workspace"] = path
             return result
         return _wrap(job)
 

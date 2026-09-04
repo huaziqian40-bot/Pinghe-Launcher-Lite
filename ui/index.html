@@ -38,11 +38,6 @@
           <div id="home-current" class="current-lesson">—</div>
         </div>
         <div class="card stat-card">
-          <div class="card-title">空闲教室</div>
-          <div id="home-freerooms" class="big-num">–</div>
-          <div id="home-freerooms-list" class="muted small"></div>
-        </div>
-        <div class="card stat-card">
           <div class="card-title">未读邮件</div>
           <div id="home-unread" class="big-num">–</div>
           <div class="muted small">平和邮箱</div>
@@ -127,12 +122,6 @@
         <div id="ml-list" class="mail-list card"></div>
         <div id="ml-read" class="mail-read card"><div class="muted">选择一封邮件查看</div></div>
       </div>
-      <div id="ml-compose-box" class="card hidden">
-        <div class="form-row"><input type="text" id="ml-to" placeholder="收件人" class="flex1"></div>
-        <div class="form-row"><input type="text" id="ml-subject" placeholder="主题" class="flex1"></div>
-        <textarea id="ml-body" rows="8" placeholder="正文"></textarea>
-        <div class="form-row"><button class="primary" id="ml-send">发送</button><button class="ghost" id="ml-cancel">取消</button></div>
-      </div>
     </section>
 
     <!-- ================= Agent 助手 ================= -->
@@ -148,7 +137,10 @@
             <input type="text" id="ag-ws-name" placeholder="新 workspace 名" class="flex1">
             <button class="ghost" id="ag-new-ws">新建</button>
           </div>
-          <button class="ghost" id="ag-open-ws" style="width:100%;margin-top:4px">在资源管理器打开</button>
+          <div class="form-row" style="margin-top:4px">
+            <button class="primary" id="ag-pick-ws" style="flex:1">📂 选择文件夹…</button>
+            <button class="ghost" id="ag-open-ws" title="在资源管理器中打开当前 workspace">↗</button>
+          </div>
           <div class="card-title" style="margin-top:14px">文件</div>
           <div id="ag-files" class="file-list"><div class="empty">未设置 workspace</div></div>
         </aside>
@@ -340,6 +332,23 @@
     <div class="wizard-foot">
       <button class="ghost" id="sm-cancel">取消</button>
       <button class="primary" id="sm-save">保存选课</button>
+    </div>
+  </div>
+</div>
+
+<!-- ================= 写邮件弹卡 ================= -->
+<div id="ml-modal" class="overlay hidden">
+  <div class="mail-card">
+    <div class="wizard-head">
+      <b>✉ 写邮件</b>
+      <button class="ghost" id="ml-cancel">✕ 关闭</button>
+    </div>
+    <div class="form-row"><input type="text" id="ml-to" placeholder="收件人" class="flex1"></div>
+    <div class="form-row"><input type="text" id="ml-subject" placeholder="主题" class="flex1"></div>
+    <textarea id="ml-body" placeholder="正文…"></textarea>
+    <div class="form-row" style="justify-content:flex-end;margin-top:10px">
+      <span id="ml-msg" class="muted small flex1"></span>
+      <button class="primary" id="ml-send">发送</button>
     </div>
   </div>
 </div>
