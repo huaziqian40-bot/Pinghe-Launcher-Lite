@@ -1,0 +1,14 @@
+# 构建产物(可随时重建)
+build/
+dist/
+*.msi
+*.wixobj
+*.wixpdb
+# Python
+__pycache__/
+*.pyc
+# 开发临时文件
+_perf_*.py
+_splash_*.py
+_ui_*.py
+*.log

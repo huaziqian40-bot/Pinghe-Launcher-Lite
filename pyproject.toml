@@ -1,0 +1,24 @@
+[project]
+name = "schoolhub"
+version = "0.1.0"
+description = "Local-only ManageBac + Edupage companion: DDL, grades, timetable, homework agent"
+requires-python = ">=3.11"
+dependencies = [
+    "requests>=2.32",
+    "beautifulsoup4>=4.12",
+    "edupage-api",
+]
+
+[project.optional-dependencies]
+agent = ["openai>=1.60", "anthropic>=0.42"]
+ui = ["pywebview>=5.0"]
+
+[project.scripts]
+schoolhub = "schoolhub.cli:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["schoolhub*"]

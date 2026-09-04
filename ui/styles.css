@@ -1,0 +1,319 @@
+/* SchoolHub · 设计 token 延续 PH-Launcher: 墨绿/酒红/金/象牙白 */
+:root{
+  --green-950:#102d25; --green-900:#173f33; --green-800:#1f5a46; --green-700:#2a725a;
+  --green-100:#dfeae4; --green-50:#edf4f0;
+  --wine-700:#8b3445; --wine-100:#f1e2e5;
+  --gold-600:#b58d45; --gold-500:#c5a05a; --gold-100:#f2e8d2;
+  --ivory-50:#fbfaf6; --ivory-100:#f5f2e9; --ivory-200:#ebe6d8;
+  --ink:#18231e; --ink-2:#4d5d55; --ink-3:#7c8982; --white:#fff;
+  --border:rgba(24,35,30,.1);
+  --shadow-sm:0 3px 16px rgba(26,50,40,.07);
+  --shadow-md:0 18px 50px rgba(26,50,40,.1);
+  --radius-sm:10px; --radius:16px; --radius-lg:24px;
+  --side-w:224px;
+}
+*{box-sizing:border-box}
+html,body{height:100%}
+body{margin:0;background:var(--ivory-50);color:var(--ink);
+  font-family:"Segoe UI Variable Text","Segoe UI","PingFang SC","Microsoft YaHei UI",sans-serif;
+  font-size:14px;line-height:1.55}
+button{font-family:inherit;font-size:13.5px;cursor:pointer;border:none;border-radius:var(--radius-sm)}
+input,select,textarea{font-family:inherit;font-size:13.5px;color:var(--ink);
+  border:1px solid var(--border);border-radius:var(--radius-sm);padding:8px 10px;background:var(--white)}
+input:focus,select:focus,textarea:focus{outline:2px solid var(--green-100);border-color:var(--green-700)}
+a{color:var(--green-700)}
+.hidden{display:none!important}
+.muted{color:var(--ink-3)}
+.small{font-size:12.5px}
+.flex1{flex:1}
+.row-tools{display:flex;align-items:center;gap:10px;margin:0 0 14px}
+.form-row{display:flex;gap:8px;align-items:center;margin:6px 0}
+.chk{display:flex;align-items:center;gap:6px;color:var(--ink-2)}
+
+/* ---------- 布局 ---------- */
+#app{display:flex;height:100vh}
+.sidebar{width:var(--side-w);background:linear-gradient(180deg,var(--green-900),var(--green-950));
+  color:var(--ivory-50);display:flex;flex-direction:column;padding:18px 12px}
+.logo{display:flex;gap:10px;align-items:center;padding:4px 8px 16px}
+.logo-mark{width:34px;height:34px;border-radius:10px;background:var(--gold-500);color:var(--green-950);
+  display:flex;align-items:center;justify-content:center;font-weight:800;font-size:18px}
+.logo small{display:block;color:var(--green-100);opacity:.75;font-size:11px}
+.logo b{font-size:16px}
+#nav{display:flex;flex-direction:column;gap:4px;flex:1}
+#nav button{background:transparent;color:var(--green-100);text-align:left;padding:10px 12px;
+  border-radius:var(--radius-sm);font-size:14px}
+#nav button:hover{background:rgba(255,255,255,.08)}
+#nav button.active{background:var(--ivory-50);color:var(--green-900);font-weight:600}
+.side-foot{font-size:11px;opacity:.55;text-align:center}
+
+.main{flex:1;overflow:auto;padding:22px 28px 40px}
+.topbar{display:flex;align-items:center;justify-content:space-between;margin-bottom:18px}
+.topbar h1{font-size:22px;margin:0}
+.view{display:none}
+.view.active{display:block;animation:fade .18s ease}
+@keyframes fade{from{opacity:0;transform:translateY(4px)}to{opacity:1}}
+
+/* ---------- 卡片 ---------- */
+.card{background:var(--white);border:1px solid var(--border);border-radius:var(--radius);
+  box-shadow:var(--shadow-sm);padding:16px 18px;margin-bottom:16px}
+.card-title{font-weight:700;font-size:13.5px;color:var(--ink-2);
+  text-transform:uppercase;letter-spacing:.4px;margin-bottom:10px}
+.grid-2{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+.footnote{color:var(--ink-3);font-size:12.5px;margin-top:10px}
+
+.hero{display:grid;grid-template-columns:1.2fr 1.4fr .8fr .8fr;gap:16px;margin-bottom:16px}
+.big-clock{font-size:44px;font-weight:750;letter-spacing:2px;font-variant-numeric:tabular-nums}
+.current-lesson{font-size:17px;font-weight:650}
+.current-lesson small{display:block;font-weight:400;color:var(--ink-3);font-size:13px}
+.big-num{font-size:34px;font-weight:750;color:var(--green-800)}
+
+.list{display:flex;flex-direction:column;gap:8px}
+.item{display:flex;align-items:center;gap:10px;background:var(--ivory-100);
+  border-radius:var(--radius-sm);padding:9px 12px}
+.item .grow{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.item .dim{color:var(--ink-3);font-size:12.5px;white-space:nowrap}
+.item.done{opacity:.55}
+.badge{font-size:11.5px;padding:2px 8px;border-radius:99px;background:var(--gold-100);color:var(--gold-600)}
+.badge.red{background:var(--wine-100);color:var(--wine-700)}
+.badge.green{background:var(--green-100);color:var(--green-800)}
+.empty{color:var(--ink-3);padding:8px 2px}
+
+.chip-wrap{display:flex;flex-wrap:wrap;gap:8px}
+.chip{background:var(--green-50);border:1px solid var(--border);border-radius:99px;
+  padding:4px 12px;font-size:12.5px;color:var(--green-800);cursor:pointer}
+.chip.on{background:var(--green-800);color:var(--white)}
+
+/* ---------- 按钮 ---------- */
+.primary{background:var(--green-800);color:var(--white);padding:8px 16px}
+.primary:hover{background:var(--green-700)}
+.primary:disabled{opacity:.5;cursor:default}
+.ghost{background:transparent;border:1px solid var(--border);color:var(--ink-2);padding:7px 14px}
+.ghost:hover{border-color:var(--green-700);color:var(--green-800)}
+.danger{background:var(--wine-100);color:var(--wine-700);padding:6px 12px}
+
+/* ---------- 课表(按节次对齐: 行=时段, 列=星期) ---------- */
+.tt-grid{display:grid;grid-template-columns:62px repeat(7,1fr);gap:5px;align-items:stretch}
+.tt-head{font-size:12.5px;font-weight:650;color:var(--ink-2);text-align:center;padding:4px 0}
+.tt-head.today{color:var(--gold-600)}
+.tt-corner{background:var(--ivory-100);border-radius:8px}
+.tt-time{display:flex;flex-direction:column;justify-content:center;text-align:right;
+  padding-right:6px;font-size:11px;color:var(--ink-3);font-variant-numeric:tabular-nums}
+.tt-time b{font-size:12px;color:var(--ink-2)}
+.tt-cell{background:var(--white);border:1px solid var(--border);border-radius:8px;
+  min-height:46px;padding:3px;display:flex;flex-direction:column;gap:3px;
+  animation:rise .25s ease both}
+.tt-cell.rest{background:var(--ivory-100)}
+.tt-restbar{background:var(--ivory-100);border:1px dashed var(--border);border-radius:8px;
+  padding:6px 12px;font-size:12px;color:var(--ink-3);display:flex;align-items:center;gap:8px}
+.tt-lesson{background:var(--green-50);border-left:3px solid var(--green-700);
+  border-radius:6px;padding:4px 6px;margin:0;font-size:11.5px}
+.tt-lesson b{display:block;font-size:12px}
+.tt-lesson.cancelled{opacity:.5;text-decoration:line-through}
+.tt-lesson .rm{color:var(--ink-3);font-size:10.5px}
+
+/* ---------- 日程 周/月/年 ---------- */
+.sch-week{display:grid;grid-template-columns:repeat(7,1fr);gap:10px}
+.sch-day{background:var(--white);border:1px solid var(--border);border-radius:var(--radius);
+  padding:10px;min-height:280px;cursor:pointer;overflow:hidden}
+.sch-day:hover{border-color:var(--green-700);box-shadow:var(--shadow-sm);transform:translateY(-1px)}
+.sch-day.today{border-color:var(--gold-500)}
+.sch-day h4{margin:0 0 8px;font-size:13px;color:var(--ink-2)}
+.cal{display:grid;grid-template-columns:repeat(7,1fr);gap:6px}
+.cal-head{text-align:center;font-size:12px;color:var(--ink-3);padding:4px 0}
+.cal-cell{background:var(--white);border:1px solid var(--border);border-radius:10px;
+  min-height:92px;padding:6px;cursor:pointer;display:flex;flex-direction:column;gap:3px;
+  overflow:hidden;transition:border-color .15s ease,transform .12s ease}
+.cal-cell:hover{border-color:var(--green-700);transform:translateY(-1px)}
+.cal-cell.today{border-color:var(--gold-500);box-shadow:var(--shadow-sm)}
+.cal-cell.dim{background:transparent;border-color:transparent;cursor:default}
+.cal-cell.dim:hover{transform:none}
+.cal-num{font-size:12px;font-weight:650;color:var(--ink-2)}
+.cal-ev{font-size:11px;background:var(--green-50);border-left:2px solid var(--green-700);
+  border-radius:4px;padding:1px 4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.cal-more{font-size:11px;color:var(--ink-3)}
+.cal-year{display:grid;grid-template-columns:repeat(4,1fr);gap:14px}
+.cal-mini{background:var(--white);border:1px solid var(--border);border-radius:var(--radius);
+  padding:10px}
+.cal-mini b{font-size:13px;color:var(--ink-2)}
+.mini-grid{display:grid;grid-template-columns:repeat(7,1fr);gap:2px;margin-top:8px}
+.mini-grid i{font-style:normal;font-size:10.5px;text-align:center;padding:3px 0;
+  border-radius:6px;color:var(--ink-3)}
+.mini-grid i.has{background:var(--green-100);color:var(--green-800);font-weight:650;cursor:pointer}
+.mini-grid i.has:hover{background:var(--green-800);color:var(--white)}
+.mini-grid i.today{outline:2px solid var(--gold-500)}
+
+/* ---------- 日程弹卡 ---------- */
+.sch-card{width:540px;max-height:80vh;overflow:auto;background:var(--ivory-50);
+  border-radius:var(--radius-lg);padding:18px 20px;box-shadow:var(--shadow-md);
+  animation:pop .18s cubic-bezier(.2,.7,.3,1)}
+
+/* ---------- 邮件 ---------- */
+.mail-split{display:grid;grid-template-columns:380px 1fr;gap:16px;height:calc(100vh - 220px)}
+.mail-list{overflow:auto;margin:0;padding:8px}
+.mail-item{padding:9px 10px;border-radius:var(--radius-sm);cursor:pointer}
+.mail-item:hover{background:var(--ivory-100)}
+.mail-item.unread{font-weight:650}
+.mail-item .subj{font-size:13.5px}
+.mail-item .meta{font-size:12px;color:var(--ink-3)}
+.mail-read{overflow:auto;margin:0}
+.mail-read h3{margin:4px 0 10px}
+.mail-body{white-space:pre-wrap;word-break:break-word;font-size:13.5px}
+.mail-body pre.mail-plain{white-space:pre-wrap;word-break:break-word;font-family:inherit;margin:0}
+.mail-body img{max-width:100%;height:auto}
+.mail-body table{border-collapse:collapse;max-width:100%;font-size:13px}
+.mail-body td,.mail-body th{border:1px solid var(--border);padding:4px 8px}
+.mail-body a{color:var(--green-700)}
+textarea{width:100%;resize:vertical}
+
+/* ---------- Agent ---------- */
+.chat{height:calc(100vh - 300px);overflow:auto;display:flex;flex-direction:column;gap:10px}
+.bubble{max-width:78%;padding:10px 14px;border-radius:var(--radius);white-space:pre-wrap;word-break:break-word}
+.bubble.user{align-self:flex-end;background:var(--green-800);color:var(--white)}
+.bubble.bot{align-self:flex-start;background:var(--ivory-100)}
+.proposal{background:var(--gold-100);border:1px solid var(--gold-500);border-radius:var(--radius-sm);
+  padding:10px 12px;margin-bottom:8px}
+.proposal .p-title{font-weight:650;margin-bottom:4px}
+.proposal pre{white-space:pre-wrap;font-size:12.5px;color:var(--ink-2);margin:4px 0 8px;
+  font-family:inherit;max-height:180px;overflow:auto}
+
+/* ---------- Agent 布局 ---------- */
+.agent-split{display:grid;grid-template-columns:280px 1fr;gap:16px;align-items:start}
+.agent-side{position:sticky;top:0}
+.agent-side select{width:100%}
+.agent-main{min-width:0}
+.file-list{max-height:320px;overflow:auto;display:flex;flex-direction:column;gap:3px;font-size:12.5px}
+.file-item{cursor:pointer;padding:4px 8px;border-radius:6px;color:var(--ink-2);
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.file-item:hover{background:var(--ivory-100);color:var(--green-800)}
+.tool-row{align-self:flex-start;background:var(--green-50);color:var(--green-800);
+  font-size:12px;padding:4px 12px;border-radius:99px;font-variant-numeric:tabular-nums}
+.cursor::after{content:"▍";animation:blink 1s steps(2) infinite;color:var(--gold-600)}
+@keyframes blink{50%{opacity:0}}
+
+/* ---------- Agent: 会话列表 / 工具卡片 / composer ---------- */
+.session-list{max-height:210px;overflow:auto;display:flex;flex-direction:column;gap:4px}
+.session-item{padding:6px 10px;border-radius:8px;cursor:pointer;font-size:12.5px;color:var(--ink-2);
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.session-item:hover{background:var(--ivory-100)}
+.session-item.active{background:var(--green-800);color:var(--white)}
+.tool-card{align-self:flex-start;width:88%;background:var(--ivory-100);border:1px solid var(--border);
+  border-radius:var(--radius-sm);overflow:hidden;font-size:12.5px}
+.tc-head{padding:6px 12px;cursor:pointer;color:var(--green-800);font-weight:600;
+  display:flex;gap:8px;align-items:center;user-select:none}
+.tc-body{margin:0;padding:8px 12px;border-top:1px solid var(--border);white-space:pre-wrap;
+  max-height:220px;overflow:auto;color:var(--ink-2);font-family:Consolas,monospace}
+.composer{position:sticky;bottom:0;margin-top:12px;box-shadow:var(--shadow-md)}
+.composer textarea{width:100%;resize:vertical}
+/* ---------- 启动连接页 ---------- */
+.splash-row{display:flex;align-items:center;gap:10px;padding:10px 4px;border-bottom:1px dashed var(--border)}
+.splash-row .sp-name{width:190px;font-weight:600}
+.splash-row .sp-status{flex:1;font-size:12.5px}
+.splash-row .sp-status.ok{color:var(--green-700)}
+.splash-row .sp-status.fail{color:var(--wine-700)}
+.splash-row button{padding:4px 10px;font-size:12px}
+
+/* ---------- DDL 加粗 + 左滑删除 ---------- */
+.ddl-item{transition:transform .12s ease;touch-action:pan-y}
+.ddl-item.urgent{font-weight:750}
+.ddl-item.urgent .dim,.ddl-item.urgent .badge{font-weight:600}
+.ddl-item.swiping{transition:none}
+.ddl-item.reveal{background:var(--wine-100)}
+
+.mdcode{background:var(--green-950);color:var(--ivory-100);border-radius:8px;padding:10px 12px;
+  overflow:auto;font-family:Consolas,monospace;font-size:12.5px;margin:6px 0}
+.bubble code{background:var(--ivory-200);border-radius:4px;padding:1px 5px}
+.bubble ul{margin:4px 0;padding-left:18px}
+.bubble h3,.bubble h4{margin:8px 0 4px}
+
+/* ---------- 年级课表 ---------- */
+.gt-slot{display:flex;gap:12px;padding:10px 0;border-bottom:1px dashed var(--border)}
+.gt-slot:last-child{border-bottom:none}
+.gt-time{width:64px;font-weight:700;color:var(--gold-600);font-variant-numeric:tabular-nums;
+  flex-shrink:0}
+.gt-lessons{flex:1;display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:8px}
+.gt-lesson{background:var(--green-50);border-left:3px solid var(--green-700);border-radius:8px;
+  padding:6px 10px;font-size:12.5px;display:flex;flex-direction:column}
+.gt-lesson b{font-size:13px}
+.gt-lesson.cancelled{opacity:.5;text-decoration:line-through}
+.gt-lesson .rm,.gt-lesson .cls{color:var(--ink-3);font-size:11.5px}
+
+/* ---------- 设置 ---------- */
+#view-settings .card{margin-bottom:14px}
+
+/* ---------- 向导 ---------- */
+.overlay{position:fixed;inset:0;background:rgba(16,45,37,.55);backdrop-filter:blur(4px);
+  display:flex;align-items:center;justify-content:center;z-index:50}
+.wizard{width:680px;max-height:84vh;overflow:auto;background:var(--ivory-50)}
+.wizard-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:12px}
+.wizard-head b{font-size:17px}
+.wizard-foot{display:flex;justify-content:space-between;margin-top:14px}
+.subject-list{max-height:44vh;overflow:auto;border:1px solid var(--border);
+  border-radius:var(--radius-sm);padding:8px;background:var(--white)}
+.subject-row{display:flex;align-items:center;gap:8px;padding:6px 8px;border-radius:8px}
+.subject-row:hover{background:var(--ivory-100)}
+.subject-row .rooms{color:var(--ink-3);font-size:12px}
+.wz-step p{margin:6px 0 12px;color:var(--ink-2)}
+
+/* ---------- 其他 ---------- */
+.toast{position:fixed;bottom:26px;left:50%;transform:translateX(-50%);
+  background:var(--green-900);color:var(--white);padding:10px 20px;border-radius:99px;
+  box-shadow:var(--shadow-md);z-index:99;font-size:13.5px;
+  animation:toast-in .22s ease}
+@keyframes toast-in{from{opacity:0;transform:translate(-50%,12px)}to{opacity:1;transform:translate(-50%,0)}}
+.spin{display:inline-block;animation:spin 1s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+
+/* ---------- 动画与流畅度 ---------- */
+.view.active{animation:view-in .22s cubic-bezier(.2,.7,.3,1)}
+@keyframes view-in{from{opacity:0;transform:translateY(6px) scale(.995)}to{opacity:1;transform:none}}
+
+button,.chip,.item,.mail-item,.session-item,.file-item,.tt-lesson,.gt-lesson{
+  transition:background-color .15s ease,color .15s ease,border-color .15s ease,
+    transform .12s ease,box-shadow .15s ease}
+.item:hover{background:var(--ivory-200)}
+.tt-lesson:hover,.gt-lesson:hover{transform:translateY(-1px);box-shadow:0 4px 14px rgba(26,50,40,.1)}
+.chip:hover{transform:translateY(-1px)}
+.mail-item:hover{background:var(--ivory-100)}
+
+/* 列表项渐次浮现(只做 transform/opacity, 不引起重排) */
+.view.active .item,.view.active .tt-lesson,.view.active .mail-item{
+  animation:rise .26s ease both}
+.view.active .item:nth-child(1),.view.active .tt-lesson:nth-child(1),.view.active .mail-item:nth-child(1){animation-delay:20ms}
+.view.active .item:nth-child(2),.view.active .tt-lesson:nth-child(2),.view.active .mail-item:nth-child(2){animation-delay:50ms}
+.view.active .item:nth-child(3),.view.active .tt-lesson:nth-child(3),.view.active .mail-item:nth-child(3){animation-delay:80ms}
+.view.active .item:nth-child(4),.view.active .tt-lesson:nth-child(4),.view.active .mail-item:nth-child(4){animation-delay:110ms}
+.view.active .item:nth-child(n+5),.view.active .tt-lesson:nth-child(n+5),.view.active .mail-item:nth-child(n+5){animation-delay:140ms}
+@keyframes rise{from{opacity:0;transform:translateY(5px)}to{opacity:1;transform:none}}
+
+.tt-grid{animation:view-in .25s ease both}
+
+/* 骨架屏(课表加载时占位, 页面不空) */
+.tt-skeleton{display:grid;grid-template-columns:repeat(7,1fr);gap:10px}
+.skel-card{height:220px;border-radius:var(--radius);
+  background:linear-gradient(100deg,var(--ivory-100) 40%,var(--ivory-200) 50%,var(--ivory-100) 60%);
+  background-size:200% 100%;animation:shimmer 1.1s infinite linear}
+@keyframes shimmer{from{background-position:120% 0}to{background-position:-80% 0}}
+
+/* 启动连接页: 工作中行底部流光 */
+.splash-row{position:relative}
+.splash-row.working::after{content:"";position:absolute;left:0;bottom:-1px;height:2px;width:100%;
+  border-radius:2px;overflow:hidden;
+  background:linear-gradient(90deg,transparent,var(--green-700),transparent);
+  background-size:50% 100%;animation:slide 1.2s infinite linear}
+@keyframes slide{from{background-position:120% 0}to{background-position:-80% 0}}
+.splash-row .sp-status.working{color:var(--green-700)}
+.sp-status.ok,.sp-status.fail{animation:rise .2s ease}
+
+/* Agent 气泡浮入 */
+.bubble{animation:pop .18s cubic-bezier(.2,.7,.3,1)}
+@keyframes pop{from{opacity:0;transform:translateY(6px) scale(.98)}to{opacity:1;transform:none}}
+
+/* 弹层过渡 */
+.overlay{animation:fade .18s ease}
+.wizard,.card[style]{will-change:auto}
+
+/* 尊重系统减弱动态效果设置 */
+@media (prefers-reduced-motion: reduce){
+  *,*::before,*::after{animation-duration:.01ms!important;animation-iteration-count:1!important;
+    transition-duration:.01ms!important}
+}
