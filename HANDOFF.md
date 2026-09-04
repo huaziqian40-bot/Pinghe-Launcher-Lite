@@ -119,10 +119,21 @@ Edupage / ManageBac / 网易IMAP·SMTP / SQLite / keyring / 文件系统
 `get_teachers/get_classes/get_subjects/get_classrooms` 每次调用都重新解析整个 dbi 列表,而课表解析每张课卡都要查一次 → O(卡片数 × 全表解析)。实测 149 张卡 = 9.6 万次 get_teacher、1400 万次对象解析。
 **修复**:`EdupageService._speed_patch(ed)` 把这 4 个"全量列表"方法按 Edupage 实例缓存(helper 对象每张卡新建一个,所以必须挂在 edupage 实例上而不是 helper 上)。修复后整周解析 63s→0.02s。
 
-### ManageBac 提交
+### ManageBac 提交(2026-09-05 实测定论)
 
-- dropbox 路由因学校而异,硬编码 `/dropbox` 会 404。`submit_task()` 先打开任务页,在里面动态找提交入口(带本任务 id 的 dropbox 链接或直接上传表单),找不到再按常见路由兜底
-- 提交用的 authenticity_token 从任务页表单里取
+- **真实路由/字段(只读探测验证)**: shph 的提交 action 是
+  `/student/classes/<cid>/core_tasks/<tid>/dropbox/upload`, 文件字段名是
+  `dropbox[assets_attributes][0][file]`(方括号风格) —— 硬编码旧路由
+  `.../dropbox` 或旧字段 `dropbox_assets_attributes_0_file` 都会 404/失败。
+  `submit_task()` 因此**打开任务页动态解析提交入口**(先找页面上带
+  dropbox action 的 file 表单, 再找带任务 id 的 dropbox 链接打开子页面),
+  authenticity_token 从表单/`meta csrf-token` 取。
+- **过期 id 兜底**: agent 可能拿到上学期的过期 id(实测 39792/88547 已
+  消失, 连 `/student/classes/39792` 都 404)。任务页打不开时, 扫当前全部
+  课程 core_tasks 按 task_id 重定位真实 href; 还找不到就报
+  「任务可能已被删除/归档, 请到 ManageBac 网页确认」而不是裸 HTTP 错误。
+- 探测脚本 `_probe_dropbox.py` / `_probe_locate.py`(gitignored)是只读的
+  (绝不 POST/不真实提交), 学校改版时可重跑看新路由。
 
 ### 构建陷阱
 
@@ -178,20 +189,35 @@ Edupage / ManageBac / 网易IMAP·SMTP / SQLite / keyring / 文件系统
 
 ## 七、已知遗留问题 / 未完成
 
-1. ~~提交 ManageBac 404~~ — 已修复(动态解析提交入口)
+1. ~~提交 ManageBac 404~~ — 已修复并实测定因: ①真实路由是 `.../dropbox/upload`
+   + 字段 `dropbox[assets_attributes][0][file]`(动态解析已覆盖); ②用户当初的
+   404 另有一层原因: agent 用了上学期的过期 id(39792/88547 已不存在), 现在
+   submit_task 有全课程重定位兜底 + 友好报错(见第四节)
 2. ~~TOK 通配符导致别的组的课出现~~ — 已通过教学组选项解决,用户可精确勾选
-3. 没有自动化 CI;打包后需手动跑 `_ui_test.py` + smoke
+3. 没有自动化 CI;打包后需手动跑 `_ui_test.py` + smoke(2026-09-05 起流程
+   已跑通并入库: 见 commit fe5bd63)
 4. `subject_options()` 冷启动可能 60s+(Edupage 服务器慢),目前靠 splash 预载 + week 磁盘缓存缓解;如用户反馈慢可考虑后台线程预热
-5. Agent 的 `submit_managebac_task` 依赖动态解析,如果学校改版 ManageBac 页面结构可能再次失效 — 届时重新跑一次探测看新路由
+5. Agent 的 `submit_managebac_task` 依赖动态解析 + 重定位,如果学校改版
+   ManageBac 页面结构可能再次失效 — 届时重跑 `_probe_dropbox.py`(只读)
+   看新路由/新字段
+6. ManageBac 提交的**真实上传**从未做过端到端验证(只验证到"找到提交入口
+   和 token"这一步, 不拿真作业冒险); 用户下次真提交时留意结果
 
 ## 八、git 提交历史(最近)
 
 ```
-32a205b timetable: revert to strict subject+teacher matching (九班课表修正)
-86e6561 Selection rebuilt around teaching groups (family+group+teacher)
+fe5bd63 ManageBac fixes: task submit 404 + DDL restore + chip drag reorder
+        (提交入口动态解析+过期id重定位 / 设置页恢复已移除DDL /
+         chip指针版拖拽+全部chip回归修复+缓存同步 / HANDOFF入库)
+39485fd Fix blank page when switching timetable weeks
+88ccd2a Timetable UI rework + whole-class courses always shown
 75ef86e Drop timetable/home snapshots when selection changes
-88ccd2a Timetable UI rework + whole-class courses always shown (班会/连堂/组色/弹卡/右键)
-45f326b Week-switch blank page fix (骨架屏满宽 + 保留旧画面 + 预取相邻周)
+f155180 Selection rebuilt around teaching groups (family+group+teacher)
+ed8952f timetable: class-scoped course source (九班) + drop hide feature
+45f326b timetable: hide-not-mine sections + group-keyed picker
+86e6561 timetable: per-room course sections in picker + fix next-Monday leak
+32a205b timetable: revert to strict subject+teacher matching
+2317198 邮箱页通讯录管理 (增删改) + 修复课表周五下午丢失
 da19fe2 邮箱通讯录: IMAP 收割联系人 + 写邮件自动补全 + AI 按名字查邮箱
 973e2cf 修复: 我的课程页 NameError — courses_data 缺少 storage 局部导入
 a2f52a5 更新根目录 exe 至最新构建, 清理旧 SchoolHub MSI 解包残留
