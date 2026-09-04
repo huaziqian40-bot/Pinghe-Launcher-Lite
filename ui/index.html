@@ -115,6 +115,7 @@
       <div class="row-tools">
         <button class="ghost" id="ml-unseen" data-mode="1">未读</button>
         <button class="ghost" id="ml-all" data-mode="0">全部</button>
+        <button class="ghost" id="ml-contacts" title="查看 / 管理联系人">📇 通讯录</button>
         <span class="flex1"></span>
         <button class="primary" id="ml-compose">✉ 写邮件</button>
       </div>
@@ -352,6 +353,27 @@
     <div class="form-row" style="justify-content:flex-end;margin-top:10px">
       <span id="ml-msg" class="muted small flex1"></span>
       <button class="primary" id="ml-send">发送</button>
+    </div>
+  </div>
+</div>
+
+<!-- ================= 通讯录: 查看 / 增删改联系人 ================= -->
+<div id="ct-modal" class="overlay hidden">
+  <div class="mail-card ct-card">
+    <div class="wizard-head">
+      <b>📇 通讯录</b>
+      <button class="ghost" id="ct-close">✕ 关闭</button>
+    </div>
+    <input type="text" id="ct-search" placeholder="🔍 搜索姓名或邮箱…" style="margin:6px 0">
+    <div id="ct-list" class="ct-list"></div>
+    <div class="form-row" style="margin-top:10px">
+      <input type="text" id="ct-name" placeholder="姓名" style="width:190px">
+      <input type="text" id="ct-email" placeholder="邮箱地址" class="flex1">
+      <button class="primary" id="ct-add">＋ 添加</button>
+    </div>
+    <div class="form-row" style="justify-content:flex-end;margin-top:6px">
+      <span id="ct-msg" class="muted small flex1"></span>
+      <span id="ct-count" class="muted small"></span>
     </div>
   </div>
 </div>

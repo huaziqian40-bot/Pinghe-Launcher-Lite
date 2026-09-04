@@ -440,8 +440,29 @@ class Api:
             cached = _snap_get(key, 600)
             if cached is not None:
                 return cached
-            out = {"contacts": self.svc.mail.contacts(force=bool(force))}
+            out = {"contacts": self.svc.mail.contacts_merged()}
             _snap_put(key, out)
+            return out
+        return _wrap(job)
+
+    def mail_contact_add(self, name: str, email: str) -> dict:
+        def job():
+            out = {"contacts": self.svc.mail.contact_add(name, email)}
+            _snap_drop("contacts|True", "contacts|False")
+            return out
+        return _wrap(job)
+
+    def mail_contact_update(self, old_email: str, name: str, email: str) -> dict:
+        def job():
+            out = {"contacts": self.svc.mail.contact_update(old_email, name, email)}
+            _snap_drop("contacts|True", "contacts|False")
+            return out
+        return _wrap(job)
+
+    def mail_contact_delete(self, email: str) -> dict:
+        def job():
+            out = {"contacts": self.svc.mail.contact_delete(email)}
+            _snap_drop("contacts|True", "contacts|False")
             return out
         return _wrap(job)
 

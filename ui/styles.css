@@ -185,6 +185,15 @@ textarea{width:100%;resize:vertical}
 .ac-item b{font-weight:650;flex-shrink:0}
 .ac-item .ac-mail{color:var(--ink-400,#8a8578);font-size:12px;overflow:hidden;
   text-overflow:ellipsis;white-space:nowrap}
+/* 通讯录管理弹卡 */
+.ct-list{flex:1;overflow:auto;display:flex;flex-direction:column;gap:5px;min-height:200px}
+.ct-item{display:flex;gap:10px;align-items:center;padding:7px 10px;border-radius:10px;
+  background:var(--white);border:1px solid var(--border);animation:rise .18s ease both}
+.ct-item .ct-name{font-weight:650;font-size:13px;flex-shrink:0}
+.ct-item .ct-mail{color:var(--ink-400,#8a8578);font-size:12px;overflow:hidden;
+  text-overflow:ellipsis;white-space:nowrap}
+.ct-item .ghost{padding:2px 9px;font-size:12px;flex-shrink:0}
+.ct-item:hover{border-color:var(--gold-500)}
 
 /* ---------- Agent ---------- */
 .chat{height:calc(100vh - 300px);overflow:auto;display:flex;flex-direction:column;gap:10px}

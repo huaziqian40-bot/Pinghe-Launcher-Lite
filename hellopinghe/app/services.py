@@ -141,17 +141,22 @@ class EdupageService:
         return day - timedelta(days=day.weekday())
 
     def week_plans(self, start: date, days: int = 6) -> dict[str, list]:
-        """一次请求拉取整周课表(Edupage gcall 支持 date+dateto 区间).
+        """拉取整周课表并解析成 {day_iso: [Lesson...]}.
 
-        带磁盘缓存(6 小时过期): Edupage 服务器高峰期单次可达数分钟,
-        缓存后周内重复启动/刷新零等待。
+        Edupage gcall 的 loadData 会忽略 dateto, 只返回以 date 为中心的
+        3 天窗口(前一天 + 当天 + 后一天, 实测确认), 因此按锚点分 3 次
+        拉取(周一/周四/周日)再合并 dates, 才能覆盖完整一周 —— 之前单次
+        请求只有周日~周二, 周三~周五落进 get_my_timetable 回退(残缺,
+        周五下午整段丢失)。
+
+        带磁盘缓存(6 小时过期, v2 文件名与旧截断缓存隔离)。
         """
         monday = self.week_monday(start)
         key = monday.isoformat()
         if key in self._week_cache:
             return self._week_cache[key]
 
-        cache_file = Path.home() / ".hellopinghe" / f"edupage_week_{key}.json"
+        cache_file = Path.home() / ".hellopinghe" / f"edupage_week_v2_{key}.json"
         if cache_file.exists():
             age = _time.time() - cache_file.stat().st_mtime
             if age < 6 * 3600:
@@ -174,28 +179,43 @@ class EdupageService:
         )
         gpid = csrf.text.split("gpid=")[1].split("&")[0]
         gsh = csrf.text.split("gsh=")[1].split('"')[0]
-        end = monday + timedelta(days=days - 1)
-        resp = ed.session.post(
-            f"https://{ed.subdomain}.edupage.org/gcall",
-            data=RequestUtil.encode_form_data({
-                "gpid": str(int(gpid) + 1),
-                "gsh": gsh,
-                "action": "loadData",
-                "user": ed.get_user_id(),
-                "changes": "{}",
-                "date": monday.strftime("%Y-%m-%d"),
-                "dateto": end.strftime("%Y-%m-%d"),
-                "_LJSL": "4096",
-            }),
-            headers={"Content-Type": "application/x-www-form-urlencoded"},
-        )
-        uid = str(ed.get_user_id())
-        payload = resp.text.split(f'{uid}",')[1].rsplit(",[", 1)[0]
-        data = json.loads(payload)
+
+        def fetch_window(anchor: date) -> dict:
+            resp = ed.session.post(
+                f"https://{ed.subdomain}.edupage.org/gcall",
+                data=RequestUtil.encode_form_data({
+                    "gpid": str(int(gpid) + 1),
+                    "gsh": gsh,
+                    "action": "loadData",
+                    "user": ed.get_user_id(),
+                    "changes": "{}",
+                    "date": anchor.strftime("%Y-%m-%d"),
+                    "dateto": (anchor + timedelta(days=2)).strftime("%Y-%m-%d"),
+                    "_LJSL": "4096",
+                }),
+                headers={"Content-Type": "application/x-www-form-urlencoded"},
+            )
+            uid = str(ed.get_user_id())
+            payload = resp.text.split(f'{uid}",')[1].rsplit(",[", 1)[0]
+            return json.loads(payload)
+
+        merged: dict = {}
+        for anchor_off in (0, 3, 6):   # 窗口: 周日~周二 / 周二~周四 / 周五~周日
+            try:
+                win = fetch_window(monday + timedelta(days=anchor_off))
+                merged.update(win.get("dates") or {})
+            except Exception:  # noqa: BLE001
+                continue
+        if not merged:
+            raise PingheError("课表拉取失败: gcall 三个窗口均无返回")
+        data = {"dates": merged}
 
         try:
             cache_file.parent.mkdir(parents=True, exist_ok=True)
             cache_file.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+            # 清掉旧版(截断的)整周缓存
+            for old in cache_file.parent.glob("edupage_week_2*.json"):
+                old.unlink(missing_ok=True)
         except Exception:  # noqa: BLE001
             pass
 
@@ -296,7 +316,7 @@ class EdupageService:
             json.dumps(selected, sort_keys=True).encode("utf-8")
         ).hexdigest()[:8]
         cache_dir = Path.home() / ".hellopinghe"
-        cache_file = cache_dir / f"edupage_personal_{day.isoformat()}_{sel_key}.json"
+        cache_file = cache_dir / f"edupage_personal_v2_{day.isoformat()}_{sel_key}.json"
         if cache_file.exists():
             age = _time.time() - cache_file.stat().st_mtime
             if age < 2 * 3600:
@@ -305,32 +325,66 @@ class EdupageService:
                 except Exception:  # noqa: BLE001
                     pass  # 缓存损坏则重新计算
 
-        out = []
+        def norm(s: str) -> str:
+            return re.sub(r"\s+", " ", (s or "").strip()).lower()
+
+        def subj_key(s: str) -> str:
+            """科目归一键: 去掉尾部轮次序号(HL1/SL2/1(G3) 等)。
+
+            周五下午 12:45 起是走班轮换课, 课名带轮次号且可能换老师
+            (如选课时的 Physics HL1 → 周五的 Physics HL2, 老师也不同),
+            按全名+老师精确匹配会把整段下午滤掉。
+            """
+            return re.sub(r"\d+\s*(\([^)]*\))?$", "", norm(s)).strip()
+
+        sel_by_key: dict[str, dict] = {}
+        for sel in selected:
+            sel_by_key.setdefault(subj_key(sel.get("subject")), sel)
+        auto_subjects = {"class meeting", "班会"}   # 全年级统一安排, 无需选课
+
+        # 同一时刻+同一科目键的全部课卡聚在一起, 再决定保留哪张:
+        # ① 优先课名与选课完全一致的卡; ② 其次归一键相同(轮换)的卡;
+        # ③ 组内优先老师匹配的卡, 匹配不上(轮换换老师)也保留, 不再丢弃。
+        slots: dict[tuple, list] = {}
         for l in self.master_plan(day):
+            if l.is_cancelled or not l.start_time:
+                continue
             subject = l.subject.name if l.subject else ""
-            teacher = l.teachers[0].name if l.teachers else ""
-            for sel in selected:
-                if sel.get("subject") != subject:
+            key = subj_key(subject)
+            sel = sel_by_key.get(key)
+            if sel is None:
+                if norm(subject) not in auto_subjects:
                     continue
-                want_teacher = (sel.get("teacher") or "").replace("(未指定老师)", "")
-                if want_teacher and teacher != want_teacher:
-                    continue
-                out.append({
-                    "start": l.start_time.strftime("%H:%M") if l.start_time else "",
-                    "end": l.end_time.strftime("%H:%M") if l.end_time else "",
-                    "subject": subject,
-                    "teacher": teacher,
-                    "room": l.classrooms[0].name if l.classrooms else "",
-                    "groups": ",".join(l.groups) if l.groups else "",
-                    "cancelled": bool(l.is_cancelled),
-                    "curriculum": getattr(l, "curriculum", None) or "",
-                })
-                break
+                exact, want = 0, ""
+            else:
+                exact = 2 if norm(subject) == norm(sel.get("subject")) else 1
+                want = (sel.get("teacher") or "").replace("(未指定老师)", "")
+            row = {
+                "start": l.start_time.strftime("%H:%M") if l.start_time else "",
+                "end": l.end_time.strftime("%H:%M") if l.end_time else "",
+                "subject": subject,
+                "teacher": l.teachers[0].name if l.teachers else "",
+                "room": l.classrooms[0].name if l.classrooms else "",
+                "groups": ",".join(l.groups) if l.groups else "",
+                "cancelled": bool(l.is_cancelled),
+                "curriculum": getattr(l, "curriculum", None) or "",
+            }
+            slots.setdefault((row["start"], key), {}).setdefault(
+                exact, []).append((want, row))
+
+        out = []
+        for (_start, _key), tiers in slots.items():
+            # 同一时段: 精确名匹配的卡优先于轮换名匹配的卡, 不混排
+            top = tiers[max(tiers)]
+            strict = [r for want, r in top if want and r["teacher"] == want]
+            out.extend(strict or [r for _, r in top])
         out.sort(key=lambda x: (x["start"], x["subject"]))
         try:
             cache_dir.mkdir(parents=True, exist_ok=True)
             cache_file.write_text(json.dumps(out, ensure_ascii=False), encoding="utf-8")
-            for old in cache_dir.glob(f"edupage_personal_{day.isoformat()}_*.json"):
+            for old in cache_dir.glob("edupage_personal_2*.json"):
+                old.unlink(missing_ok=True)   # 旧版缓存(截断数据)直接清理
+            for old in cache_dir.glob(f"edupage_personal_v2_{day.isoformat()}_*.json"):
                 if old != cache_file:
                     old.unlink(missing_ok=True)
         except Exception:  # noqa: BLE001
@@ -787,7 +841,7 @@ class MailService:
     def contacts_search(self, query: str, limit: int = 8) -> list[dict]:
         """按姓名/邮箱模糊匹配联系人(供 AI 与前端自动补全)。"""
         q = (query or "").strip().lower()
-        allc = self.contacts()
+        allc = self.contacts_merged()
         if not q:
             return allc[:limit]
         out = []
@@ -798,6 +852,93 @@ class MailService:
                 if len(out) >= limit:
                     break
         return out
+
+    # ---- 自建联系人 / 隐藏标记(与收割结果合并, 存 contacts_custom.json) ----
+    @staticmethod
+    def _custom_file() -> Path:
+        return CONFIG_DIR / "contacts_custom.json"
+
+    def _custom(self) -> dict:
+        try:
+            raw = json.loads(self._custom_file().read_text(encoding="utf-8"))
+            if isinstance(raw, dict):
+                return {"custom": list(raw.get("custom") or []),
+                        "hidden": [str(x).lower() for x in (raw.get("hidden") or [])]}
+        except Exception:  # noqa: BLE001
+            pass
+        return {"custom": [], "hidden": []}
+
+    def _save_custom(self, data: dict) -> None:
+        CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+        self._custom_file().write_text(
+            json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")
+
+    def contacts_merged(self) -> list[dict]:
+        """收割通讯录 + 用户自建/隐藏 合并; 自建条目置顶并带 custom 标记。"""
+        data = self._custom()
+        hidden = set(data["hidden"])
+        custom_emails = {str(c.get("email", "")).lower() for c in data["custom"]}
+        out = [dict(c, custom=True) for c in data["custom"]]
+        out += [c for c in self.contacts()
+                if c["email"].lower() not in hidden
+                and c["email"].lower() not in custom_emails]
+        return out
+
+    @staticmethod
+    def _valid_email(email: str) -> bool:
+        return ("@" in email and "." in email.rsplit("@", 1)[-1]
+                and " " not in email)
+
+    def contact_add(self, name: str, email: str) -> list[dict]:
+        email = (email or "").strip().lower()
+        name = (name or "").strip()
+        if not self._valid_email(email):
+            raise PingheError("邮箱地址不合法")
+        if not name:
+            raise PingheError("姓名不能为空")
+        data = self._custom()
+        data["custom"] = [c for c in data["custom"]
+                          if str(c.get("email", "")).lower() != email]
+        data["custom"].append({"name": name, "email": email})
+        if email in data["hidden"]:
+            data["hidden"].remove(email)
+        self._save_custom(data)
+        return self.contacts_merged()
+
+    def contact_update(self, old_email: str, name: str, email: str) -> list[dict]:
+        old_email = (old_email or "").strip().lower()
+        email = (email or "").strip().lower()
+        name = (name or "").strip()
+        if not self._valid_email(email):
+            raise PingheError("邮箱地址不合法")
+        if not name:
+            raise PingheError("姓名不能为空")
+        data = self._custom()
+        if any(str(c.get("email", "")).lower() == old_email for c in data["custom"]):
+            data["custom"] = [c for c in data["custom"]
+                              if str(c.get("email", "")).lower() != old_email]
+        elif old_email not in data["hidden"]:
+            data["hidden"].append(old_email)   # 收割条目改名 = 隐藏旧地址
+        data["custom"] = [c for c in data["custom"]
+                          if str(c.get("email", "")).lower() != email]
+        data["custom"].append({"name": name, "email": email})
+        # 换了新地址才解隐藏新地址; 只改名(新旧同址)时旧地址必须保持隐藏,
+        # 否则收割原条目会重新出现, 出现同名重复
+        if email != old_email and email in data["hidden"]:
+            data["hidden"].remove(email)
+        self._save_custom(data)
+        return self.contacts_merged()
+
+    def contact_delete(self, email: str) -> list[dict]:
+        email = (email or "").strip().lower()
+        data = self._custom()
+        before = len(data["custom"])
+        data["custom"] = [c for c in data["custom"]
+                          if str(c.get("email", "")).lower() != email]
+        if len(data["custom"]) == before and email not in data["hidden"]:
+            data["hidden"].append(email)   # 收割条目: 打隐藏标记
+        self._save_custom(data)
+        return self.contacts_merged()
 
     def _smtp_password(self) -> str:
         """获取 SMTP 登录密码（与 IMAP 相同逻辑）。"""

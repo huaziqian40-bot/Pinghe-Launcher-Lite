@@ -482,6 +482,7 @@ document.addEventListener("keydown", (e) => {
   if (e.key !== "Escape") return;
   if (!$("#sch-modal").classList.contains("hidden")) closeSchModal();
   if (!$("#ml-modal").classList.contains("hidden")) { acClose(); $("#ml-modal").classList.add("hidden"); }
+  if (!$("#ct-modal").classList.contains("hidden")) $("#ct-modal").classList.add("hidden");
 });
 $("#schm-add").onclick = async () => {
   const title = $("#schm-title-in").value.trim();
@@ -754,6 +755,98 @@ $("#ml-compose").onclick = async () => {
   loadMlContacts();   /* 通讯录未加载则后台拉取(磁盘缓存 24h) */
 };
 $("#ml-cancel").onclick = () => { acClose(); $("#ml-modal").classList.add("hidden"); };
+
+/* ---- 通讯录管理 (查看 / 添加 / 修改 / 删除) ---- */
+let ctContacts = [];
+let ctEditing = null;   /* 正在修改的旧邮箱 */
+
+function renderContacts() {
+  const q = ($("#ct-search").value || "").trim().toLowerCase();
+  const list = ctContacts.filter((c) =>
+    !q || (c.name || "").toLowerCase().includes(q) ||
+    (c.email || "").toLowerCase().includes(q));
+  $("#ct-count").textContent = `${list.length} / ${ctContacts.length} 位联系人`;
+  $("#ct-list").innerHTML = list.map((c) => `
+    <div class="ct-item" data-email="${esc(c.email)}">
+      <span class="grow" style="display:flex;gap:10px;align-items:center;overflow:hidden">
+        <span class="ct-name">${esc(c.name || "(无名)")}</span>
+        <span class="ct-mail">${esc(c.email)}</span>
+      </span>
+      ${c.custom ? `<span class="badge green">自建</span>` :
+        (c.count ? `<span class="muted small">×${c.count}</span>` : "")}
+      <button class="ghost" data-edit="${esc(c.email)}" title="修改">✏</button>
+      <button class="ghost" data-del="${esc(c.email)}" title="删除">🗑</button>
+    </div>`).join("") || `<div class="empty">没有匹配的联系人</div>`;
+  $$("#ct-list [data-edit]").forEach((b) => {
+    b.onclick = () => {
+      const c = ctContacts.find((x) => x.email === b.dataset.edit);
+      if (!c) return;
+      ctEditing = c.email;
+      $("#ct-name").value = c.name || "";
+      $("#ct-email").value = c.email;
+      $("#ct-add").textContent = "保存修改";
+      $("#ct-msg").textContent = `正在修改 ${c.email}, 改完点"保存修改"`;
+      $("#ct-name").focus();
+    };
+  });
+  $$("#ct-list [data-del]").forEach((b) => {
+    b.onclick = async () => {
+      try {
+        const d = await call("mail_contact_delete", b.dataset.del);
+        ctContacts = d.contacts || [];
+        mlContacts = ctContacts;
+        if (ctEditing === b.dataset.del) ctEditing = null;
+        $("#ct-msg").textContent = "已删除";
+        renderContacts();
+      } catch (e) { $("#ct-msg").textContent = e.message; }
+    };
+  });
+}
+function ctResetForm() {
+  ctEditing = null;
+  $("#ct-name").value = "";
+  $("#ct-email").value = "";
+  $("#ct-add").textContent = "＋ 添加";
+}
+$("#ml-contacts").onclick = async () => {
+  $("#ct-modal").classList.remove("hidden");
+  $("#ct-msg").textContent = "";
+  ctResetForm();
+  if (mlContacts) {
+    ctContacts = mlContacts;
+    renderContacts();
+  } else {
+    $("#ct-list").innerHTML = `<div class="empty">⏳ 正在读取通讯录…</div>`;
+    await loadMlContacts();
+    ctContacts = mlContacts || [];
+    renderContacts();
+  }
+};
+$("#ct-close").onclick = () => $("#ct-modal").classList.add("hidden");
+$("#ct-modal").addEventListener("click", (e) => {
+  if (e.target === $("#ct-modal")) $("#ct-modal").classList.add("hidden");
+});
+$("#ct-search").addEventListener("input", renderContacts);
+$("#ct-add").onclick = async () => {
+  const name = $("#ct-name").value.trim();
+  const email = $("#ct-email").value.trim();
+  const msg = $("#ct-msg");
+  msg.textContent = "";
+  try {
+    let d;
+    if (ctEditing) {
+      d = await call("mail_contact_update", ctEditing, name, email);
+      msg.textContent = "已保存修改";
+    } else {
+      d = await call("mail_contact_add", name, email);
+      msg.textContent = "已添加";
+    }
+    ctResetForm();
+    ctContacts = d.contacts || [];
+    mlContacts = ctContacts;
+    renderContacts();
+  } catch (e) { msg.textContent = e.message; }
+};
 $("#ml-modal").addEventListener("click", (e) => {
   if (e.target === $("#ml-modal")) { acClose(); $("#ml-modal").classList.add("hidden"); }
 });
