@@ -109,11 +109,15 @@ a{color:var(--green-700)}
 .tt-cell.rest{background:var(--ivory-100)}
 .tt-restbar{background:var(--ivory-100);border:1px dashed var(--border);border-radius:8px;
   padding:6px 12px;font-size:12px;color:var(--ink-3);display:flex;align-items:center;gap:8px}
-.tt-lesson{background:var(--green-50);border-left:3px solid var(--green-700);
-  border-radius:6px;padding:4px 6px;margin:0;font-size:11.5px}
+.tt-lesson{background:var(--tbg,var(--green-50));border-left:3px solid var(--tfg,var(--green-700));
+  color:var(--tfg,var(--ink));border-radius:6px;padding:4px 6px;font-size:11.5px;
+  flex:1;min-height:0;overflow:hidden;cursor:pointer}
 .tt-lesson b{display:block;font-size:12px}
 .tt-lesson.cancelled{opacity:.5;text-decoration:line-through}
-.tt-lesson .rm{color:var(--ink-3);font-size:10.5px}
+.tt-lesson .rm{color:inherit;opacity:.72;font-size:10.5px}
+.tt-lesson.tt-hl{outline:2px solid var(--tfg,var(--green-700));outline-offset:-2px;
+  box-shadow:0 3px 12px rgba(26,50,40,.25);font-weight:650}
+.tt-lesson.tt-gray{filter:grayscale(1);opacity:.42}
 
 /* ---------- 日程 周/月/年 ---------- */
 .sch-week{display:grid;grid-template-columns:repeat(7,1fr);gap:10px}
@@ -351,3 +355,16 @@ button,.chip,.item,.mail-item,.session-item,.file-item,.tt-lesson,.gt-lesson{
   *,*::before,*::after{animation-duration:.01ms!important;animation-iteration-count:1!important;
     transition-duration:.01ms!important}
 }
+
+.subject-row.wc{opacity:.72}
+.subject-row input:disabled{cursor:default}
+
+/* ---------- 课表课卡弹卡 + 右键菜单 ---------- */
+.tt-card{width:min(440px,94vw);height:auto;max-height:86vh}
+.ttm-meta{display:flex;align-items:center;gap:8px;margin:8px 0}
+.tt-menu{position:fixed;z-index:60;background:var(--white);border:1px solid var(--border);
+  border-radius:10px;box-shadow:0 10px 30px rgba(26,50,40,.18);padding:5px;display:flex;
+  flex-direction:column;min-width:168px}
+.tt-menu button{text-align:left;border:0;background:none;padding:8px 10px;border-radius:7px;
+  font-size:13px;color:var(--ink);cursor:pointer}
+.tt-menu button:hover{background:var(--ivory-100)}

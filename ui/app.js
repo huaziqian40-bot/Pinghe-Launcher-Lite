@@ -224,62 +224,132 @@ setInterval(() => {
 }, 500);
 
 /* ================= 我的课表 ================= */
-function ttLessonHtml(l, withTime) {
-  return `<div class="tt-lesson ${l.cancelled ? "cancelled" : ""}">
-    ${withTime ? `<span class="rm">${esc(l.start)}</span>` : ""}
+/* 每个教学组一个自己的颜色: 按 (科目族, 组号) 稳定散到调色板上 */
+const TT_PALETTE = [
+  ["#e3f2e3", "#1d6b3c"], ["#e3edf7", "#1d4f7c"], ["#fdeee3", "#a04d12"],
+  ["#f3e8f7", "#6b2d8c"], ["#fde8ef", "#a01d55"], ["#e0f2f1", "#00695c"],
+  ["#fff7dc", "#8a6d00"], ["#e8eaf6", "#303f9f"], ["#e0f7fa", "#006978"],
+  ["#f9ebeb", "#8c1d1d"], ["#eef6e3", "#4a7c1d"], ["#efe3f2", "#6b1d7c"],
+  ["#e3f6f0", "#0b6b5d"], ["#fbe9e0", "#8c3d1d"], ["#e9e9f2", "#3d3d8c"],
+  ["#f2f0e3", "#6b641d"],
+];
+function ttColor(l) {
+  const k = `${subjFamily(l.subject)}|${l.group || ""}`;
+  let h = 0;
+  for (let i = 0; i < k.length; i++) h = (h * 31 + k.charCodeAt(i)) >>> 0;
+  const [bg, fg] = TT_PALETTE[h % TT_PALETTE.length];
+  return `--tbg:${bg};--tfg:${fg}`;
+}
+/* 高亮/变灰标记(本机 localStorage, 不进配置文件) */
+let ttMarks = Store.get("ttmarks") || {};
+const ttMarkKey = (l, day) => `${day}|${l.start}|${subjFamily(l.subject)}|${l.group || ""}`;
+
+/* 一张课卡; ti = 在 ttFlat 里的下标(点击/右键时取回完整信息)。
+   place: 作为格子内容时留空, 连堂合并块给 "grid-column:X;grid-row:R / span N" */
+function ttLessonHtml(l, ti, withTime, place) {
+  const mark = l._mark ? ` tt-${l._mark}` : "";
+  const style = `${ttColor(l)}${place ? ";" + place : ""}`;
+  return `<div class="tt-lesson${mark}${l.cancelled ? " cancelled" : ""}"
+    data-ti="${ti}" style="${style}">
+    ${withTime ? `<span class="rm">${esc(l.start)}${l.end ? "–" + esc(l.end) : ""}</span>` : ""}
     <b>${esc(l.subject)}</b>
     <span class="rm">${esc(l.room)}${l.teacher ? " · " + esc(l.teacher) : ""}</span>
   </div>`;
 }
+/* 连堂判定: 同科目族+同老师+同组+同教室才算"连续两节一样的课" */
+function ttSameKey(l) {
+  return `${subjFamily(l.subject)}|${l.teacher}|${l.group || ""}|${l.room}|${l.cancelled ? 1 : 0}`;
+}
 
-/* 按节次对齐的周课表: 行=时段(P1-P10/Lunch/晚自习), 列=周一到周日 */
+let ttFlat = [];       // 课卡扁平表, 渲染时构建, 点击/右键按下标取
+let ttWeekData = null; // 当前渲染的周数据(弹卡里"全部上课时间"从这里取)
+
+/* 按节次对齐的周课表: 行=时段(P1-P10/Lunch/晚自习), 列=周一到周日。
+   全部格子显式定位(grid-row/grid-column); 格子里的课 flex:1 平分格高;
+   同一天连续两节一样的课合并成一块跨两行(盖住后续空格)。 */
 function renderTimetable(d) {
   $("#tt-range").textContent = `${d.week[0].day} ~ ${d.week[6].day}`;
   const today = isoOf(new Date());
+  ttWeekData = d;
+  ttFlat = [];
 
-  /* 每天的课先按节次分桶 */
   const byDay = d.week.map((day) => {
     const cells = PERIODS.map(() => []);
     const other = [];
     (day.lessons || []).forEach((l) => {
+      const ent = { ...l, _day: day.day, _label: day.label,
+                    _mark: ttMarks[ttMarkKey(l, day.day)] || "" };
       const pi = periodOf(l.start);
-      if (pi >= 0) cells[pi].push(l);
-      else other.push(l);
+      if (pi >= 0) cells[pi].push(ent);
+      else other.push(ent);
     });
-    return { cells, other, day };
+    /* 连堂预扫描: 该天某时段只有一节、下一时段也只有同一节课 → 合并 */
+    const spanStart = {}, consumed = new Set();
+    for (let pi = 0; pi < PERIODS.length; pi++) {
+      if (cells[pi].length !== 1 || consumed.has(pi)) continue;
+      let n = 1;
+      while (pi + n < PERIODS.length && cells[pi + n].length === 1 &&
+             ttSameKey(cells[pi][0]) === ttSameKey(cells[pi + n][0])) n++;
+      if (n > 1) {
+        spanStart[pi] = n;
+        for (let k = 1; k < n; k++) consumed.add(pi + k);
+      }
+    }
+    return { cells, other, day, spanStart, consumed };
   });
 
-  /* 表头: 空角 + 七天 */
-  let html = `<div class="tt-head tt-corner"></div>`;
-  html += byDay.map(({ day }) =>
-    `<div class="tt-head ${day.day === today ? "today" : ""}">${esc(day.label)}</div>`).join("");
+  let html = `<div class="tt-head tt-corner" style="grid-row:1;grid-column:1"></div>`;
+  html += byDay.map(({ day }, di) =>
+    `<div class="tt-head ${day.day === today ? "today" : ""}" style="grid-row:1;grid-column:${di + 2}">${esc(day.label)}</div>`).join("");
 
+  const spans = [];   // 连堂合并块最后画, 盖在被跨过的空格上
+  let r = 2;
   PERIODS.forEach((p, pi) => {
     const busy = byDay.some((b) => b.cells[pi].length);
-    const timeCell = `<div class="tt-time ${p.rest ? "rest" : ""}"><b>${esc(p.name)}</b>
+    const timeCell = `<div class="tt-time ${p.rest ? "rest" : ""}" style="grid-row:${r};grid-column:1"><b>${esc(p.name)}</b>
       <span>${esc(p.start)}</span></div>`;
     /* Lunch/晚自习整周没课时渲染成一条横幅, 不占七列 */
     if (p.rest && !busy) {
       html += timeCell +
-        `<div class="tt-restbar" style="grid-column:2/-1">${esc(p.name)} ${esc(p.start)} – ${esc(p.end)}</div>`;
+        `<div class="tt-restbar" style="grid-row:${r};grid-column:2/-1">${esc(p.name)} ${esc(p.start)} – ${esc(p.end)}</div>`;
+      r++;
       return;
     }
     html += timeCell;
-    byDay.forEach((b) => {
+    byDay.forEach((b, di) => {
       const ls = b.cells[pi];
-      html += ls.length
-        ? `<div class="tt-cell ${p.rest ? "rest" : ""}">${ls.map((l) => ttLessonHtml(l, false)).join("")}</div>`
-        : `<div class="tt-cell ${p.rest ? "rest" : ""}"></div>`;
+      let inner = "";
+      if (b.spanStart[pi]) {
+        const ti = ttFlat.length;
+        ttFlat.push(ls[0]);
+        spans.push(ttLessonHtml(ls[0], ti, false,
+          `grid-column:${di + 2};grid-row:${r} / span ${b.spanStart[pi]}`));
+      } else if (!b.consumed.has(pi)) {
+        inner = ls.map((l) => {
+          const ti = ttFlat.length;
+          ttFlat.push(l);
+          return ttLessonHtml(l, ti, false);
+        }).join("");
+      }
+      html += `<div class="tt-cell ${p.rest ? "rest" : ""}" style="grid-row:${r};grid-column:${di + 2}">${inner}</div>`;
     });
+    r++;
   });
 
   /* 不在任何时段的课(如临时调课)归到"课外"一行 */
   if (byDay.some((b) => b.other.length)) {
-    html += `<div class="tt-time"><b>课外</b></div>` +
-      byDay.map((b) =>
-        `<div class="tt-cell">${b.other.map((l) => ttLessonHtml(l, true)).join("")}</div>`).join("");
+    html += `<div class="tt-time" style="grid-row:${r};grid-column:1"><b>课外</b></div>`;
+    byDay.forEach((b, di) => {
+      const items = b.other.map((l) => {
+        const ti = ttFlat.length;
+        ttFlat.push(l);
+        return ttLessonHtml(l, ti, true);
+      });
+      html += `<div class="tt-cell" style="grid-row:${r};grid-column:${di + 2}">${items.join("")}</div>`;
+    });
   }
-  $("#tt-week").innerHTML = html;
+
+  $("#tt-week").innerHTML = html + spans.join("");
 }
 function loadTimetable() {
   return swr(`tt|${ttOffset}`, TTL.tt,
@@ -290,6 +360,121 @@ function loadTimetable() {
 $("#tt-prev").onclick = () => { ttOffset--; loadTimetable().catch((e) => toast(e.message)); };
 $("#tt-next").onclick = () => { ttOffset++; loadTimetable().catch((e) => toast(e.message)); };
 $("#tt-this").onclick = () => { ttOffset = 0; loadTimetable().catch((e) => toast(e.message)); };
+
+/* ---- 点击课卡 → 弹卡: 标题/老师/教室/全部上课时间 + 取消选课/退出 ---- */
+let ttModalL = null;
+let selLoaded = false;
+async function ensureSelections() {
+  /* 选课列表按需拉一次(弹卡里的"取消选课"要用; 设置页加载后跳过) */
+  if (selLoaded || selectedLessonsCache.length) return;
+  try {
+    const d = await call("settings_get");
+    selectedLessonsCache = d.selected_lessons || [];
+    selLoaded = true;
+  } catch { /* 拉不到就按空处理, 取消时会提示去设置里改 */ }
+}
+function openTtModal(l) {
+  if (!l) return;
+  ttModalL = l;
+  ensureSelections();
+  $("#ttm-title").textContent = l.subject;
+  $("#ttm-label").textContent = l._label || "";
+  $("#ttm-teacher").textContent = l.teacher || "(未指定老师)";
+  $("#ttm-room").textContent = l.room || "—";
+  $("#ttm-group").textContent = l.group ? `组${l.group}` : "全班必修";
+  /* 本周内同一教学组的全部上课时间 */
+  const fam = subjFamily(l.subject);
+  const times = [];
+  ((ttWeekData && ttWeekData.week) || []).forEach((day) =>
+    (day.lessons || []).forEach((x) => {
+      if (subjFamily(x.subject) === fam && (x.group || "") === (l.group || ""))
+        times.push(`${day.label} ${x.start}–${x.end}`);
+    }));
+  $("#ttm-times").innerHTML = times.length
+    ? [...new Set(times)].map((t) => `<div class="item"><span>${esc(t)}</span></div>`).join("")
+    : `<div class="muted">本周仅此一次</div>`;
+  $("#ttm-del").classList.toggle("hidden", !l.group);   // 全班必修课没有"取消选课"
+  $("#tt-modal").classList.remove("hidden");
+}
+$("#ttm-close").onclick = () => $("#tt-modal").classList.add("hidden");
+$("#ttm-del").onclick = async () => {
+  const l = ttModalL;
+  if (!l) return;
+  await ensureSelections();
+  const fam = subjFamily(l.subject);
+  const kept = selectedLessonsCache.filter((s) =>
+    !(subjFamily(s.subject) === fam && (s.group || "") === (l.group || "") &&
+      (!s.teacher || s.teacher === l.teacher)));
+  if (kept.length === selectedLessonsCache.length) {
+    toast("没有找到对应的选课记录, 请到设置里重新选择");
+    return;
+  }
+  try {
+    await call("wizard_save_selection", JSON.stringify(kept));
+    selectedLessonsCache = kept;
+    Store.drop("tt|"); Store.drop("home");
+    $("#tt-modal").classList.add("hidden");
+    toast(`已取消 ${l.subject}${l.group ? " 组" + l.group : ""}`);
+    loadTimetable().catch(() => {});
+  } catch (e) { toast(e.message); }
+};
+
+/* ---- 右键课卡 → 菜单: 添加到日程 / 高亮 / 变灰 ---- */
+let ttMenuL = null;
+$("#tt-week").addEventListener("click", (e) => {
+  const el = e.target.closest(".tt-lesson");
+  if (el) openTtModal(ttFlat[+el.dataset.ti]);
+});
+$("#tt-week").addEventListener("contextmenu", (e) => {
+  const el = e.target.closest(".tt-lesson");
+  if (!el) return;
+  e.preventDefault();
+  openTtMenu(ttFlat[+el.dataset.ti], e.clientX, e.clientY);
+});
+function openTtMenu(l, x, y) {
+  if (!l) return;
+  ttMenuL = l;
+  const mark = ttMarks[ttMarkKey(l, l._day)] || "";
+  $("#tt-menu-hl").textContent = mark === "hl" ? "★ 取消高亮" : "★ 高亮这节课";
+  $("#tt-menu-gray").textContent = mark === "gray" ? "取消变灰" : "变灰(弱化显示)";
+  const m = $("#tt-menu");
+  m.classList.remove("hidden");
+  m.style.left = Math.min(x, window.innerWidth - m.offsetWidth - 8) + "px";
+  m.style.top = Math.min(y, window.innerHeight - m.offsetHeight - 8) + "px";
+}
+function ttSetMark(mark) {
+  const l = ttMenuL;
+  $("#tt-menu").classList.add("hidden");
+  if (!l) return;
+  const k = ttMarkKey(l, l._day);
+  if (ttMarks[k] === mark) delete ttMarks[k];
+  else ttMarks[k] = mark;
+  Store.set("ttmarks", ttMarks);
+  loadTimetable().catch(() => {});
+}
+$("#tt-menu-add").onclick = async () => {
+  const l = ttMenuL;
+  $("#tt-menu").classList.add("hidden");
+  if (!l) return;
+  try {
+    await call("schedule_add", l._day, l.start,
+      l.subject + (l.group ? " (组" + l.group + ")" : ""),
+      `${l.start}–${l.end}${l.room ? " · " + l.room : ""}${l.teacher ? " · " + l.teacher : ""}`);
+    toast("已加入我的日程");
+    Store.drop("sch|");
+  } catch (e) { toast(e.message); }
+};
+$("#tt-menu-hl").onclick = () => ttSetMark("hl");
+$("#tt-menu-gray").onclick = () => ttSetMark("gray");
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") {
+    $("#tt-modal").classList.add("hidden");
+    $("#tt-menu").classList.add("hidden");
+  }
+});
+document.addEventListener("click", (e) => {
+  if (!e.target.closest("#tt-menu")) $("#tt-menu").classList.add("hidden");
+});
 
 /* ================= 我的日程: 周 / 月 / 年 三种视图 =================
  * 点任意一天 → 弹出当天安排的卡片, 卡片里可直接添加/删除。
@@ -1128,6 +1313,7 @@ async function loadSettings() {
   $("#st-mail-authcode").value = "";
   $("#st-grades-llm").checked = !!d.send_grades_to_llm;
   selectedLessonsCache = d.selected_lessons || [];
+  selLoaded = true;   // 课表弹卡的"取消选课"直接用, 不用再拉
   $("#st-subjects").innerHTML = selectedLessonsCache.map((s) =>
     `<span class="chip on">${esc(s.subject)}${s.teacher ? " · " + esc(s.teacher) : ""}${s.group ? " · 组" + esc(s.group) : ""}</span>`).join("") ||
     `<span class="muted">尚未选课</span>`;
@@ -1244,13 +1430,15 @@ function grpChecked(checkedSet, fam, teacher, group) {
     checkedSet.has(`${fam}|${teacher}|`);
 }
 function grpRowHTML(fam, g, checkedSet, pad, lead, autoCheck) {
-  const chk = (autoCheck || grpChecked(checkedSet, fam, g.teacher, g.group))
+  /* 无组 = 全班必修课(班会/语文这类), 人人都有, 锁定为已选不可取消 */
+  const whole = !g.group;
+  const chk = (whole || autoCheck || grpChecked(checkedSet, fam, g.teacher, g.group))
     ? "checked" : "";
-  const label = g.group ? `组${g.group}` : "全班";
+  const label = whole ? "全班必修" : `组${g.group}`;
   const rooms = (g.rooms || []).join(" ");
-  return `<label class="subject-row" style="padding-left:${pad}px">
+  return `<label class="subject-row${whole ? " wc" : ""}" style="padding-left:${pad}px">
     <input type="checkbox" data-sub="${esc(g.subject)}" data-teacher="${esc(g.teacher)}"
-      data-group="${esc(g.group || "")}" ${chk}>
+      data-group="${esc(g.group || "")}" ${chk}${whole ? " disabled" : ""}>
     <span class="pick-grow">${lead || ""}<b>${esc(label)}</b>
     <span class="rooms">${esc(g.teacher)}${rooms ? " · " + esc(rooms) : ""}${esc(fmtSecTimes(g.times))}</span></span></label>`;
 }
@@ -1286,7 +1474,7 @@ function bindPickerFolds(container) {
 }
 function collectPickerSelection(containerId) {
   const sel = [];
-  $$(`#${containerId} input[type=checkbox]:checked`).forEach((c) =>
+  $$(`#${containerId} input[type=checkbox]:checked:not([disabled])`).forEach((c) =>
     sel.push({ subject: c.dataset.sub, teacher: c.dataset.teacher,
                group: c.dataset.group || "" }));
   return sel;

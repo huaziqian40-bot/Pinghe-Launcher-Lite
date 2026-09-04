@@ -410,7 +410,7 @@ class EdupageService:
             json.dumps(selected, sort_keys=True).encode("utf-8")
         ).hexdigest()[:8]
         cache_dir = Path.home() / ".hellopinghe"
-        cache_file = cache_dir / f"edupage_personal_v4_{day.isoformat()}_{sel_key}.json"
+        cache_file = cache_dir / f"edupage_personal_v5_{day.isoformat()}_{sel_key}.json"
         if cache_file.exists():
             age = _time.time() - cache_file.stat().st_mtime
             if age < 2 * 3600:
@@ -419,10 +419,13 @@ class EdupageService:
                 except Exception:  # noqa: BLE001
                     pass  # 缓存损坏则重新计算
 
-        # 按"教学组"匹配: 选课 = (科目族, 组号, 老师)。
-        # 课名会换(History HL/SL2 ↔ History HL2), 所以科目用 family 比对;
-        # 老师做宽松匹配(选课老师 ∈ 课卡老师, CS 组P 一周轮换两位老师);
-        # 兼容旧选课: 无 group = 该组维度不筛(如 TOK 全部组), 无 teacher 同理。
+        # 按"教学组"匹配, 分两类课卡(通用规则, 不针对任何账号):
+        # - 无组课卡 = 全班必修课(班会/语文/体育这类 Edupage 不打组的课),
+        #   不需要选, 一律进课表 —— 否则像班会这种"没人会去勾"的课会消失;
+        # - 有组课卡 = 走班/选修, 按选课(科目族, 组号, 老师)解析。
+        #   课名会换(History HL/SL2 ↔ History HL2), 所以科目用 family 比对;
+        #   老师做宽松匹配(选课老师 ∈ 课卡老师, CS 组P 一周轮换两位老师);
+        #   兼容旧选课: 无 group = 该组维度不筛(如 TOK 全部组), 无 teacher 同理。
         # 课程来源上先过一遍本班过滤(见 _for_my_class)。
         # 选课去重(同一门课勾了两次只会显示一遍)
         seen_sel = set()
@@ -442,24 +445,24 @@ class EdupageService:
             card_teachers = {t.name.strip() for t in (l.teachers or [])}
             group = ",".join(l.groups) if l.groups else ""
             card_groups = [g.strip() for g in group.split(",") if g.strip()]
-            for fam, w_teacher, w_group in uniq:
-                if fam != subject_family(subject):
+            if card_groups:  # 有组 → 必须命中选课之一
+                if not any(
+                    fam == subject_family(subject)
+                    and (not w_teacher or w_teacher in card_teachers)
+                    and (not w_group or w_group in card_groups)
+                    for fam, w_teacher, w_group in uniq
+                ):
                     continue
-                if w_teacher and w_teacher not in card_teachers:
-                    continue
-                if w_group and w_group not in card_groups:
-                    continue
-                out.append({
-                    "start": l.start_time.strftime("%H:%M") if l.start_time else "",
-                    "end": l.end_time.strftime("%H:%M") if l.end_time else "",
-                    "subject": subject,
-                    "teacher": l.teachers[0].name.strip() if l.teachers else "",
-                    "room": l.classrooms[0].name if l.classrooms else "",
-                    "group": group,
-                    "cancelled": bool(l.is_cancelled),
-                    "curriculum": getattr(l, "curriculum", None) or "",
-                })
-                break
+            out.append({
+                "start": l.start_time.strftime("%H:%M") if l.start_time else "",
+                "end": l.end_time.strftime("%H:%M") if l.end_time else "",
+                "subject": subject,
+                "teacher": l.teachers[0].name.strip() if l.teachers else "",
+                "room": l.classrooms[0].name if l.classrooms else "",
+                "group": group,
+                "cancelled": bool(l.is_cancelled),
+                "curriculum": getattr(l, "curriculum", None) or "",
+            })
         out.sort(key=lambda x: (x["start"], x["subject"]))
         try:
             cache_dir.mkdir(parents=True, exist_ok=True)
@@ -470,7 +473,9 @@ class EdupageService:
                 old.unlink(missing_ok=True)   # v2(未按班级过滤)整批作废
             for old in cache_dir.glob("edupage_personal_v3_*.json"):
                 old.unlink(missing_ok=True)   # v3(课名精确匹配, 会丢换名卡)作废
-            for old in cache_dir.glob(f"edupage_personal_v4_{day.isoformat()}_*.json"):
+            for old in cache_dir.glob("edupage_personal_v4_*.json"):
+                old.unlink(missing_ok=True)   # v4(无全班必修规则, 缺班会等)作废
+            for old in cache_dir.glob(f"edupage_personal_v5_{day.isoformat()}_*.json"):
                 if old != cache_file:
                     old.unlink(missing_ok=True)
         except Exception:  # noqa: BLE001

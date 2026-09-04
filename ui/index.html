@@ -357,6 +357,30 @@
   </div>
 </div>
 
+<!-- ================= 课表课卡弹卡 + 右键菜单 ================= -->
+<div id="tt-modal" class="overlay hidden">
+  <div class="mail-card tt-card">
+    <div class="wizard-head"><b id="ttm-title">课程</b></div>
+    <div class="ttm-meta">
+      <span class="badge" id="ttm-group"></span>
+      <span id="ttm-label" class="muted"></span>
+    </div>
+    <div class="item"><span class="dim" style="width:44px">老师</span><span class="grow" id="ttm-teacher"></span></div>
+    <div class="item"><span class="dim" style="width:44px">教室</span><span class="grow" id="ttm-room"></span></div>
+    <div class="muted small" style="margin:8px 0 4px">上课时间(本周)</div>
+    <div id="ttm-times" class="list" style="max-height:200px;overflow:auto"></div>
+    <div class="wizard-foot">
+      <button class="danger" id="ttm-del">取消选课</button>
+      <button class="ghost" id="ttm-close">退出</button>
+    </div>
+  </div>
+</div>
+<div id="tt-menu" class="tt-menu hidden">
+  <button id="tt-menu-add">📅 添加到日程</button>
+  <button id="tt-menu-hl">★ 高亮这节课</button>
+  <button id="tt-menu-gray">变灰(弱化显示)</button>
+</div>
+
 <!-- ================= 通讯录: 查看 / 增删改联系人 ================= -->
 <div id="ct-modal" class="overlay hidden">
   <div class="mail-card ct-card">
