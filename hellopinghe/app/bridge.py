@@ -402,6 +402,8 @@ class Api:
     # ================================================================ 我的课程
     def courses_data(self) -> dict:
         def job():
+            from .. import storage
+
             cached = _snap_get("courses", 180)
             if cached is not None:
                 return cached
