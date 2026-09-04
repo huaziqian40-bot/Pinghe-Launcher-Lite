@@ -220,3 +220,22 @@ def ddl_dismissed_keys(conn: sqlite3.Connection, host: str) -> set[str]:
             "SELECT dkey FROM ddl_dismissed WHERE host=?", (host,)
         ).fetchall()
     }
+
+
+def ddl_dismissed_rows(conn: sqlite3.Connection, host: str) -> list[dict]:
+    """已移除的作业列表(设置页恢复用)."""
+    return [
+        {"key": r[0], "created": r[1]}
+        for r in conn.execute(
+            "SELECT dkey, created FROM ddl_dismissed WHERE host=? ORDER BY created DESC",
+            (host,),
+        ).fetchall()
+    ]
+
+
+def ddl_restore(conn: sqlite3.Connection, host: str, dkey: str) -> None:
+    """恢复误移除的作业(从 dismissed 表里删掉标记)."""
+    conn.execute(
+        "DELETE FROM ddl_dismissed WHERE host=? AND dkey=?", (host, dkey)
+    )
+    conn.commit()

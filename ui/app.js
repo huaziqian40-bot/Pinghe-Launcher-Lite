@@ -773,11 +773,8 @@ $("#gt-filter").addEventListener("input", renderGradett);
 function renderCourses(d) {
   const chips = [`<span class="chip ${!currentClassFilter ? "on" : ""}" data-cid="">全部</span>`]
     .concat(d.classes.map((c) =>
-      `<span class="chip ${currentClassFilter === c.id ? "on" : ""}" data-cid="${c.id}" draggable="true">${esc(c.name.slice(0, 22))}</span>`));
+      `<span class="chip ${currentClassFilter === c.id ? "on" : ""}" data-cid="${c.id}" title="点击筛选 · 按住拖动排序">${esc(c.name.slice(0, 22))}</span>`));
   $("#co-chips").innerHTML = chips.join("");
-  $$("#co-chips .chip").forEach((c) => {
-    c.onclick = () => { currentClassFilter = c.dataset.cid; filterTasks(d); };
-  });
   bindChipDrag(d);
   filterTasks(d);
   $("#co-grades").innerHTML = Object.entries(d.grades || {}).map(
@@ -786,39 +783,76 @@ function renderCourses(d) {
     `<div class="empty">暂无成绩数据</div>`;
   $("#co-link").href = "https://shph.managebac.cn/student";
 }
-/* 课程 chip 拖拽排序: "全部"固定首位, 松手后把新顺序持久化到后端 */
+/* 课程 chip 拖拽排序(指针事件版): 按住 chip 水平拖, 越过相邻 chip 中点
+   就互换; 轻点(位移<6px)= 筛选该课程。"全部"固定首位, 顺序存配置。 */
 function bindChipDrag(d) {
   const wrap = $("#co-chips");
-  let dragEl = null;
   const allChips = () => $$("#co-chips .chip");
-  allChips().forEach((chip) => {
-    if (!chip.dataset.cid) return; /* "全部" 固定第一位, 不参与拖拽 */
-    chip.addEventListener("dragstart", () => {
-      dragEl = chip;
-      chip.classList.add("dragging");
-    });
-    chip.addEventListener("dragend", () => {
-      chip.classList.remove("dragging");
-      allChips().forEach((c) => c.classList.remove("drop-target"));
-      dragEl = null;
-      const order = allChips().map((c) => c.dataset.cid).filter(Boolean);
-      d.classes.sort((a, b) => order.indexOf(a.id) - order.indexOf(b.id));
-      call("course_save_order", JSON.stringify(order)).catch(() => {});
-      filterTasks(d);
-    });
-  });
-  wrap.addEventListener("dragover", (e) => {
-    if (!dragEl) return;
-    e.preventDefault();
-    const rest = allChips().filter((c) => c.dataset.cid && c !== dragEl);
-    let after = null;
-    for (const c of rest) {
-      const r = c.getBoundingClientRect();
-      if (e.clientX < r.left + r.width / 2) { after = c; break; }
+  const neighbor = (chip, dir) => {
+    let el = dir > 0 ? chip.nextElementSibling : chip.previousElementSibling;
+    while (el && !el.dataset.cid) {
+      el = dir > 0 ? el.nextElementSibling : el.previousElementSibling;
     }
-    rest.forEach((c) => c.classList.remove("drop-target"));
-    if (after) { wrap.insertBefore(dragEl, after); after.classList.add("drop-target"); }
-    else wrap.appendChild(dragEl);
+    return el;
+  };
+  /* "全部" chip: 只参与点击筛选, 不参与拖拽 */
+  const allBtn = wrap.querySelector('.chip[data-cid=""]');
+  if (allBtn) allBtn.onclick = () => {
+    currentClassFilter = "";
+    allChips().forEach((c) => c.classList.toggle("on", !c.dataset.cid));
+    filterTasks(d);
+  };
+  allChips().forEach((chip) => {
+    if (!chip.dataset.cid) return;   /* "全部" 固定第一位 */
+    let drag = null;                 // {x, moved, id}
+    chip.addEventListener("pointerdown", (e) => {
+      if (e.button !== 0) return;
+      drag = { x: e.clientX, moved: false, id: e.pointerId };
+      chip.setPointerCapture(e.pointerId);
+    });
+    chip.addEventListener("pointermove", (e) => {
+      if (!drag || drag.id !== e.pointerId) return;
+      const dx = e.clientX - drag.x;
+      if (!drag.moved) {
+        if (Math.abs(dx) < 6) return;
+        drag.moved = true;
+        chip.classList.add("dragging");
+      }
+      const other = neighbor(chip, dx > 0 ? 1 : -1);
+      if (!other) return;
+      const r = other.getBoundingClientRect();
+      if (dx > 0 && e.clientX > r.left + r.width / 2) {
+        wrap.insertBefore(other, chip.nextElementSibling);
+        drag.x = e.clientX;
+      } else if (dx < 0 && e.clientX < r.left + r.width / 2) {
+        wrap.insertBefore(chip, other);
+        drag.x = e.clientX;
+      }
+    });
+    const finish = (e) => {
+      if (!drag || drag.id !== e.pointerId) return;
+      chip.classList.remove("dragging");
+      const moved = drag.moved;
+      drag = null;
+      if (moved) {
+        const order = allChips().map((c) => c.dataset.cid).filter(Boolean);
+        d.classes.sort((a, b) => order.indexOf(a.id) - order.indexOf(b.id));
+        call("course_save_order", JSON.stringify(order)).catch(() => {});
+        Store.set("courses", d);   /* 本地缓存同步新顺序, 秒开不回跳旧序 */
+        filterTasks(d);
+      } else {
+        currentClassFilter = chip.dataset.cid;
+        allChips().forEach((c) => c.classList.toggle("on", c === chip));
+        filterTasks(d);
+      }
+    };
+    chip.addEventListener("pointerup", finish);
+    chip.addEventListener("pointercancel", (e) => {
+      if (drag && drag.id === e.pointerId) {
+        chip.classList.remove("dragging");
+        drag = null;
+      }
+    });
   });
 }
 function taskItemEl(t) {
@@ -1340,10 +1374,35 @@ async function loadSettings() {
   $("#st-subjects").innerHTML = selectedLessonsCache.map((s) =>
     `<span class="chip on">${esc(s.subject)}${s.teacher ? " · " + esc(s.teacher) : ""}${s.group ? " · 组" + esc(s.group) : ""}</span>`).join("") ||
     `<span class="muted">尚未选课</span>`;
+  await renderDismissed();
   const ai = await call("ai_get");
   providersState = (ai.providers || []).map((p) => ({ ...p, api_key: "" }));
   renderProviderCards();
   renderActiveSelects(ai.active_provider_id, ai.active_model);
+}
+/* 已移除的作业: 列表 + 恢复按钮 */
+async function renderDismissed() {
+  try {
+    const d = await call("ddl_dismissed_list");
+    const items = d.items || [];
+    $("#st-dismissed").innerHTML = items.map((it) => `
+      <div class="item">
+        <span class="grow">${esc(it.title)}<span class="dim"> · ${esc((it.due_at || "").slice(0, 16))}</span></span>
+        <button class="ghost" data-restore="${esc(it.key)}">恢复</button>
+      </div>`).join("") || `<div class="empty">没有已移除的作业</div>`;
+    $$("#st-dismissed [data-restore]").forEach((b) => {
+      b.onclick = async () => {
+        try {
+          await call("ddl_restore", b.dataset.restore);
+          Store.drop("home"); Store.drop("courses");
+          toast("已恢复, 首页/课程页会重新显示");
+          renderDismissed();
+        } catch (e) { toast(e.message); }
+      };
+    });
+  } catch (e) {
+    $("#st-dismissed").innerHTML = `<div class="empty">${esc(e.message)}</div>`;
+  }
 }
 function renderProviderCards() {
   $("#st-providers").innerHTML = providersState.map((p, i) => `

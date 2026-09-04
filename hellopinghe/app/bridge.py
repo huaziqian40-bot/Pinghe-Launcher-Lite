@@ -397,6 +397,32 @@ class Api:
             return {"dismissed": key}
         return _wrap(job)
 
+    def ddl_dismissed_list(self) -> dict:
+        """已移除的作业清单(设置页恢复用)."""
+        def job():
+            from .. import storage
+
+            host = self.cfg.managebac_base_url.split("//")[-1]
+            rows = storage.ddl_dismissed_rows(self.svc._conn(), host)
+            items = []
+            for r in rows:
+                title, _, due = r["key"].partition("|")
+                items.append({"key": r["key"], "title": title,
+                              "due_at": due, "created": r["created"]})
+            return {"items": items}
+        return _wrap(job)
+
+    def ddl_restore(self, key: str) -> dict:
+        """恢复误移除的作业(撤销左滑删除)."""
+        def job():
+            from .. import storage
+
+            host = self.cfg.managebac_base_url.split("//")[-1]
+            storage.ddl_restore(self.svc._conn(), host, key)
+            _snap_drop("home", "courses")
+            return {"restored": key}
+        return _wrap(job)
+
     # ================================================================ 启动连接页
     def connect_edupage(self) -> dict:
         def job():
@@ -491,6 +517,8 @@ class Api:
             order = [str(x) for x in raw if str(x)]
             self.cfg.course_class_order = order
             self._save_cfg()
+            # 顺序一变就作废 courses 快照, 不然 TTL 内重进页面还是旧顺序
+            _snap_drop("courses")
             return {"saved": len(order)}
         return _wrap(job)
 
