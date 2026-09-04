@@ -11,8 +11,8 @@ from pathlib import Path
 sys.stdout.reconfigure(encoding="utf-8")
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from schoolhub.config import CONFIG_DIR, Config
-from schoolhub.managebac.client import ManageBacClient
+from hellopinghe.config import CONFIG_DIR, Config
+from hellopinghe.managebac.client import ManageBacClient
 
 cfg = Config.load()
 DATA = Path(__file__).resolve().parents[1] / "data"

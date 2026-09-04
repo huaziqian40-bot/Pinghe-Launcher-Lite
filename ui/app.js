@@ -1,4 +1,4 @@
-/* SchoolHub 前端逻辑: 路由 + 各视图加载 + 向导 + Agent */
+/* Hello! Pinghe launcher 前端逻辑: 路由 + 各视图加载 + 向导 + Agent */
 "use strict";
 const $ = (s) => document.querySelector(s);
 const $$ = (s) => Array.from(document.querySelectorAll(s));
@@ -1086,7 +1086,7 @@ function wzShow(n) {
   for (let i = 1; i <= 5; i++) $(`#wz-${i}`).classList.add("hidden");
   $(`#wz-${n}`).classList.remove("hidden");
   $("#wz-step").textContent = `${n} / 5`;
-  // 每步都显示"进入 SchoolHub"按钮，允许随时完成向导
+  // 每步都显示"进入 Hello! Pinghe launcher"按钮，允许随时完成向导
   $("#wz-finish").classList.remove("hidden");
 }
 /* 选课进度: python 侧推送(Edupage 单次可达 1 分钟) */

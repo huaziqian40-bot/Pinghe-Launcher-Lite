@@ -7,7 +7,7 @@ from pathlib import Path
 
 sys.stdout.reconfigure(encoding="utf-8")
 
-SB = Path.home() / ".schoolhub"
+SB = Path.home() / ".hellopinghe"
 cfg_path = SB / "config.json"
 
 # 1) 备份配置(AI key 等都在里面)
@@ -33,7 +33,7 @@ try:
         keys.append(f"mail:{old['mail_email']}")
     for k in keys:
         try:
-            keyring.delete_password("schoolhub", k)
+            keyring.delete_password("hellopinghe", k)
             print(f"✓ 已删除凭据: {k}")
         except Exception:  # noqa: BLE001
             print(f"- 无凭据可删: {k}")
@@ -41,14 +41,14 @@ except Exception as exc:  # noqa: BLE001
     print(f"keyring 清理异常: {exc}")
 
 # 3) 删除配置 / 数据库 / 会话文件
-for p in [cfg_path, SB / "schoolhub.db", *SB.glob("session_*.json")]:
+for p in [cfg_path, SB / "hellopinghe.db", *SB.glob("session_*.json")]:
     if p.exists():
         p.unlink()
         print(f"✓ 已删除: {p}")
 
 # 4) 验证: 重新加载应为全新状态
-sys.path.insert(0, r"G:\agent\schoolhub")
-from schoolhub.config import Config
+sys.path.insert(0, r"G:\agent\hellopinghe")
+from hellopinghe.config import Config
 
 cfg = Config.load()
 print(f"\n验证 → wizard_done={cfg.wizard_done} (False = 下次启动会重新弹四步向导)")

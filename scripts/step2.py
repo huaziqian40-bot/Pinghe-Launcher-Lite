@@ -11,10 +11,10 @@ from pathlib import Path
 sys.stdout.reconfigure(encoding="utf-8")
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from schoolhub.config import CONFIG_DIR, Config
-from schoolhub.managebac.client import ManageBacClient
-from schoolhub.managebac.parse import extract_classes, extract_overall_grade
-from schoolhub import storage
+from hellopinghe.config import CONFIG_DIR, Config
+from hellopinghe.managebac.client import ManageBacClient
+from hellopinghe.managebac.parse import extract_classes, extract_overall_grade
+from hellopinghe import storage
 
 DATA = Path(__file__).resolve().parents[1] / "data"
 
@@ -49,7 +49,7 @@ for cid, name in classes.items():
 print("\n== Edupage(超时补丁 + pingheschool)==")
 from edupage_api import Edupage  # noqa: E402
 
-from schoolhub import edupage as ep  # noqa: E402
+from hellopinghe import edupage as ep  # noqa: E402
 
 
 def patch_timeout(session, seconds: float = 40.0) -> None:

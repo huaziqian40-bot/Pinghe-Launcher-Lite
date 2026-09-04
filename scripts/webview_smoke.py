@@ -15,7 +15,7 @@ body{background:#fbfaf6;display:flex;align-items:center;justify-content:center;h
       box-shadow:0 18px 50px rgba(26,50,40,.1);text-align:center}
 .small{color:#c5a05a;margin-top:8px;font-size:13px}
 </style></head><body><div class="card"><h2>pywebview 娓叉煋姝ｅ父</h2>
-<div class="small">SchoolHub UI 閾捐矾 OK 路 绐楀彛鍗冲皢鑷姩鍏抽棴</div></div></body></html>"""
+<div class="small">Hello! Pinghe launcher UI 閾捐矾 OK 路 绐楀彛鍗冲皢鑷姩鍏抽棴</div></div></body></html>"""
 
 
 def close_later():
@@ -26,7 +26,7 @@ def close_later():
         pass
 
 
-window = webview.create_window("SchoolHub 娓叉煋娴嬭瘯", html=html, width=440, height=280)
+window = webview.create_window("Hello! Pinghe launcher 娓叉煋娴嬭瘯", html=html, width=440, height=280)
 threading.Thread(target=close_later, daemon=True).start()
 webview.start()
 print("WINDOW_OK")

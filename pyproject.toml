@@ -1,5 +1,5 @@
 [project]
-name = "schoolhub"
+name = "hellopinghe"
 version = "0.1.0"
 description = "Local-only ManageBac + Edupage companion: DDL, grades, timetable, homework agent"
 requires-python = ">=3.11"
@@ -14,11 +14,11 @@ agent = ["openai>=1.60", "anthropic>=0.42"]
 ui = ["pywebview>=5.0"]
 
 [project.scripts]
-schoolhub = "schoolhub.cli:main"
+hellopinghe = "hellopinghe.cli:main"
 
 [build-system]
 requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
-include = ["schoolhub*"]
+include = ["hellopinghe*"]

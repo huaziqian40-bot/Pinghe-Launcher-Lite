@@ -1,0 +1,77 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Hello! Pinghe launcher Windows 安装包 (WiX 3.x)
+  - 按用户安装 (perUser): 装到 %LocalAppData%\Programs\HelloPingheLauncher, 无需管理员权限
+  - 带开始菜单快捷方式, 支持在"应用和功能"里正常卸载与升级
+-->
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
+  <Product Id="*"
+           Name="Hello! Pinghe launcher"
+           Language="2052"
+           Codepage="936"
+           Version="1.0.0.0"
+           Manufacturer="Hello Pinghe"
+           UpgradeCode="8f2c1d9e-4a67-4b58-9c30-2e5a71d84b16">
+
+    <Package InstallerVersion="500"
+             Compressed="yes"
+             InstallScope="perUser"
+             Platform="x64"
+             Description="Hello! Pinghe 学习助手"
+             Comments="本地运行, 数据不出机器" />
+
+    <MajorUpgrade DowngradeErrorMessage="已安装更新版本的 Hello! Pinghe launcher, 如需重装请先卸载。" />
+    <MediaTemplate EmbedCab="yes" />
+
+    <Directory Id="TARGETDIR" Name="SourceDir">
+      <!-- 主程序: %LocalAppData%\Programs\HelloPingheLauncher\HelloPingheLauncher.exe -->
+      <Directory Id="LocalAppDataFolder">
+        <Directory Id="AppProgramsFolder" Name="Programs">
+          <Directory Id="INSTALLFOLDER" Name="HelloPingheLauncher">
+            <Component Id="MainExecutable" Guid="a5b83f2c-19d4-4e6f-8a21-7c94de05b3f1" Win64="yes">
+              <File Id="HelloPingheExe"
+                    Source="..\dist\HelloPingheLauncher.exe"
+                    Checksum="yes" />
+              <RemoveFolder Id="RemoveAppProgramsFolder" Directory="AppProgramsFolder" On="uninstall" />
+              <RemoveFolder Id="RemoveInstallFolder" Directory="INSTALLFOLDER" On="uninstall" />
+              <RegistryValue Root="HKCU"
+                             Key="Software\HelloPingheLauncher"
+                             Name="exe_installed"
+                             Type="integer"
+                             Value="1"
+                             KeyPath="yes" />
+            </Component>
+          </Directory>
+        </Directory>
+      </Directory>
+
+      <!-- 开始菜单: Hello! Pinghe launcher \ Hello! Pinghe launcher -->
+      <Directory Id="ProgramMenuFolder">
+        <Directory Id="HelloPingheMenuDir" Name="Hello! Pinghe launcher">
+          <Component Id="StartMenuShortcut" Guid="c74e6a91-2f3b-4d58-8bc7-91de6f0a4523">
+            <Shortcut Id="HelloPingheShortcut"
+                      Name="Hello! Pinghe launcher"
+                      Description="Hello! Pinghe 学习助手"
+                      Target="[INSTALLFOLDER]HelloPingheLauncher.exe"
+                      WorkingDirectory="INSTALLFOLDER" />
+            <RemoveFolder Id="RemoveHelloPingheMenuDir" On="uninstall" />
+            <RegistryValue Root="HKCU"
+                           Key="Software\HelloPingheLauncher"
+                           Name="installed"
+                           Type="integer"
+                           Value="1"
+                           KeyPath="yes" />
+          </Component>
+        </Directory>
+      </Directory>
+    </Directory>
+
+    <Feature Id="Main" Title="Hello! Pinghe launcher" Level="1">
+      <ComponentRef Id="MainExecutable" />
+      <ComponentRef Id="StartMenuShortcut" />
+    </Feature>
+
+    <Property Id="ARPPRODUCTICON" Value="HelloPingheIcon" />
+    <Icon Id="HelloPingheIcon" SourceFile="..\logo.ico" />
+  </Product>
+</Wix>

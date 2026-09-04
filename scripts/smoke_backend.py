@@ -4,10 +4,10 @@ import json
 import sys
 
 sys.stdout.reconfigure(encoding="utf-8")
-sys.path.insert(0, r"G:\agent\schoolhub")
+sys.path.insert(0, r"G:\agent\hellopinghe")
 
-from schoolhub.app.bridge import Api
-from schoolhub.exceptions import LoginRequiredError
+from hellopinghe.app.bridge import Api
+from hellopinghe.exceptions import LoginRequiredError
 
 api = Api()
 failures = []

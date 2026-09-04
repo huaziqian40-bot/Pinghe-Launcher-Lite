@@ -20,10 +20,10 @@ from pathlib import Path
 sys.stdout.reconfigure(encoding="utf-8")
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from schoolhub.managebac.client import ManageBacClient
-from schoolhub.managebac.parse import extract_overall_grade
-from schoolhub.config import CONFIG_DIR, Config
-from schoolhub import storage
+from hellopinghe.managebac.client import ManageBacClient
+from hellopinghe.managebac.parse import extract_overall_grade
+from hellopinghe.config import CONFIG_DIR, Config
+from hellopinghe import storage
 
 DATA = Path(__file__).resolve().parents[1] / "data"
 DATA.mkdir(exist_ok=True)
@@ -98,7 +98,7 @@ try:
                 client._url(f"/student/classes/{first_id}/units"), timeout=30
             )
             (DATA / "units_sample.html").write_bytes(resp2.content)
-        print("调试 HTML 已存至 schoolhub/data/")
+        print("调试 HTML 已存至 hellopinghe/data/")
 except Exception:  # noqa: BLE001
     pass
 
@@ -107,7 +107,7 @@ section("Edupage 登录")
 try:
     from edupage_api import Edupage
 
-    from schoolhub import edupage as ep
+    from hellopinghe import edupage as ep
 
     user, pwd = os.environ["EP_USER"], os.environ["EP_PASS"]
     account, used = None, None

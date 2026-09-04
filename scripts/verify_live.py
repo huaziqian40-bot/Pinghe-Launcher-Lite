@@ -5,10 +5,10 @@ import time
 from datetime import date
 
 sys.stdout.reconfigure(encoding="utf-8")
-sys.path.insert(0, r"G:\agent\schoolhub")
+sys.path.insert(0, r"G:\agent\hellopinghe")
 
-from schoolhub.config import Config
-from schoolhub.app.services import Services
+from hellopinghe.config import Config
+from hellopinghe.app.services import Services
 
 cfg = Config.load()
 svc = Services(cfg)
@@ -45,7 +45,7 @@ except Exception as exc:  # noqa: BLE001
     print(f"✗ {type(exc).__name__}: {str(exc)[:160]}")
 
 print("\n== 4. 邮箱原始错误诊断 ==")
-from schoolhub.app.services import secret_get
+from hellopinghe.app.services import secret_get
 
 pw = secret_get(f"mail:{cfg.mail_email}") if cfg.mail_email else None
 if not pw:

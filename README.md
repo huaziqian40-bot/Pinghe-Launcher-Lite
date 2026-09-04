@@ -1,4 +1,4 @@
-# SchoolHub(占位名,可随时改)
+# Hello! Pinghe launcher(占位名,可随时改)
 
 本地运行的 ManageBac + Edupage 学习助手。无服务器、无云端:数据抓取、缓存、提醒、AI 全在本机。
 
@@ -17,23 +17,23 @@ pip install -e .
 
 ```bash
 # 探测学校登录页(无需账号):验证表单与 CSRF
-schoolhub probe --url https://shph.managebac.cn
+hellopinghe probe --url https://shph.managebac.cn
 
 # 登录并保存会话(密码不落盘,只存 cookie)
-schoolhub login --url https://shph.managebac.cn
+hellopinghe login --url https://shph.managebac.cn
 
 # 抓取课程 / DDL / 成总评
-schoolhub classes
-schoolhub ddl --days 14
-schoolhub grades
+hellopinghe classes
+hellopinghe ddl --days 14
+hellopinghe grades
 
 # Edupage 课表
-schoolhub timetable --subdomain 你的学校子域名 --days 7
+hellopinghe timetable --subdomain 你的学校子域名 --days 7
 ```
 
 ## 配置
 
-`~/.schoolhub/config.json`(首次运行自动生成),Agent 部分支持预设:
+`~/.hellopinghe/config.json`(首次运行自动生成),Agent 部分支持预设:
 deepseek / kimi / glm / qwen / ollama(本地) / custom,协议 openai|anthropic 二选一,用户自填 API key 与 base_url。
 
 ## 安全边界

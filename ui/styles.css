@@ -1,4 +1,4 @@
-/* SchoolHub · 设计 token 延续 PH-Launcher: 墨绿/酒红/金/象牙白 */
+/* Hello! Pinghe launcher · 设计 token 延续 PH-Launcher: 墨绿/酒红/金/象牙白 */
 :root{
   --green-950:#102d25; --green-900:#173f33; --green-800:#1f5a46; --green-700:#2a725a;
   --green-100:#dfeae4; --green-50:#edf4f0;
@@ -35,8 +35,9 @@ a{color:var(--green-700)}
 .sidebar{width:var(--side-w);background:linear-gradient(180deg,var(--green-900),var(--green-950));
   color:var(--ivory-50);display:flex;flex-direction:column;padding:18px 12px}
 .logo{display:flex;gap:10px;align-items:center;padding:4px 8px 16px}
-.logo-mark{width:34px;height:34px;border-radius:10px;background:var(--gold-500);color:var(--green-950);
-  display:flex;align-items:center;justify-content:center;font-weight:800;font-size:18px}
+.logo-mark{width:36px;height:36px;border-radius:10px;overflow:hidden;flex-shrink:0;
+  display:flex;align-items:center;justify-content:center}
+.logo-mark img{width:124%;height:124%;object-fit:cover;display:block}
 .logo small{display:block;color:var(--green-100);opacity:.75;font-size:11px}
 .logo b{font-size:16px}
 #nav{display:flex;flex-direction:column;gap:4px;flex:1}
