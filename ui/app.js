@@ -352,10 +352,33 @@ function renderTimetable(d) {
   $("#tt-week").innerHTML = html + spans.join("");
 }
 function loadTimetable() {
+  /* 页面上已有一幅真课表时切周, 保留旧画面(压暗+转圈徽标), 不闪空白;
+     首次进入才用骨架屏。 */
+  const wk = $("#tt-week");
+  const keep = !!wk.querySelector(".tt-lesson");
+  const skeleton = () => {
+    if (keep) { $("#tt-wait").hidden = false; wk.classList.add("tt-wait"); }
+    else wk.innerHTML = `<div class="tt-skeleton">${'<div class="skel-card"></div>'.repeat(7)}</div>`;
+  };
   return swr(`tt|${ttOffset}`, TTL.tt,
     () => call("timetable_week", ttOffset), renderTimetable,
-    () => { $("#tt-week").innerHTML = `<div class="tt-skeleton">${'<div class="skel-card"></div>'.repeat(7)}</div>`; },
-    () => currentView === "timetable")();
+    skeleton, () => currentView === "timetable")()
+    .catch((e) => { if (!keep) throw e; toast(e.message); })  // 旧画面还在: 只提示, 不清屏
+    .finally(() => {
+      $("#tt-wait").hidden = true;
+      wk.classList.remove("tt-wait");
+      ttPrefetch();
+    });
+}
+/* 预取相邻周进本地缓存: 之后点上一周/下一周直接秒开 */
+const ttPrefetched = new Set();
+function ttPrefetch() {
+  [-1, 1].forEach((o) => {
+    const k = `tt|${ttOffset + o}`;
+    if (ttPrefetched.has(k) || Store.get(k)) return;
+    ttPrefetched.add(k);
+    call("timetable_week", ttOffset + o).then((d) => Store.set(k, d)).catch(() => {});
+  });
 }
 $("#tt-prev").onclick = () => { ttOffset--; loadTimetable().catch((e) => toast(e.message)); };
 $("#tt-next").onclick = () => { ttOffset++; loadTimetable().catch((e) => toast(e.message)); };
