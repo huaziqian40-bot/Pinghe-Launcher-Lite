@@ -225,10 +225,14 @@ setInterval(() => {
 
 /* ================= 我的课表 ================= */
 function ttLessonHtml(l, withTime) {
+  const key = `${l.subject}|${l.teacher || ""}|${l.group || ""}`;
+  const name = `${l.subject}${l.group ? " 组" + l.group : ""}`;
   return `<div class="tt-lesson ${l.cancelled ? "cancelled" : ""}">
     ${withTime ? `<span class="rm">${esc(l.start)}</span>` : ""}
     <b>${esc(l.subject)}</b>
     <span class="rm">${esc(l.room)}${l.teacher ? " · " + esc(l.teacher) : ""}</span>
+    <button class="tt-x" data-key="${esc(key)}" data-name="${esc(name)}"
+      title="不是我的课: 隐藏这一段(全周生效, 可恢复)">×</button>
   </div>`;
 }
 
@@ -280,6 +284,23 @@ function renderTimetable(d) {
         `<div class="tt-cell">${b.other.map((l) => ttLessonHtml(l, true)).join("")}</div>`).join("");
   }
   $("#tt-week").innerHTML = html;
+  $("#tt-week").onclick = (e) => {
+    const btn = e.target.closest(".tt-x");
+    if (!btn) return;
+    e.stopPropagation();
+    ttHide(btn.dataset.key, btn.dataset.name);
+  };
+  const n = d.hidden_count || 0;
+  $("#tt-restore").classList.toggle("hidden", !n);
+  $("#tt-restore").textContent = `恢复已隐藏(${n})`;
+}
+async function ttHide(key, name) {
+  try {
+    await call("timetable_hide", key);
+    toast(`已隐藏「${name}」整段课, 点"恢复已隐藏"可撤销`);
+    Store.drop("tt|"); Store.drop("home");
+    loadTimetable();
+  } catch (e) { toast(e.message); }
 }
 function loadTimetable() {
   return swr(`tt|${ttOffset}`, TTL.tt,
@@ -290,6 +311,14 @@ function loadTimetable() {
 $("#tt-prev").onclick = () => { ttOffset--; loadTimetable().catch((e) => toast(e.message)); };
 $("#tt-next").onclick = () => { ttOffset++; loadTimetable().catch((e) => toast(e.message)); };
 $("#tt-this").onclick = () => { ttOffset = 0; loadTimetable().catch((e) => toast(e.message)); };
+$("#tt-restore").onclick = async () => {
+  try {
+    const r = await call("timetable_unhide_all");
+    toast(`已恢复 ${r.restored} 段隐藏的课`);
+    Store.drop("tt|"); Store.drop("home");
+    loadTimetable();
+  } catch (e) { toast(e.message); }
+};
 
 /* ================= 我的日程: 周 / 月 / 年 三种视图 =================
  * 点任意一天 → 弹出当天安排的卡片, 卡片里可直接添加/删除。
@@ -1129,7 +1158,7 @@ async function loadSettings() {
   $("#st-grades-llm").checked = !!d.send_grades_to_llm;
   selectedLessonsCache = d.selected_lessons || [];
   $("#st-subjects").innerHTML = selectedLessonsCache.map((s) =>
-    `<span class="chip on">${esc(s.subject)}${s.teacher ? " · " + esc(s.teacher) : ""}${s.room ? " · " + esc(s.room) : ""}</span>`).join("") ||
+    `<span class="chip on">${esc(s.subject)}${s.teacher ? " · " + esc(s.teacher) : ""}${s.group ? " · 组" + esc(s.group) : ""}</span>`).join("") ||
     `<span class="muted">尚未选课</span>`;
   const ai = await call("ai_get");
   providersState = (ai.providers || []).map((p) => ({ ...p, api_key: "" }));
@@ -1226,25 +1255,27 @@ $("#st-ai-save").onclick = async () => {
 };
 
 /* ---- 选课渲染(向导 + 设置共用) ----
-   结构: 科目 → 老师 → 教室段。同老师同课名不同教室 = 不同的班,
-   教室相同、周内多张课卡 = 同一个班。多老师/多班时用三角形折叠展开。 */
+   结构: 科目 → 老师 → 班级段(按教学组分)。同老师同课名不同组 = 不同的班,
+   同组、周内多张课卡 = 同一个班。多老师/多班时用三角形折叠展开。 */
 const selOpen = new Set();   // 折叠展开状态(重渲染后保持)
 function fmtSecTimes(times) {
   return (times || []).map((t) => `${t.day} ${t.start}`).join(" / ");
 }
-function secChecked(checkedSet, subject, teacher, room) {
-  /* 旧版选课无教室字段(sub|teacher|) → 该老师所有班都视为已选 */
-  return checkedSet.has(`${subject}|${teacher}|${room}`) ||
+function secChecked(checkedSet, subject, teacher, group) {
+  /* 旧版选课无组字段(sub|teacher|) → 该老师所有班都视为已选 */
+  return checkedSet.has(`${subject}|${teacher}|${group}`) ||
     checkedSet.has(`${subject}|${teacher}|`);
 }
 function secRowHTML(subject, teacher, sec, checkedSet, pad, lead, autoCheck) {
-  const chk = (autoCheck || secChecked(checkedSet, subject, teacher, sec.room))
+  const chk = (autoCheck || secChecked(checkedSet, subject, teacher, sec.group))
     ? "checked" : "";
+  const label = sec.group ? `组${sec.group}` : "全班";
+  const rooms = (sec.rooms || []).join(" ");
   return `<label class="subject-row" style="padding-left:${pad}px">
     <input type="checkbox" data-sub="${esc(subject)}" data-teacher="${esc(teacher)}"
-      data-room="${esc(sec.room)}" ${chk}>
-    <span class="pick-grow">${lead || ""}<b>${esc(sec.room)}</b>
-    <span class="rooms">${esc(fmtSecTimes(sec.times))}</span></span></label>`;
+      data-group="${esc(sec.group || "")}" ${chk}>
+    <span class="pick-grow">${lead || ""}<b>${esc(label)}</b>
+    <span class="rooms">${esc(rooms)}${rooms ? " · " : ""}${esc(fmtSecTimes(sec.times))}</span></span></label>`;
 }
 function subjectPickerHTML(subjects, filter, checkedSet, autoCheck) {
   const f = (filter || "").trim().toLowerCase();
@@ -1268,7 +1299,7 @@ function subjectPickerHTML(subjects, filter, checkedSet, autoCheck) {
         return `<div class="fold-head" style="padding-left:26px" data-fold="${esc(tkey)}">
             <span class="tri">${topen ? "▼" : "▶"}</span>
             <span class="pick-grow">${esc(o.teacher)}
-            <span class="rooms">${o.sections.length} 个教室, 选你的</span></span></div>
+            <span class="rooms">${o.sections.length} 个班, 选你的</span></span></div>
           <div class="fold-body${topen ? "" : " hidden"}">${
             o.sections.map((sec) => secRowHTML(s.subject, o.teacher, sec, checkedSet, 52, ""))
               .join("")}</div>`;
@@ -1293,7 +1324,7 @@ function collectPickerSelection(containerId) {
   const sel = [];
   $$(`#${containerId} input[type=checkbox]:checked`).forEach((c) =>
     sel.push({ subject: c.dataset.sub, teacher: c.dataset.teacher,
-               room: c.dataset.room || "" }));
+               group: c.dataset.group || "" }));
   return sel;
 }
 
@@ -1318,7 +1349,7 @@ $("#sm-save").onclick = async () => {
     const r = await call("wizard_save_selection", JSON.stringify(sel));
     selectedLessonsCache = sel;
     $("#st-subjects").innerHTML = sel.map((s) =>
-      `<span class="chip on">${esc(s.subject)}${s.teacher ? " · " + esc(s.teacher) : ""}${s.room ? " · " + esc(s.room) : ""}</span>`).join("") ||
+      `<span class="chip on">${esc(s.subject)}${s.teacher ? " · " + esc(s.teacher) : ""}${s.group ? " · 组" + esc(s.group) : ""}</span>`).join("") ||
       `<span class="muted">尚未选课</span>`;
     $("#subject-modal").classList.add("hidden");
     toast(`选课已更新(${r.selected} 门)`);

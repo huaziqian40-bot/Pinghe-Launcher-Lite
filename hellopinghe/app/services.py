@@ -272,13 +272,23 @@ class EdupageService:
             self._rooms_cache = [r.name for r in (ed.get_classrooms() or [])]
         return self._rooms_cache
 
+    def drop_personal_cache(self) -> None:
+        """选课/隐藏课段变更后清空个人课表磁盘缓存."""
+        cache_dir = Path.home() / ".hellopinghe"
+        for old in cache_dir.glob("edupage_personal_*.json"):
+            try:
+                old.unlink(missing_ok=True)
+            except OSError:
+                pass
+
     def subject_options(self, progress=None) -> list[dict]:
-        """向导用: 跨整周聚合 (科目 → 老师 → 班级段[教室+上课时间]).
+        """向导用: 跨整周聚合 (科目 → 老师 → 班级段[组+教室+上课时间]).
 
         只看一天会漏掉当天没排课的科目(如 English B SL),
         因此用 gcall 区间接口一次拉整周, 再聚合全部科目。
-        同老师同课名但不同教室 = 不同的班(平行班); 教室相同、
-        周内多张课卡 = 同一个班(一周多次上课)。
+        分段键是教学组(Edupage 卡片上的 groupnames, 如 A-O / G1-G3):
+        同老师同课名不同组 = 不同的班; 同组、周内多张课卡 = 同一个班。
+        教室只作展示(经常为空), 不作分段键。
         """
         monday = self.week_monday(date.today())
         if progress:
@@ -290,7 +300,7 @@ class EdupageService:
                 progress({"day": f"{monday + timedelta(days=7)} 起", "attempt": 2, "total": 2})
             plans = self.week_plans(monday + timedelta(days=7), days=6)
 
-        # subject -> teacher -> room -> [(day_iso, start, end)]
+        # subject -> teacher -> group -> [(day_iso, start, end, room)]
         grouped: dict[str, dict[str, dict[str, list]]] = {}
         for day_iso in sorted(plans):
             day_name = f"周{'一二三四五六日'[date.fromisoformat(day_iso).weekday()]}"
@@ -299,27 +309,29 @@ class EdupageService:
                     continue
                 subject = l.subject.name
                 teacher = l.teachers[0].name if l.teachers else ""
+                group = ",".join(l.groups) if l.groups else ""
                 room = l.classrooms[0].name if l.classrooms else ""
                 grouped.setdefault(subject, {}).setdefault(teacher, {}).setdefault(
-                    room, []).append((
+                    group, []).append((
                         day_iso,
                         l.start_time.strftime("%H:%M"),
                         l.end_time.strftime("%H:%M") if l.end_time else "",
-                        day_name,
+                        day_name, room,
                     ))
 
         result = []
         for subject in sorted(grouped):
             options = []
-            for t, rooms in sorted(grouped[subject].items()):
+            for t, groups in sorted(grouped[subject].items()):
                 sections = []
-                for r, times in sorted(rooms.items(), key=lambda kv: (kv[0] == "", kv[0])):
+                for g, times in sorted(groups.items(), key=lambda kv: (kv[0] != "", kv[0])):
                     seq = sorted(times, key=lambda x: (x[0], x[1]))
                     sections.append({
-                        "room": r or "(无教室)",
+                        "group": g,
+                        "rooms": sorted({x[4] for x in seq if x[4]}),
                         "times": [
                             {"day": d, "start": s, "end": e}
-                            for _iso, s, e, d in seq
+                            for _iso, s, e, d, _r in seq
                         ],
                     })
                 options.append({"teacher": t or "(未指定老师)", "sections": sections})
@@ -352,27 +364,34 @@ class EdupageService:
                 except Exception:  # noqa: BLE001
                     pass  # 缓存损坏则重新计算
 
-        # 严格匹配: 课名/老师/教室都必须与选课完全一致(仅去首尾空白),
+        # 严格匹配: 课名/老师/组都必须与选课完全一致(仅去首尾空白),
         # 不做任何模糊/归一化 —— 选课里没有的课一律不进个人课表。
-        # 兼容: 旧版选课没有 room 字段(或老师为 "(未指定老师)")时该维度不参与过滤,
-        # 重新选课一次即获得精确到教室的结果。
+        # 兼容: 旧版选课没有 group 字段(或老师为 "(未指定老师)")时该维度
+        # 不参与过滤; 课表里还可以手动隐藏"不是我的课"的整段(见 timetable_hidden)。
+        hidden = set(self.cfg.timetable_hidden or [])
+        # 选课去重(同一门课勾了两次只会显示一遍)
+        seen_sel = set()
+        uniq = []
+        for s in selected:
+            k = ((s.get("subject") or "").strip(),
+                 (s.get("teacher") or "").replace("(未指定老师)", "").strip(),
+                 (s.get("group") or "").strip())
+            if k not in seen_sel:
+                seen_sel.add(k)
+                uniq.append(k)
         out = []
         for l in self.master_plan(day):
             subject = (l.subject.name if l.subject else "").strip()
             teacher = (l.teachers[0].name if l.teachers else "").strip()
-            room = (l.classrooms[0].name if l.classrooms else "").strip()
-            for sel in selected:
-                if (sel.get("subject") or "").strip() != subject:
+            group = ",".join(l.groups) if l.groups else ""
+            if f"{subject}|{teacher}|{group}" in hidden:
+                continue
+            for subj, w_teacher, w_group in uniq:
+                if subj != subject:
                     continue
-                want_teacher = (sel.get("teacher") or "").replace(
-                    "(未指定老师)", "").strip()
-                if want_teacher and teacher != want_teacher:
+                if w_teacher and teacher != w_teacher:
                     continue
-                want_room = (sel.get("room") or "").strip()
-                if want_room == "(无教室)":
-                    if room:
-                        continue
-                elif want_room and room != want_room:
+                if w_group and w_group not in [g.strip() for g in group.split(",")]:
                     continue
                 out.append({
                     "start": l.start_time.strftime("%H:%M") if l.start_time else "",
@@ -380,7 +399,7 @@ class EdupageService:
                     "subject": subject,
                     "teacher": teacher,
                     "room": l.classrooms[0].name if l.classrooms else "",
-                    "groups": ",".join(l.groups) if l.groups else "",
+                    "group": group,
                     "cancelled": bool(l.is_cancelled),
                     "curriculum": getattr(l, "curriculum", None) or "",
                 })
