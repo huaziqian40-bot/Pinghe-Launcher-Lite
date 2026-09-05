@@ -235,14 +235,30 @@ class Api:
                         None,
                     )
                     data["current_lesson"] = current
-                    # 下一节课: 今天还没开始的最近一节(跳过已取消的)
-                    upcoming = sorted(
-                        (l for l in lessons
-                         if l.get("start") and not l.get("cancelled")
-                         and l["start"] > hm),
-                        key=lambda l: l["start"],
-                    )
-                    data["next_lesson"] = upcoming[0] if upcoming else None
+                    # 下一节课: 不限于今天 —— 今天还没开始的最近一节;
+                    # 今天没了(如周五晚/周末)就往后找, 最多看 7 天,
+                    # 比如周六看首页 → 周一第一节。跳过已取消的课。
+                    nxt = None
+                    for offset in range(8):
+                        day = now.date() + timedelta(days=offset)
+                        try:
+                            day_lessons = (lessons if offset == 0
+                                           else self.svc.edupage.personal(day))
+                        except Exception:  # noqa: BLE001
+                            continue
+                        day_lessons = sorted(
+                            (l for l in day_lessons
+                             if l.get("start") and not l.get("cancelled")),
+                            key=lambda l: l["start"])
+                        cand = (next((l for l in day_lessons if l["start"] > hm), None)
+                                if offset == 0
+                                else (day_lessons[0] if day_lessons else None))
+                        if cand:
+                            nxt = dict(cand)
+                            nxt["day"] = day.isoformat()
+                            nxt["day_label"] = "周" + "一二三四五六日"[day.weekday()]
+                            break
+                    data["next_lesson"] = nxt
                 except Exception as exc:  # noqa: BLE001
                     data["today_lessons"] = []
                     data["current_lesson"] = None
@@ -472,6 +488,13 @@ class Api:
                 t for t in upcoming
                 if f'{t["title"]}|{t["due_at"] or ""}' not in dismissed
             ]
+            # ① 用户用箭头/手动排过序的作业按保存的顺序排前面
+            # ② 其余(含新增的)按截止时间排后面
+            rank = {k: i for i, k in enumerate(self.cfg.task_order)}
+            upcoming.sort(key=lambda t: (
+                rank.get(f'{t["title"]}|{t["due_at"] or ""}', len(rank)),
+                t["due_at"] or "",
+            ))
             # 按用户拖拽保存的顺序排课程, 未出现的课程追加在后
             order = list(self.cfg.course_class_order)
             rank = {cid: i for i, cid in enumerate(order)}
@@ -528,6 +551,17 @@ class Api:
             self.cfg.course_class_order = order
             self._save_cfg()
             # 顺序一变就作废 courses 快照, 不然 TTL 内重进页面还是旧顺序
+            _snap_drop("courses")
+            return {"saved": len(order)}
+        return _wrap(job)
+
+    def task_save_order(self, order_json: str) -> dict:
+        """保存"我的课程"作业条目的自定义顺序(▲▼ 箭头调整)。"""
+        def job():
+            raw = json.loads(order_json or "[]")
+            order = [str(x) for x in raw if str(x)]
+            self.cfg.task_order = order
+            self._save_cfg()
             _snap_drop("courses")
             return {"saved": len(order)}
         return _wrap(job)

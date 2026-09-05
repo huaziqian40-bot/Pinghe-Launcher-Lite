@@ -67,9 +67,11 @@ a{color:var(--green-700)}
 .big-clock{font-size:44px;font-weight:750;letter-spacing:2px;font-variant-numeric:tabular-nums}
 .current-lesson{font-size:17px;font-weight:650}
 .current-lesson small{display:block;font-weight:400;color:var(--ink-3);font-size:13px}
-.next-lesson{margin-top:8px;padding-top:8px;border-top:1px dashed var(--border);
-  font-size:13.5px;color:var(--ink-2)}
-.next-lesson small{display:block;font-weight:400;color:var(--ink-3);font-size:12px}
+/* "正在上的课"+"下一节课"两张小卡并排, 共用 hero 中间那格 */
+.hero-duo{display:grid;grid-template-columns:1fr 1fr;gap:12px;min-width:0}
+.hero-duo .card{min-width:0}
+.hero-duo .current-lesson{font-size:15px}
+.hero-duo .current-lesson small{font-size:12px}
 .big-num{font-size:34px;font-weight:750;color:var(--green-800)}
 
 .list{display:flex;flex-direction:column;gap:8px}
@@ -92,9 +94,14 @@ a{color:var(--green-700)}
 .chip.dragging{opacity:.4;transform:scale(.94);cursor:grabbing}
 /* chip 内的上下移动箭头(拖拽之外的第二种排序方式) */
 .chip-arrows{display:inline-flex;flex-direction:column;line-height:1;margin-right:-4px}
-.chip-arrow{border:0;background:transparent;color:inherit;font-size:8px;padding:0 2px;
-  height:9px;line-height:9px;cursor:pointer;opacity:.55;border-radius:2px}
+.chip-arrow{border:0;background:transparent;color:inherit;font-size:9px;padding:0 2px;
+  height:10px;line-height:10px;cursor:pointer;opacity:.65;border-radius:2px}
 .chip-arrow:hover{opacity:1;transform:none;background:rgba(0,0,0,.08)}
+/* 作业条目的上下移动箭头 */
+.move-btns{display:flex;flex-direction:column;gap:1px;flex-shrink:0}
+.move-btn{border:0;background:transparent;color:var(--ink-3);font-size:9px;height:11px;
+  line-height:11px;padding:0 3px;cursor:pointer;opacity:.65;border-radius:3px}
+.move-btn:hover{opacity:1;color:var(--green-800);background:var(--green-50);transform:none}
 
 /* ---------- 按钮 ---------- */
 .primary{background:var(--green-800);color:var(--white);padding:8px 16px}

@@ -199,8 +199,8 @@ function renderHome(d) {
     : `<span class="muted">此刻没有课</span>`;
   const nxt = d.next_lesson;
   $("#home-next").innerHTML = nxt
-    ? `下一节 · <b>${esc(nxt.subject)}</b><small>${esc(nxt.start)} 开始${nxt.room ? " · " + esc(nxt.room) : ""}${nxt.teacher ? " · " + esc(nxt.teacher) : ""}</small>`
-    : `<small class="muted">今天没有更多课了</small>`;
+    ? `${esc(nxt.subject)}<small>${nxt.day && nxt.day !== d.now ? esc(nxt.day_label) + " · " : ""}${esc(nxt.start)} 开始${nxt.room ? " · " + esc(nxt.room) : ""}${nxt.teacher ? " · " + esc(nxt.teacher) : ""}</small>`
+    : `<span class="muted">最近没有课</span>`;
   $("#home-unread").textContent = d.unread_mail ?? "–";
   $("#home-lessons").innerHTML = (d.today_lessons || []).map(lessonLine).join("") ||
     `<div class="empty">${esc(d.timetable_error || "今天没有课")}</div>`;
@@ -913,7 +913,8 @@ function bindChipDrag(d) {
 }
 function taskItemEl(t) {
   return swipeableItemEl("item ddl-item",
-    `<span class="dim">${esc((t.due_at || "").slice(5, 16))}</span>
+    `<span class="move-btns"><button class="move-btn" data-move="up" title="上移">▲</button><button class="move-btn" data-move="down" title="下移">▼</button></span>
+    <span class="dim">${esc((t.due_at || "").slice(5, 16))}</span>
     <span class="grow">${esc(t.title)}<span class="dim"> · ${esc(t.class_name)}</span></span>
     ${badge(t.status || "?", t.status === "Pending" ? "red" : "green")}`,
     async () => {
@@ -935,12 +936,37 @@ function filterTasks(d) {
     (t) => !currentClassFilter || t.class_id === currentClassFilter);
   $("#co-tasks").innerHTML = "";
   if (!tasks.length) {
-    $("#co-tasks").innerHTML = `<div class="empty">没有未截止的作业 (左滑作业条目可移除)</div>`;
+    $("#co-tasks").innerHTML = `<div class="empty">没有未截止的作业 (左滑作业条目可移除, ▲▼ 可调顺序)</div>`;
     return;
   }
   const frag = document.createDocumentFragment();
-  tasks.forEach((t) => frag.appendChild(taskItemEl(t)));
+  tasks.forEach((t) => {
+    const el = taskItemEl(t);
+    el.querySelectorAll(".move-btn").forEach((btn) => {
+      btn.onclick = (e) => {
+        e.stopPropagation();
+        moveTask(d, tasks, t, btn.dataset.move === "down" ? 1 : -1);
+      };
+    });
+    frag.appendChild(el);
+  });
   $("#co-tasks").appendChild(frag);
+}
+/* ▲▼ 移动作业条目: 在当前可见列表内互换位置; 持久化顺序 = 可见列表
+   的新顺序在前 + 未显示的任务按原相对顺序排在后面(新作业按截止时间
+   排在最后)。key 与已移除 DDL 同款: title|due_at */
+function moveTask(d, visible, t, dir) {
+  const i = visible.indexOf(t);
+  const j = i + dir;
+  if (i < 0 || j < 0 || j >= visible.length) return;
+  [visible[i], visible[j]] = [visible[j], visible[i]];
+  const key = (x) => `${x.title}|${x.due_at || ""}`;
+  const visKeys = visible.map(key);
+  const rest = (d.tasks_upcoming || []).filter((x) => !visKeys.includes(key(x)));
+  d.tasks_upcoming = [...visible, ...rest];
+  call("task_save_order", JSON.stringify([...visKeys, ...rest.map(key)])).catch(() => {});
+  Store.set("courses", d);   /* 本地缓存同步, 秒开不回跳旧顺序 */
+  filterTasks(d);
 }
 $("#co-refresh").onclick = async () => {
   toast("正在同步 ManageBac…");
