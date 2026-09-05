@@ -14,3 +14,7 @@ _ui_*.py
 _probe_*.py
 *.log
 msi_extract
+
+# 成品二进制走 GitHub Releases, 不进仓库
+HelloPingheLauncher.exe
+/deliver/
