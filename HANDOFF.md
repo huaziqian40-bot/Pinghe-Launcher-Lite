@@ -250,6 +250,10 @@ Edupage / ManageBac / 网易IMAP·SMTP / SQLite / keyring / 文件系统
 
 ## 八、git 提交历史(最近)
 
+> ⚠ 2026-09-05 应用户要求清除全部测试凭据, 已用 filter-branch 重写全部历史
+> (HANDOFF.md 中的隐私扫描字面模式 → REDACTED 占位符)并 gc —— **下列旧哈希
+> 全部失效, 以 git log 实际输出为准**。
+
 ```
 (本条 = 2026-09-05 第三轮) Courses view redesign: 课程列表=课程+总评合并行
         (CAS/EE 固定最上, 旧 chips/各科总评取消), 课程详情弹卡(作业/单元/
