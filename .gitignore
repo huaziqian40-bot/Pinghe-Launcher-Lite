@@ -18,3 +18,4 @@ msi_extract
 # 成品二进制走 GitHub Releases, 不进仓库
 HelloPingheLauncher.exe
 /deliver/
+tools/wix314-binaries.zip
