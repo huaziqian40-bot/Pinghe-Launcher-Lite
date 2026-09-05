@@ -103,7 +103,7 @@ const badge = (text, cls = "") =>
 /* ================= 路由 ================= */
 const TITLES = {
   home: "首页", timetable: "我的课表", schedule: "我的日程",
-  gradett: "年级课表", courses: "我的课程", mail: "平和邮箱",
+  gradett: "班级课表", courses: "我的课程", mail: "平和邮箱",
   agent: "Agent 助手", settings: "设置",
 };
 let currentView = "home";
@@ -741,7 +741,115 @@ $("#schm-add").onclick = async () => {
   } catch (e) { toast(e.message); }
 };
 
-/* ================= 年级课表 ================= */
+/* ================= 外观设置(参考 dsh-ui-appearance: 预设+颜色角色+实时生效) =================
+ * 4 个颜色角色(主色/背景/面板/文字)驱动整套设计 token, 主色自动派生
+ * 同系色阶; 字体缩放用 body zoom(WebView2=Chromium)。存 localStorage。 */
+const AP_DEFAULT = { accent: "#1f5a46", bg: "#fbfaf6", panel: "#ffffff", ink: "#18231e", scale: 100 };
+const AP_PRESETS = [
+  { name: "默认", accent: "#1f5a46", bg: "#fbfaf6", panel: "#ffffff", ink: "#18231e" },
+  { name: "午夜", accent: "#34506e", bg: "#f3f6fa", panel: "#ffffff", ink: "#1b2430" },
+  { name: "海洋", accent: "#1d6b7c", bg: "#f1f9fa", panel: "#ffffff", ink: "#10262b" },
+  { name: "森林", accent: "#2a7233", bg: "#f3faf1", panel: "#ffffff", ink: "#152416" },
+  { name: "玫瑰", accent: "#a04d55", bg: "#fbf4f4", panel: "#ffffff", ink: "#2b1c1f" },
+  { name: "单色", accent: "#4d4d4d", bg: "#fafafa", panel: "#ffffff", ink: "#1c1c1c" },
+];
+function apLoad() {
+  try {
+    const raw = Store.get("appearance");   /* Store.get 返回 {t, v} 包装 */
+    return { ...AP_DEFAULT, ...((raw && raw.v) || {}) };
+  } catch { return { ...AP_DEFAULT }; }
+}
+function apSave(ap) { Store.set("appearance", ap); }
+function apHexToRgb(h) {
+  const m = /^#?([0-9a-f]{6})$/i.exec(String(h || "").trim());
+  if (!m) return null;
+  const n = parseInt(m[1], 16);
+  return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+}
+function apMix(a, b, t) {   /* t=0 → a, t=1 → b */
+  const A = apHexToRgb(a), B = apHexToRgb(b);
+  if (!A || !B) return a;
+  const c = A.map((v, i) => Math.round(v + (B[i] - v) * t));
+  return "#" + c.map((v) => v.toString(16).padStart(2, "0")).join("");
+}
+function apApply(ap) {
+  const r = document.documentElement.style;
+  const accent = apHexToRgb(ap.accent) ? ap.accent : AP_DEFAULT.accent;
+  const bg = apHexToRgb(ap.bg) ? ap.bg : AP_DEFAULT.bg;
+  const panel = apHexToRgb(ap.panel) ? ap.panel : AP_DEFAULT.panel;
+  const ink = apHexToRgb(ap.ink) ? ap.ink : AP_DEFAULT.ink;
+  r.setProperty("--green-800", accent);
+  r.setProperty("--green-900", apMix(accent, "#000000", .16));
+  r.setProperty("--green-950", apMix(accent, "#000000", .30));
+  r.setProperty("--green-700", apMix(accent, "#ffffff", .10));
+  r.setProperty("--green-100", apMix(accent, "#ffffff", .84));
+  r.setProperty("--green-50", apMix(accent, "#ffffff", .92));
+  r.setProperty("--ivory-50", bg);
+  r.setProperty("--ivory-100", apMix(bg, ink, .05));
+  r.setProperty("--ivory-200", apMix(bg, ink, .10));
+  r.setProperty("--white", panel);
+  r.setProperty("--ink", ink);
+  r.setProperty("--ink-2", apMix(ink, bg, .40));
+  r.setProperty("--ink-3", apMix(ink, bg, .62));
+  r.setProperty("--border", apMix(ink, bg, .14));
+  document.body.style.zoom = (ap.scale || 100) === 100 ? "" : String(ap.scale / 100);
+}
+apApply(apLoad());   /* 脚本加载即套用, 避免闪默认色 */
+
+function apBindPanel() {
+  const ap = apLoad();
+  const scale = $("#ap-scale"), scaleVal = $("#ap-scale-val");
+  scale.value = ap.scale || 100;
+  scaleVal.textContent = `${scale.value}%`;
+  scale.oninput = () => {
+    scaleVal.textContent = `${scale.value}%`;
+    const next = { ...apLoad(), scale: Number(scale.value) };
+    apApply(next); apSave(next);
+  };
+  $("#ap-accent").value = ap.accent; $("#ap-bg").value = ap.bg;
+  $("#ap-panel").value = ap.panel; $("#ap-ink").value = ap.ink;
+  $$(".ap-hex").forEach((hex) => { hex.value = ap[hex.dataset.role] || ""; });
+  const syncColor = (role) => {
+    const c = $(`#ap-${role}`);
+    c.oninput = () => {
+      const next = { ...apLoad(), [role]: c.value };
+      $(`.ap-hex[data-role="${role}"]`).value = c.value;
+      apApply(next); apSave(next);
+    };
+  };
+  ["accent", "bg", "panel", "ink"].forEach(syncColor);
+  $$(".ap-hex").forEach((hex) => {
+    hex.onchange = () => {
+      const role = hex.dataset.role;
+      if (!apHexToRgb(hex.value)) { hex.value = apLoad()[role]; return; }
+      const next = { ...apLoad(), [role]: hex.value };
+      $(`#ap-${role}`).value = hex.value;
+      apApply(next); apSave(next);
+    };
+  });
+  $("#ap-presets").innerHTML = AP_PRESETS.map((p) =>
+    `<button class="ap-preset" data-p="${esc(p.name)}" title="主色 ${p.accent}">
+       <i style="background:${p.accent}"></i>${esc(p.name)}</button>`).join("");
+  $$("#ap-presets .ap-preset").forEach((b) => {
+    b.onclick = () => {
+      const p = AP_PRESETS.find((x) => x.name === b.dataset.p);
+      const next = { ...p, scale: apLoad().scale };
+      apApply(next); apSave(next); apBindPanel();   /* 重绑控件值 */
+    };
+  });
+  $("#ap-reset").onclick = () => {
+    const next = { ...AP_DEFAULT };
+    apApply(next); apSave(next); apBindPanel();
+    toast("外观已恢复默认");
+  };
+}
+$("#gt-appearance-toggle").onclick = () => {
+  const panel = $("#gt-appearance");
+  panel.classList.toggle("hidden");
+  if (!panel.classList.contains("hidden")) apBindPanel();
+};
+
+/* ================= 班级课表 ================= */
 let gtDay = new Date().toISOString().slice(0, 10);
 let gtData = null;
 function gtShift(delta) {
@@ -2079,11 +2187,11 @@ function runSplash() {
   const chains = {
     edupage: async () => {
       const r = await call("connect_edupage");
-      setRow("edupage", "working", "✓ 已连接 · 预载课表/年级课表…");
+      setRow("edupage", "working", "✓ 已连接 · 预载课表/班级课表…");
       const warm = [];
       warm.push(preload(`tt|0`, () => call("timetable_week", 0))());      // 我的课表
       warm.push(preload(`gt|${new Date().toISOString().slice(0, 10)}`,
-        () => call("gradett_data", new Date().toISOString().slice(0, 10)))()); // 年级课表(最慢, 提前热身)
+        () => call("gradett_data", new Date().toISOString().slice(0, 10)))()); // 班级课表(最慢, 提前热身)
       await Promise.allSettled(warm);
       return r;
     },

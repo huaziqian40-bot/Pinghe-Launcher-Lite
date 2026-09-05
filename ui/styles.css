@@ -326,7 +326,20 @@ textarea{width:100%;resize:vertical}
 .bubble ul{margin:4px 0;padding-left:18px}
 .bubble h3,.bubble h4{margin:8px 0 4px}
 
-/* ---------- 年级课表 ---------- */
+/* ---------- 班级课表 + 外观设置 ---------- */
+.ap-row{display:flex;align-items:center;gap:12px;margin:10px 0;flex-wrap:wrap}
+.ap-label{width:64px;flex-shrink:0;color:var(--ink-2);font-size:13px}
+.ap-presets{display:flex;flex-wrap:wrap;gap:8px}
+.ap-preset{display:inline-flex;align-items:center;gap:6px;background:var(--ivory-100);
+  border:1px solid var(--border);color:var(--ink-2);padding:5px 12px;border-radius:99px}
+.ap-preset i{width:12px;height:12px;border-radius:50%;display:inline-block}
+.ap-preset:hover{border-color:var(--green-700);transform:none}
+.ap-colors{display:flex;flex-wrap:wrap;gap:14px}
+.ap-color{display:flex;align-items:center;gap:6px;color:var(--ink-2);font-size:12.5px}
+.ap-color input[type="color"]{width:34px;height:30px;padding:2px;cursor:pointer;
+  border:1px solid var(--border);border-radius:8px;background:var(--white)}
+.ap-hex{width:84px;font-family:Consolas,monospace;font-size:12px;padding:6px 8px}
+input[type="range"]{accent-color:var(--green-800);flex:1;min-width:160px;max-width:280px}
 .gt-slot{display:flex;gap:12px;padding:10px 0;border-bottom:1px dashed var(--border)}
 .gt-slot:last-child{border-bottom:none}
 .gt-time{width:64px;font-weight:700;color:var(--gold-600);font-variant-numeric:tabular-nums;
