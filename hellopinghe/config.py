@@ -131,10 +131,12 @@ PROVIDER_PRESETS: dict[str, AgentProvider] = {
 @dataclass
 class Config:
     # --- 平台账号(密码绝不写入配置文件,只在登录瞬间使用) ---
-    managebac_base_url: str = ""          # 如 https://shph.managebac.cn
+    # 默认值 = 平和学校的端点: 即使向导被跳过, 连接测试也是"缺账号"
+    # 而不是"Invalid URL / No scheme"
+    managebac_base_url: str = "https://shph.managebac.cn"
     managebac_email: str = ""
     edupage_username: str = ""            # Edupage 子域名登录时自动解析,无需手填
-    edupage_subdomain: str = ""           # 学校 Edupage 子域名(login_auto 可自动识别)
+    edupage_subdomain: str = "pingheschool"  # 学校 Edupage 子域名(login_auto 可自动识别)
 
     # --- 选课(向导第 3 步的结果: [{"subject":..,"teacher":..}]) ---
     selected_lessons: list = field(default_factory=list)
@@ -178,6 +180,12 @@ class Config:
         old_agent = raw.pop("agent", {})
         valid = {f.name for f in fields(cls)}
         cfg = cls(**{k: v for k, v in raw.items() if k in valid})
+        # 旧配置自愈: base_url 为空(老版本默认值/向导被跳过)时补学校端点,
+        # 否则所有连接测试都是 "Invalid URL / No scheme supplied"
+        if not cfg.managebac_base_url:
+            cfg.managebac_base_url = "https://shph.managebac.cn"
+        if not cfg.edupage_subdomain:
+            cfg.edupage_subdomain = "pingheschool"
         # 旧配置迁移: 单一 agent → 多提供商列表
         if not cfg.ai_providers and old_agent:
             cfg.ai_providers = [{

@@ -5,7 +5,10 @@ a = Analysis(
     ['run_hellopinghe.py'],
     pathex=[],
     binaries=[],
-    datas=[('ui', 'ui')],
+    datas=[
+        ('ui', 'ui'),
+        ('tools/WebView2/MicrosoftEdgeWebview2Setup.exe', '.'),
+    ],
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},
