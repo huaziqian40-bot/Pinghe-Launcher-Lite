@@ -96,34 +96,7 @@
         <button class="ghost" id="gt-next">后一天 ›</button>
         <button class="ghost" id="gt-today">今天</button>
         <input type="text" id="gt-filter" class="flex1" placeholder="筛选科目 / 老师 / 教室 / 班级…">
-        <button class="ghost" id="gt-appearance-toggle">🎨 外观</button>
         <span id="gt-meta" class="muted"></span>
-      </div>
-      <div id="gt-appearance" class="card hidden">
-        <div class="card-title">外观设置 <span class="muted small">实时生效 · 全局适用 · 自动保存</span></div>
-        <div class="ap-row">
-          <span class="ap-label">字体缩放</span>
-          <input type="range" id="ap-scale" min="80" max="130" step="5" value="100">
-          <b id="ap-scale-val" style="width:44px;text-align:right">100%</b>
-        </div>
-        <div class="ap-row">
-          <span class="ap-label">主题预设</span>
-          <div class="ap-presets" id="ap-presets"></div>
-        </div>
-        <div class="ap-row">
-          <span class="ap-label">颜色</span>
-          <div class="ap-colors">
-            <label class="ap-color"><input type="color" id="ap-accent"><span>主色</span><input type="text" class="ap-hex" data-role="accent" maxlength="7"></label>
-            <label class="ap-color"><input type="color" id="ap-bg"><span>背景</span><input type="text" class="ap-hex" data-role="bg" maxlength="7"></label>
-            <label class="ap-color"><input type="color" id="ap-panel"><span>面板</span><input type="text" class="ap-hex" data-role="panel" maxlength="7"></label>
-            <label class="ap-color"><input type="color" id="ap-ink"><span>文字</span><input type="text" class="ap-hex" data-role="ink" maxlength="7"></label>
-          </div>
-        </div>
-        <div class="ap-row">
-          <span class="ap-label"></span>
-          <button class="ghost" id="ap-reset">↺ 恢复默认外观</button>
-          <span class="muted small">主色会自动派生侧栏 / 按钮 / 链接 / 焦点环的整套同系色</span>
-        </div>
       </div>
       <div id="gt-body" class="card"><div class="empty">选择日期查询</div></div>
     </section>
@@ -269,6 +242,32 @@
         <button class="primary" id="st-save">保存设置</button>
         <button class="ghost" id="st-test">测试连接</button>
         <span id="st-test-result" class="muted"></span>
+      </div>
+      <div class="card">
+        <div class="card-title">外观定制 <span class="muted small">实时生效 · 全局适用 · 自动保存</span></div>
+        <div class="ap-row">
+          <span class="ap-label">字体缩放</span>
+          <input type="range" id="ap-scale" min="80" max="130" step="5" value="100">
+          <b id="ap-scale-val" style="width:44px;text-align:right">100%</b>
+        </div>
+        <div class="ap-row">
+          <span class="ap-label">主题预设</span>
+          <div class="ap-presets" id="ap-presets"></div>
+        </div>
+        <div class="ap-row">
+          <span class="ap-label">颜色</span>
+          <div class="ap-colors">
+            <label class="ap-color"><input type="color" id="ap-accent"><span>主色</span><input type="text" class="ap-hex" data-role="accent" maxlength="7"></label>
+            <label class="ap-color"><input type="color" id="ap-bg"><span>背景</span><input type="text" class="ap-hex" data-role="bg" maxlength="7"></label>
+            <label class="ap-color"><input type="color" id="ap-panel"><span>面板</span><input type="text" class="ap-hex" data-role="panel" maxlength="7"></label>
+            <label class="ap-color"><input type="color" id="ap-ink"><span>文字</span><input type="text" class="ap-hex" data-role="ink" maxlength="7"></label>
+          </div>
+        </div>
+        <div class="ap-row">
+          <span class="ap-label"></span>
+          <button class="ghost" id="ap-reset">↺ 恢复默认外观</button>
+          <span class="muted small">主色会自动派生侧栏 / 按钮 / 链接 / 焦点环的整套同系色</span>
+        </div>
       </div>
       <div class="card">
         <div class="card-title">我的选课</div>

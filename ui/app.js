@@ -772,8 +772,20 @@ function apMix(a, b, t) {   /* t=0 → a, t=1 → b */
   const c = A.map((v, i) => Math.round(v + (B[i] - v) * t));
   return "#" + c.map((v) => v.toString(16).padStart(2, "0")).join("");
 }
+const AP_TOKENS = ["--green-800", "--green-900", "--green-950", "--green-700",
+  "--green-100", "--green-50", "--ivory-50", "--ivory-100", "--ivory-200",
+  "--white", "--ink", "--ink-2", "--ink-3", "--border"];
 function apApply(ap) {
   const r = document.documentElement.style;
+  const scale = Number(ap.scale) || 100;
+  document.body.style.zoom = scale === 100 ? "" : String(scale / 100);
+  const isDefault = ap.accent === AP_DEFAULT.accent && ap.bg === AP_DEFAULT.bg &&
+    ap.panel === AP_DEFAULT.panel && ap.ink === AP_DEFAULT.ink;
+  if (isDefault) {
+    /* 默认外观: 清掉全部行内覆写, 回到样式表的设计值(含半透明 border) */
+    AP_TOKENS.forEach((t) => r.removeProperty(t));
+    return;
+  }
   const accent = apHexToRgb(ap.accent) ? ap.accent : AP_DEFAULT.accent;
   const bg = apHexToRgb(ap.bg) ? ap.bg : AP_DEFAULT.bg;
   const panel = apHexToRgb(ap.panel) ? ap.panel : AP_DEFAULT.panel;
@@ -791,8 +803,9 @@ function apApply(ap) {
   r.setProperty("--ink", ink);
   r.setProperty("--ink-2", apMix(ink, bg, .40));
   r.setProperty("--ink-3", apMix(ink, bg, .62));
-  r.setProperty("--border", apMix(ink, bg, .14));
-  document.body.style.zoom = (ap.scale || 100) === 100 ? "" : String(ap.scale / 100);
+  const inkRgb = apHexToRgb(ink);
+  /* border 必须保持半透明(原设计 rgba(ink,.1)), 写成不透明 hex = 全屏描边 bug */
+  r.setProperty("--border", `rgba(${inkRgb.join(",")},0.1)`);
 }
 apApply(apLoad());   /* 脚本加载即套用, 避免闪默认色 */
 
@@ -843,11 +856,7 @@ function apBindPanel() {
     toast("外观已恢复默认");
   };
 }
-$("#gt-appearance-toggle").onclick = () => {
-  const panel = $("#gt-appearance");
-  panel.classList.toggle("hidden");
-  if (!panel.classList.contains("hidden")) apBindPanel();
-};
+/* 外观面板常驻设置页(loadSettings 时绑定控件值) */
 
 /* ================= 班级课表 ================= */
 let gtDay = new Date().toISOString().slice(0, 10);
@@ -941,12 +950,77 @@ function renderCourses(d) {
   $("#co-link").href = "https://shph.managebac.cn/student";
 }
 function bindCourseList(d) {
+  const rows = () => $$("#co-classes .course-row");
+  let lastDragAt = 0;   /* 任意行刚拖完的时戳: 拖完行序会变, 点击抑制要全局 */
+  const persistOrder = () => {
+    const order = rows().map((r) => r.dataset.cid);
+    d.classes.sort((a, b) => order.indexOf(a.id) - order.indexOf(b.id));
+    call("course_save_order", JSON.stringify(order)).catch(() => {});
+    Store.set("courses", d);   /* 本地缓存同步新顺序 */
+  };
   $$("#co-classes .course-row").forEach((row) => {
     row.onclick = (e) => {
       if (e.target.closest("button")) return;
+      if (Date.now() - lastDragAt < 500) return;   /* 刚拖完不弹卡 */
       const c = (d.classes || []).find((x) => x.id === row.dataset.cid);
       if (c) openCourseModal(c);
     };
+  });
+  /* 拖拽排序(纵向指针版): 按住行上下拖, 越过相邻行中线就互换;
+     与 ▲▼ 箭头共用 persistOrder。 */
+  $$("#co-classes .course-row").forEach((row) => {
+    let drag = null;   // {y0, moved, id}
+    row.addEventListener("pointerdown", (e) => {
+      if (e.button !== 0) return;
+      if (e.target.closest("button")) return;
+      drag = { y0: e.clientY, moved: false, id: e.pointerId };
+      row.setPointerCapture(e.pointerId);
+    });
+    row.addEventListener("pointermove", (e) => {
+      if (!drag || drag.id !== e.pointerId) return;
+      const dy = e.clientY - drag.y0;
+      if (!drag.moved) {
+        if (Math.abs(dy) < 6) return;
+        drag.moved = true;
+        row.classList.add("dragging");
+      }
+      row.style.transform = `translateY(${dy}px)`;
+      let other = dy < 0 ? row.previousElementSibling : row.nextElementSibling;
+      while (other && !other.dataset.cid) {
+        other = dy < 0 ? other.previousElementSibling : other.nextElementSibling;
+      }
+      if (!other) return;
+      const r = other.getBoundingClientRect();
+      const mid = r.top + r.height / 2;
+      if (dy < 0 && e.clientY < mid) {
+        row.parentNode.insertBefore(row, other);
+        drag.y0 = e.clientY;
+        row.style.transform = "";
+      } else if (dy > 0 && e.clientY > mid) {
+        row.parentNode.insertBefore(other, row);
+        drag.y0 = e.clientY;
+        row.style.transform = "";
+      }
+    });
+    const finish = (e) => {
+      if (!drag || drag.id !== e.pointerId) return;
+      row.style.transform = "";
+      row.classList.remove("dragging");
+      const moved = drag.moved;
+      drag = null;
+      if (moved) {
+        lastDragAt = Date.now();
+        persistOrder();
+      }
+    };
+    row.addEventListener("pointerup", finish);
+    row.addEventListener("pointercancel", (e) => {
+      if (drag && drag.id === e.pointerId) {
+        row.style.transform = "";
+        row.classList.remove("dragging");
+        drag = null;
+      }
+    });
   });
   $$("#co-classes .course-row .move-btn").forEach((btn) => {
     btn.onclick = (e) => {
@@ -959,10 +1033,7 @@ function bindCourseList(d) {
       }
       if (!el) return;
       el.parentNode.insertBefore(row, down ? el.nextElementSibling : el);
-      const order = $$("#co-classes .course-row").map((r) => r.dataset.cid);
-      d.classes.sort((a, b) => order.indexOf(a.id) - order.indexOf(b.id));
-      call("course_save_order", JSON.stringify(order)).catch(() => {});
-      Store.set("courses", d);   /* 本地缓存同步新顺序 */
+      persistOrder();
     };
   });
   $$(".core-card").forEach((card) => {
@@ -1781,8 +1852,7 @@ let providersState = [];
 let selectedLessonsCache = [];
 
 async function loadSettings() {
-  const d = await call("settings_get");
-  $("#st-mb-url").value = d.managebac_base_url || "";
+  const d = await call("settings_get");  $("#st-mb-url").value = d.managebac_base_url || "";
   $("#st-mb-email").value = d.managebac_email || "";
   $("#st-ep-user").value = d.edupage_username || "";
   $("#st-ep-sub").value = d.edupage_subdomain || "";
@@ -1797,6 +1867,7 @@ async function loadSettings() {
     `<span class="chip on">${esc(s.subject)}${s.teacher ? " · " + esc(s.teacher) : ""}${s.group ? " · 组" + esc(s.group) : ""}</span>`).join("") ||
     `<span class="muted">尚未选课</span>`;
   await renderDismissed();
+  apBindPanel();   /* 外观面板(设置页常驻): 每次进入同步控件值 */
   const ai = await call("ai_get");
   providersState = (ai.providers || []).map((p) => ({ ...p, api_key: "" }));
   renderProviderCards();

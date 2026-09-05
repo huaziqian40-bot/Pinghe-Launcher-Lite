@@ -106,6 +106,8 @@ a{color:var(--green-700)}
 /* ---------- 课程列表(课程+总评合并)与课程详情弹卡 ---------- */
 .course-row{cursor:pointer}
 .course-row:hover{border-color:var(--green-700);transform:translateY(-1px)}
+.course-row.dragging{opacity:.9;box-shadow:var(--shadow-md);position:relative;z-index:2;
+  border-color:var(--gold-500);transition:none}
 .course-row .co-name{font-weight:650}
 .course-row .co-name small{display:block;font-weight:400;color:var(--ink-3);font-size:12px}
 .core-card{cursor:pointer}
