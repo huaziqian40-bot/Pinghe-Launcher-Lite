@@ -280,7 +280,8 @@ textarea{width:100%;resize:vertical}
 .agent-main{min-width:0}
 .file-list{max-height:320px;overflow:auto;display:flex;flex-direction:column;gap:3px;font-size:12.5px}
 .file-item{cursor:pointer;padding:4px 8px;border-radius:6px;color:var(--ink-2);
-  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+  flex-shrink:0;line-height:1.5}
 .file-item:hover{background:var(--ivory-100);color:var(--green-800)}
 .tool-row{align-self:flex-start;background:var(--green-50);color:var(--green-800);
   font-size:12px;padding:4px 12px;border-radius:99px;font-variant-numeric:tabular-nums}
@@ -290,9 +291,12 @@ textarea{width:100%;resize:vertical}
 /* ---------- Agent: 会话列表 / 工具卡片 / composer ---------- */
 .session-list{max-height:210px;overflow:auto;display:flex;flex-direction:column;gap:4px}
 .session-item{padding:6px 10px;border-radius:8px;cursor:pointer;font-size:12.5px;color:var(--ink-2);
-  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex-shrink:0;line-height:1.5}
 .session-item:hover{background:var(--ivory-100)}
 .session-item.active{background:var(--green-800);color:var(--white)}
+/* 滚动 flex 列表里的子项禁止被压缩(压缩 = 行距变小文字重叠, 滚动条失效) */
+.ct-item{flex-shrink:0}
+.chat > *{flex-shrink:0}
 .tool-card{align-self:flex-start;width:88%;background:var(--ivory-100);border:1px solid var(--border);
   border-radius:var(--radius-sm);overflow:hidden;font-size:12.5px}
 .tc-head{padding:6px 12px;cursor:pointer;color:var(--green-800);font-weight:600;
