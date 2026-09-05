@@ -390,18 +390,16 @@ class EdupageService:
     def personal(self, day: date) -> list[dict]:
         """按选课结果过滤出的个人课表(当天) —— 对所有账号一视同仁.
 
-        通用三层规则(没有任何账号特判, 全部由 Edupage 课卡数据驱动):
+        通用两层规则(没有任何账号特判, 全部由 Edupage 课卡数据驱动):
         ① 选课命中(科目族+组号+老师) → 显示;
         ② 课卡无教学组 = 全班必修(班会/国家课程这类 Edupage 不打组的课) → 显示;
-        ③ 无组也不命中选课时: 该科目族在当天只有**一个**教学组(或该时段
-           该族只有一组, 没有并行可选) = 全班一起上的课 → 自动显示。
-           多组并行的课(真正的选修/走班)才需要学生选课。
+        其余(有组但未选) = 年级里其他同学的并行选项, 不显示。
+        未跑向导的新账号会先看到必修课, 选完课后选修课自动出现。
 
         带磁盘缓存(2 小时, v6 文件名带班级 id + 选课哈希 —— 课卡按登录
         账号可见, 缓存绝不能跨账号共用)。
         """
         import hashlib
-        from collections import defaultdict
 
         selected = self.cfg.selected_lessons or []
         sel_key = hashlib.sha1(
@@ -419,75 +417,29 @@ class EdupageService:
                 except Exception:  # noqa: BLE001
                     pass  # 缓存损坏则重新计算
 
-        # 第一遍: 收集本班课卡(课程来源过滤见 _for_my_class)
-        cards = []
+        out = []
         for l in self.master_plan(day):
             if not self._for_my_class(l):
                 continue
             subject = (l.subject.name if l.subject else "").strip()
-            cards.append({
-                "lesson": l,
-                "subject": subject,
-                "family": subject_family(subject),
+            card_teachers = {t.name.strip() for t in (l.teachers or [])}
+            group = ",".join(l.groups) if l.groups else ""
+            card_groups = [g.strip() for g in group.split(",") if g.strip()]
+            if card_groups:  # 有组 → 必须命中选课之一
+                if not any(
+                    subject_family(subject) == subject_family(s.get("subject") or "")
+                    and (not s.get("teacher") or s["teacher"] in card_teachers)
+                    and (not s.get("group") or s["group"] in card_groups)
+                    for s in selected
+                ):
+                    continue
+            out.append({
                 "start": l.start_time.strftime("%H:%M") if l.start_time else "",
                 "end": l.end_time.strftime("%H:%M") if l.end_time else "",
-                "group": ",".join(l.groups) if l.groups else "",
-                "teachers": {t.name.strip() for t in (l.teachers or [])},
-            })
-        if not cards:
-            return []
-
-        # 选课去重(同一门课勾了两次只算一遍); 兼容旧选课:
-        # 空 group/teacher = 该维度不筛。老师宽松匹配(选课老师 ∈ 课卡老师)。
-        seen_sel = set()
-        uniq = []
-        for s in selected:
-            k = (subject_family(s.get("subject") or ""),
-                 (s.get("teacher") or "").replace("(未指定老师)", "").strip(),
-                 (s.get("group") or "").strip())
-            if k not in seen_sel:
-                seen_sel.add(k)
-                uniq.append(k)
-
-        # 通用规则③的普查: 每个 (科目族) / (科目族, 时段) 的教学组集合
-        fam_groups: dict[str, set] = defaultdict(set)
-        slot_groups: dict[tuple[str, str], set] = defaultdict(set)
-        for c in cards:
-            for g in c["group"].split(","):
-                g = g.strip()
-                if g:
-                    fam_groups[c["family"]].add(g)
-                    slot_groups[(c["family"], c["start"])].add(g)
-
-        def auto_include(c: dict) -> bool:
-            """规则③: 没得选的课自动显示(单组 = 全班一起上)."""
-            groups = {g for g in c["group"].split(",") if g.strip()}
-            if groups and len(fam_groups.get(c["family"]) or set()) == 1:
-                return True
-            if groups and len(slot_groups.get((c["family"], c["start"])) or set()) == 1:
-                return True
-            return False
-
-        out = []
-        for c in cards:
-            matched = any(
-                c["family"] == fam
-                and (not w_teacher or w_teacher in c["teachers"])
-                and (not w_group or w_group in
-                     {g.strip() for g in c["group"].split(",") if g.strip()})
-                for fam, w_teacher, w_group in uniq
-            )
-            no_group = not c["group"]
-            if not (matched or no_group or auto_include(c)):
-                continue
-            l = c["lesson"]
-            out.append({
-                "start": c["start"],
-                "end": c["end"],
-                "subject": c["subject"],
+                "subject": subject,
                 "teacher": l.teachers[0].name.strip() if l.teachers else "",
                 "room": l.classrooms[0].name if l.classrooms else "",
-                "group": c["group"],
+                "group": group,
                 "cancelled": bool(l.is_cancelled),
                 "curriculum": getattr(l, "curriculum", None) or "",
             })
