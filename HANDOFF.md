@@ -92,10 +92,15 @@ ui 交互备忘(2026-09-05):
 - 首页 hero 中间一格是 .hero-duo 两张并排小卡: 正在上的课 + 下一节课;
   next_lesson 跨天查找(今天剩余→往后最多 7 天, 如周六显示周一第一节,
   跳过 cancelled), 带 day/day_label 字段供前端区分"今天/周X"
-- 课程 chip 与作业条目都有 ▲▼ 排序箭头: chip 与指针拖拽共用 saveChipOrder
+- 课程视图布局(commit cb83562): 顶上 CAS/EE 两张 .core-card(IB Core 入口,
+  点开概览弹卡), 下方两栏 = 左"最近 DDL"(作业条目) + 右"课程列表"
+  (课程+总评合并行)。旧筛选 chips 与独立"各科总评"卡已取消。
+- 课程行与作业条目都有 ▲▼ 排序箭头: 课程行走 course_save_order
   (course_class_order); 作业条目走 moveTask/task_save_order(task_order,
   key=title|due_at 与 dismissed 同款; 排过的在前, 新作业按截止时间补后);
-  两者 pointerdown 都排除按钮区域, 不会误触发筛选/左滑
+  两者 pointerdown 都排除按钮区域, 不会误触发筛选/左滑; 点课程行弹
+  课程详情(作业/单元/文件/日历), 点作业行弹作业详情, 左滑后 500ms 内
+  的 click 被 _swipedAt 抑制不弹卡
 
 ### 关键数据流
 

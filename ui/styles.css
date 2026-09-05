@@ -108,8 +108,9 @@ a{color:var(--green-700)}
 .course-row:hover{border-color:var(--green-700);transform:translateY(-1px)}
 .course-row .co-name{font-weight:650}
 .course-row .co-name small{display:block;font-weight:400;color:var(--ink-3);font-size:12px}
-.core-row{border-left:3px solid var(--gold-500);cursor:pointer}
-.core-row:hover{border-color:var(--gold-600);transform:translateY(-1px)}
+.core-card{cursor:pointer}
+.core-card:hover{border-color:var(--gold-600);transform:translateY(-1px)}
+.co-core{margin-bottom:16px}
 .tabbar{display:flex;gap:6px;margin-bottom:10px;border-bottom:1px solid var(--border);
   padding-bottom:8px}
 .tabbtn{background:transparent;color:var(--ink-2);padding:5px 12px;border-radius:99px}

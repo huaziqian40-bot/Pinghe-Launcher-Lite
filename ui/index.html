@@ -104,15 +104,31 @@
     <!-- ================= 我的课程 ================= -->
     <section class="view" id="view-courses">
       <div class="row-tools">
-        <b>课程列表</b><span class="muted small">含各科总评 · 点课程看详情 · ▲▼ 调顺序</span>
+        <b>我的课程</b><span class="muted small">点课程/作业看详情 · ▲▼ 调顺序</span>
         <span class="flex1"></span>
         <button class="ghost" id="co-refresh">↻ 同步 ManageBac</button>
       </div>
-      <div class="card"><div id="co-classes" class="list"><div class="empty">加载中…</div></div></div>
-      <div class="card">
-        <div class="card-title">未截止的作业 / 考试</div>
-        <div id="co-tasks" class="list"></div>
-        <div class="footnote">点作业看详情 · ▲▼ 调顺序 · 左滑移除(可在设置恢复) · 更多请访问 <a href="#" id="co-link">ManageBac</a> ↗</div>
+      <div class="grid-2 co-core">
+        <div class="card core-card" data-core="cas">
+          <div class="card-title">🎨 CAS 创意 · 行动 · 服务</div>
+          <div class="muted small">IB Core · 不属于任何课程 · 点开概览 ↗</div>
+        </div>
+        <div class="card core-card" data-core="ee">
+          <div class="card-title">📄 EE 拓展论文</div>
+          <div class="muted small">IB Core · 不属于任何课程 · 点开概览 ↗</div>
+        </div>
+      </div>
+      <div class="grid-2">
+        <div class="card">
+          <div class="card-title">最近 DDL（未截止的作业 / 考试）</div>
+          <div id="co-tasks" class="list"></div>
+          <div class="footnote">点作业看详情 · ▲▼ 调顺序 · 左滑移除(可在设置恢复)</div>
+        </div>
+        <div class="card">
+          <div class="card-title">课程列表</div>
+          <div id="co-classes" class="list"></div>
+          <div class="footnote">含各科总评 · ▲▼ 调顺序 · 更多请访问 <a href="#" id="co-link">ManageBac</a> ↗</div>
+        </div>
       </div>
     </section>
 

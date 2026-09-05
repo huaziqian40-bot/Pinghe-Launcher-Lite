@@ -808,14 +808,10 @@ $("#gt-today").onclick = () => {
 $("#gt-filter").addEventListener("input", renderGradett);
 
 /* ================= 我的课程 ================= */
-/* 课程列表(课程 + 各科总评合并成一行): CAS/EE 两个 IB Core 入口固定在
-   最上面, 课程行 = ▲▼ + 课名 + 总评徽章, 点击行弹课程详情(作业/单元/
-   文件/日历), 点作业行弹作业详情。旧的墨绿色筛选 chips 已取消。 */
+/* 布局: 顶上 CAS/EE 两张 IB Core 卡, 左栏最近 DDL(作业), 右栏课程列表
+   (课程+总评合并一行, ▲▼ 排序)。点课程行弹课程详情(作业/单元/文件/
+   日历), 点作业行弹作业详情。 */
 let coData = null;   /* courses_data 引用(箭头排序后重渲染共用) */
-const CORE_ENTRIES = [
-  { key: "cas", icon: "🎨", name: "CAS 创意 · 行动 · 服务", sub: "IB Core · 不属于任何课程" },
-  { key: "ee", icon: "📄", name: "EE 拓展论文", sub: "IB Core · 不属于任何课程" },
-];
 const CORE_URLS = {
   cas: "https://shph.managebac.cn/student/ib/activity/cas",
   ee: "https://shph.managebac.cn/student/ib/pbl/778",
@@ -823,12 +819,6 @@ const CORE_URLS = {
 
 function renderCourses(d) {
   coData = d;
-  const coreRows = CORE_ENTRIES.map((c) => `
-    <div class="item core-row" data-core="${c.key}">
-      <span class="grow"><span class="co-name">${c.icon} ${esc(c.name)}</span>
-      <small>${esc(c.sub)}</small></span>
-      <span class="dim">查看 ↗</span>
-    </div>`).join("");
   const classRows = (d.classes || []).map((c) => `
     <div class="item course-row" data-cid="${esc(c.id)}">
       <span class="move-btns"><button class="move-btn" data-move="up" title="上移">▲</button><button class="move-btn" data-move="down" title="下移">▼</button></span>
@@ -836,7 +826,8 @@ function renderCourses(d) {
       <small>总评 ${c.grade ? esc(c.grade) : "未出分"} · 点击看课程详情</small></span>
       ${badge(c.grade || "未出分", c.grade ? "green" : "")}
     </div>`).join("");
-  $("#co-classes").innerHTML = coreRows + classRows;
+  $("#co-classes").innerHTML = classRows ||
+    `<div class="empty">还没有课程数据, 点右上角同步</div>`;
   bindCourseList(d);
   renderCourseTasks(d);
   $("#co-link").href = "https://shph.managebac.cn/student";
@@ -866,8 +857,8 @@ function bindCourseList(d) {
       Store.set("courses", d);   /* 本地缓存同步新顺序 */
     };
   });
-  $$("#co-classes .core-row").forEach((row) => {
-    row.onclick = () => openCoreModal(row.dataset.core);
+  $$(".core-card").forEach((card) => {
+    card.onclick = () => openCoreModal(card.dataset.core);
   });
 }
 function renderCourseTasks(d) {
@@ -1067,9 +1058,12 @@ $("#td-close").onclick = () => $("#td-modal").classList.add("hidden");
 $("#td-close2").onclick = () => $("#td-modal").classList.add("hidden");
 
 /* ---------------- CAS / EE 弹卡 ---------------- */
+const CORE_TITLES = {
+  cas: "🎨 CAS 创意 · 行动 · 服务",
+  ee: "📄 EE 拓展论文",
+};
 async function openCoreModal(kind) {
-  const conf = CORE_ENTRIES.find((c) => c.key === kind) || { name: "IB Core" };
-  $("#core-title").textContent = conf.name;
+  $("#core-title").textContent = CORE_TITLES[kind] || "IB Core";
   const body = $("#core-body");
   body.innerHTML = `<div class="empty">加载中…</div>`;
   $("#core-modal").classList.remove("hidden");
