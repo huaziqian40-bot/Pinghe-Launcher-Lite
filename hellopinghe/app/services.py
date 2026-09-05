@@ -1199,12 +1199,13 @@ class CoursesService:
     def submit_task(self, class_id: str, task_id: str, file_path: str) -> str:
         """交作业: 从任务页动态解析提交入口再 multipart 上传.
 
-        不同学校的 ManageBac 版本 dropbox 路由不一样(实测 shph 是
-        `.../dropbox/upload` + 字段 `dropbox[assets_attributes][0][file]`,
-        硬编码旧路由会 404), 所以先打开任务页, 在里面找带本任务 id 的
-        dropbox 链接或上传表单; 找不到再按常见路由兜底试一轮。
-        给的 id 打不开任务页时, 再扫当前全部课程按 task_id 重新定位
-        (agent 可能拿到上学期的过期 id)。
+        实测 shph 契约(2026-09-05 只读探测): Dropbox 页的上传表单
+        method=post action=`.../dropbox/upload`, 文件字段
+        `dropbox[assets_attributes][0][file]`, 且带隐藏域
+        `_method=patch`(Rails 伪装 PATCH —— 路由只认 PATCH, 纯 POST
+        会 404) 和 `dropbox[assets_attributes][0][file_cache]`。
+        所以 POST 必须**原样照抄表单全部隐藏域**, 不能自己拼 data。
+        给的 id 打不开任务页时, 扫当前全部课程按 task_id 重新定位。
         """
         client = self._client_ready()
         from bs4 import BeautifulSoup
@@ -1216,36 +1217,66 @@ class CoursesService:
             meta = soup.find("meta", attrs={"name": "csrf-token"})
             return meta.get("content") if meta else ""
 
-        def _find_entry(soup):
-            """在页面里找提交入口 → (file 字段名, action, token)."""
-            file_field = "dropbox_assets_attributes_0_file"
+        def _form_entry(form, soup):
+            """从单个 form 提取 (file字段名, action, 全部隐藏域 dict)."""
+            fi = form.find("input", attrs={"type": "file"})
+            if fi is None:
+                return None
+            hidden: dict = {}
+            for inp in form.find_all("input", attrs={"type": "hidden"}):
+                name = inp.get("name")
+                if name:
+                    hidden[name] = inp.get("value") or ""
+            # 提交按钮的 name/value 也是表单数据(如 commit=Upload Files)
+            btn = (form.find("input", attrs={"type": "submit"})
+                   or form.find("button", attrs={"name": True}))
+            if btn is not None and btn.get("name"):
+                hidden[btn.get("name")] = btn.get("value") or ""
+            # data-remote 表单的 token 在 meta csrf-token 里(浏览器走
+            # X-CSRF-Token 头); 复刻时表单域 + 请求头双保险
+            tok = hidden.get("authenticity_token") or _csrf(soup)
+            if tok:
+                hidden["authenticity_token"] = tok
+            return (fi.get("name") or "dropbox_assets_attributes_0_file",
+                    form.get("action") or "",
+                    hidden)
 
-            # ① 任务页直接就有上传表单
-            for form in soup.find_all("form", action=True):
-                fi = form.find("input", attrs={"type": "file"})
-                if fi and "dropbox" in (form.get("action") or "").lower():
-                    tok = form.find("input", attrs={"name": "authenticity_token"})
-                    return (fi.get("name") or file_field,
-                            form.get("action"),
-                            (tok.get("value") if tok else "") or _csrf(soup))
-            # ② 带本任务 id 的 dropbox 链接 → 打开它拿上传表单
+        def _find_entry(soup):
+            """找提交入口 → (file 字段名, action, 隐藏域 dict)."""
+            # ① 当前页面里就有 dropbox 上传表单(必须 post + dropbox action)
+            for form in soup.find_all("form"):
+                action = form.get("action") or ""
+                if "dropbox" not in action.lower():
+                    continue
+                if (form.get("method") or "get").lower() != "post":
+                    continue
+                hit = _form_entry(form, soup)
+                if hit:
+                    return hit
+            # ② 带本任务 id 的 dropbox 链接 → 打开子页面找上传表单
             for a in soup.find_all("a", href=True):
                 href = a["href"]
-                if task_id in href and "dropbox" in href.lower():
-                    try:
-                        sub = client._get(href)
-                    except Exception as exc:  # noqa: BLE001
-                        raise PingheError(f"提交页打不开: {exc}") from exc
-                    sub_soup = BeautifulSoup(sub.text, "html.parser")
-                    for form in sub_soup.find_all("form", action=True):
-                        fi = form.find("input", attrs={"type": "file"})
-                        if fi:
-                            tok = form.find(
-                                "input", attrs={"name": "authenticity_token"})
-                            return (fi.get("name") or file_field,
-                                    form.get("action"),
-                                    (tok.get("value") if tok else "") or _csrf(sub_soup))
-                    raise PingheError("提交页里没有找到上传表单, 请到 ManageBac 网页手动提交")
+                if task_id not in href or "dropbox" not in href.lower():
+                    continue
+                try:
+                    sub = client._get(href)
+                except Exception as exc:  # noqa: BLE001
+                    raise PingheError(f"提交页打不开: {exc}") from exc
+                sub_soup = BeautifulSoup(sub.text, "html.parser")
+                for form in sub_soup.find_all("form"):
+                    action = form.get("action") or ""
+                    if "dropbox" not in action.lower():
+                        continue
+                    if (form.get("method") or "get").lower() != "post":
+                        continue
+                    hit = _form_entry(form, sub_soup)
+                    if hit:
+                        # 空 action = Rails 提交到当前页路径
+                        action = action or (
+                            str(sub.url).replace(client.base_url, "") or href)
+                        return (hit[0], action, hit[2])
+                raise PingheError(
+                    "提交页里没有找到上传表单, 请到 ManageBac 网页手动提交")
             return None, None, None
 
         task_path = f"/student/classes/{class_id}/core_tasks/{task_id}"
@@ -1278,7 +1309,7 @@ class CoursesService:
                     "任务可能已被删除/归档, 请到 ManageBac 网页确认后再试")
         soup = BeautifulSoup(page.text, "html.parser")
 
-        field, action, token = _find_entry(soup)
+        field, action, hidden = _find_entry(soup)
         if not action:
             # 兜底: 试几个历史版本的常见路由
             for cand in (
@@ -1291,7 +1322,7 @@ class CoursesService:
                 except Exception:  # noqa: BLE001
                     continue
                 soup = BeautifulSoup(page.text, "html.parser")
-                field, action, token = _find_entry(soup)
+                field, action, hidden = _find_entry(soup)
                 if action:
                     break
         if not action:
@@ -1299,15 +1330,21 @@ class CoursesService:
                 "这个任务的页面上没有找到可用的提交入口(可能已截止、类型不支持"
                 "网上提交, 或需要老师开放), 请到 ManageBac 网页手动提交")
 
+        post_url = client._url(action)
+        headers = {"X-CSRF-Token": hidden["authenticity_token"]} \
+            if hidden.get("authenticity_token") else {}
         with open(file_path, "rb") as fh:
             resp = client.session.post(
-                client._url(action),
-                data={"authenticity_token": token, "commit": "Upload"},
+                post_url,
+                data=hidden,   # 含 _method=patch / file_cache / commit / token
                 files={field: (Path(file_path).name, fh)},
-                timeout=60,
+                headers=headers,
+                timeout=180,
             )
         if resp.status_code >= 400:
-            raise PingheError(f"提交失败: HTTP {resp.status_code}")
+            raise PingheError(
+                f"提交失败: HTTP {resp.status_code} (POST {post_url}) — "
+                "请到 ManageBac 网页手动提交, 若反复出现请把此提示反馈给开发者")
         return "已提交(请到 ManageBac 网页确认)"
 
 
