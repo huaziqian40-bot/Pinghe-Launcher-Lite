@@ -126,6 +126,11 @@ a{color:var(--green-700)}
   background:var(--ivory-100);border-radius:8px;padding:10px 12px;margin-top:8px;
   max-height:300px;overflow:auto}
 .td-desc:empty{display:none}
+/* CAS/EE 弹卡的段落: 标题一行 + 正文一块, 保证行距不叠字 */
+.core-sec{padding:10px 12px;border-bottom:1px solid var(--border)}
+.core-sec:last-child{border-bottom:0}
+.core-sec b{display:block;margin-bottom:6px;color:var(--ink-2)}
+.core-sec .td-desc{margin-top:0;background:transparent;padding:0;max-height:none}
 
 /* ---------- 按钮 ---------- */
 .primary{background:var(--green-800);color:var(--white);padding:8px 16px}

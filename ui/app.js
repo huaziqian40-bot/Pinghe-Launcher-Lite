@@ -1018,7 +1018,9 @@ $("#cd-open-mb").onclick = () => {
 };
 
 /* ---------------- 作业/考试详情弹卡 ---------------- */
+let tdTask = null;   /* 当前弹卡对应的作业(提交按钮要用) */
 function openTaskModal(t) {
+  tdTask = t;
   $("#td-title").textContent = t.title || "作业";
   $("#td-course").textContent = t.class_name || "";
   $("#td-due").textContent = `${(t.due_at || "").slice(0, 16).replace("T", " ")}${t.past_due ? " (已截止)" : ""}`;
@@ -1056,6 +1058,23 @@ function openTaskModal(t) {
 }
 $("#td-close").onclick = () => $("#td-modal").classList.add("hidden");
 $("#td-close2").onclick = () => $("#td-modal").classList.add("hidden");
+/* 提交作业: 系统文件选择框 → 动态解析提交入口上传 */
+$("#td-submit").onclick = async () => {
+  if (!tdTask || $("#td-submit").disabled) return;
+  $("#td-submit").disabled = true;
+  toast("请在弹出的窗口里选择要提交的文件…");
+  try {
+    const r = await call("task_pick_and_submit", tdTask.class_id, tdTask.task_id);
+    if (r.cancelled) { toast("已取消提交"); return; }
+    toast(r.message || "已提交, 请到 ManageBac 网页确认");
+    $("#td-dropbox").textContent = r.message || "已提交";
+    $("#td-dropbox-row").classList.remove("hidden");
+  } catch (e) {
+    toast(e.message);
+  } finally {
+    $("#td-submit").disabled = false;
+  }
+};
 
 /* ---------------- CAS / EE 弹卡 ---------------- */
 const CORE_TITLES = {
@@ -1078,11 +1097,11 @@ async function openCoreModal(kind) {
       body.innerHTML = `<div class="empty">ManageBac 上还没有内容, 点下方按钮去网页查看</div>`;
       return;
     }
+    /* 块级布局: 标题一行、正文一块(行内并排会叠字, 勿改回 span 嵌套) */
     secs.forEach((s) => {
       const el = document.createElement("div");
-      el.className = "item";
-      el.innerHTML = `<span class="grow"><b>${esc(s.h)}</b>
-        <span class="td-desc" style="margin-top:6px">${esc(s.text)}</span></span>`;
+      el.className = "core-sec";
+      el.innerHTML = `<b>${esc(s.h)}</b><div class="td-desc">${esc(s.text)}</div>`;
       body.appendChild(el);
     });
   } catch (e) {

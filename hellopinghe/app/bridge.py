@@ -653,6 +653,26 @@ class Api:
             return {"opened": str(url)}
         return _wrap(job)
 
+    def task_pick_and_submit(self, class_id: str, task_id: str) -> dict:
+        """作业详情弹卡的"提交作业": 先弹系统文件选择框(模态, 在 js_api
+        调用线程上阻塞, 同 agent_pick_workspace 的模式), 用户选完文件后
+        再进后台线程走 submit_task 的动态入口解析上传。取消则不动。"""
+        import webview
+
+        picked = webview.windows[0].create_file_dialog(
+            webview.OPEN_DIALOG, allow_multiple=False)
+        if not picked:
+            return {"cancelled": True}
+        path = str(picked[0])
+
+        def job():
+            msg = self.svc.courses.submit_task(class_id, task_id, path)
+            # 详情/列表缓存作废, 下次打开看到最新提交状态
+            _snap_drop(f"tdetail|{class_id}|{task_id}")
+            _snap_drop("courses", "home")
+            return {"submitted": True, "message": msg, "path": path}
+        return _wrap(job)
+
     def refresh_tasks(self) -> dict:
         def job():
             _snap_drop("courses", "home")
