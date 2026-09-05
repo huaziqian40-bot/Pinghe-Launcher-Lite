@@ -228,15 +228,25 @@ class Api:
                 try:
                     lessons = self.svc.edupage.personal(now.date())
                     data["today_lessons"] = lessons
+                    hm = now.strftime("%H:%M")
                     current = next(
                         (l for l in lessons if l["start"] and l["end"]
-                         and l["start"] <= now.strftime("%H:%M") < l["end"]),
+                         and l["start"] <= hm < l["end"]),
                         None,
                     )
                     data["current_lesson"] = current
+                    # 下一节课: 今天还没开始的最近一节(跳过已取消的)
+                    upcoming = sorted(
+                        (l for l in lessons
+                         if l.get("start") and not l.get("cancelled")
+                         and l["start"] > hm),
+                        key=lambda l: l["start"],
+                    )
+                    data["next_lesson"] = upcoming[0] if upcoming else None
                 except Exception as exc:  # noqa: BLE001
                     data["today_lessons"] = []
                     data["current_lesson"] = None
+                    data["next_lesson"] = None
                     data["timetable_error"] = str(exc)
 
             def _ddl():

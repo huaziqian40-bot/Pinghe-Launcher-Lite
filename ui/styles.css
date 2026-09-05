@@ -34,7 +34,8 @@ a{color:var(--green-700)}
 #app{display:flex;height:100vh}
 .sidebar{width:var(--side-w);background:linear-gradient(180deg,var(--green-900),var(--green-950));
   color:var(--ivory-50);display:flex;flex-direction:column;padding:18px 12px}
-.logo{display:flex;gap:10px;align-items:center;padding:4px 8px 16px}
+.logo{display:flex;gap:10px;align-items:center;padding:4px 8px 16px;cursor:pointer;border-radius:10px}
+.logo:hover b{color:var(--gold-500)}
 .logo-mark{width:36px;height:36px;border-radius:10px;overflow:hidden;flex-shrink:0;
   display:flex;align-items:center;justify-content:center}
 .logo-mark img{width:124%;height:124%;object-fit:cover;display:block}
@@ -66,6 +67,9 @@ a{color:var(--green-700)}
 .big-clock{font-size:44px;font-weight:750;letter-spacing:2px;font-variant-numeric:tabular-nums}
 .current-lesson{font-size:17px;font-weight:650}
 .current-lesson small{display:block;font-weight:400;color:var(--ink-3);font-size:13px}
+.next-lesson{margin-top:8px;padding-top:8px;border-top:1px dashed var(--border);
+  font-size:13.5px;color:var(--ink-2)}
+.next-lesson small{display:block;font-weight:400;color:var(--ink-3);font-size:12px}
 .big-num{font-size:34px;font-weight:750;color:var(--green-800)}
 
 .list{display:flex;flex-direction:column;gap:8px}
@@ -82,10 +86,15 @@ a{color:var(--green-700)}
 .chip-wrap{display:flex;flex-wrap:wrap;gap:8px}
 .chip{background:var(--green-50);border:1px solid var(--border);border-radius:99px;
   padding:4px 12px;font-size:12.5px;color:var(--green-800);cursor:pointer;user-select:none;
-  touch-action:pan-y}
+  touch-action:pan-y;display:inline-flex;align-items:center;gap:6px}
 .chip.on{background:var(--green-800);color:var(--white)}
 .chip[data-cid]{cursor:grab}
 .chip.dragging{opacity:.4;transform:scale(.94);cursor:grabbing}
+/* chip 内的上下移动箭头(拖拽之外的第二种排序方式) */
+.chip-arrows{display:inline-flex;flex-direction:column;line-height:1;margin-right:-4px}
+.chip-arrow{border:0;background:transparent;color:inherit;font-size:8px;padding:0 2px;
+  height:9px;line-height:9px;cursor:pointer;opacity:.55;border-radius:2px}
+.chip-arrow:hover{opacity:1;transform:none;background:rgba(0,0,0,.08)}
 
 /* ---------- 按钮 ---------- */
 .primary{background:var(--green-800);color:var(--white);padding:8px 16px}
@@ -96,10 +105,16 @@ a{color:var(--green-700)}
 .danger{background:var(--wine-100);color:var(--wine-700);padding:6px 12px}
 
 /* ---------- 课表(按节次对齐: 行=时段, 列=星期) ---------- */
-.tt-grid{display:grid;grid-template-columns:62px repeat(7,1fr);gap:5px;align-items:stretch}
+.tt-grid{display:grid;grid-template-columns:62px repeat(7,1fr);gap:5px;align-items:stretch;
+  position:relative}
 .tt-head{font-size:12.5px;font-weight:650;color:var(--ink-2);text-align:center;padding:4px 0}
 .tt-head.today{color:var(--gold-600)}
 .tt-corner{background:var(--ivory-100);border-radius:8px}
+/* 当前时间指示线(只在看本周时出现, 横向贯穿整张网格) */
+#tt-nowline{position:absolute;left:0;right:0;height:2px;z-index:6;pointer-events:none;
+  background:var(--gold-500);border-radius:1px;box-shadow:0 0 4px rgba(138,109,0,.55)}
+#tt-nowline::before{content:"";position:absolute;left:-2px;top:-3px;width:8px;height:8px;
+  border-radius:50%;background:var(--gold-500);box-shadow:0 0 0 2px var(--gold-100)}
 .tt-time{display:flex;flex-direction:column;justify-content:center;text-align:right;
   padding-right:6px;font-size:11px;color:var(--ink-3);font-variant-numeric:tabular-nums}
 .tt-time b{font-size:12px;color:var(--ink-2)}

@@ -9,7 +9,7 @@
 <body>
 <div id="app">
   <aside class="sidebar">
-    <div class="logo"><span class="logo-mark"><img src="logo.png" alt="Hello! Pinghe"></span><div><b>Hello! Pinghe launcher</b><small>平和 · 本地学习助手</small></div></div>
+    <div class="logo" id="logo" title="回到首页"><span class="logo-mark"><img src="logo.png" alt="Hello! Pinghe"></span><div><b>Hello! Pinghe launcher</b><small>平和 · 本地学习助手</small></div></div>
     <nav id="nav">
       <button data-go="home" class="active">🏠 首页</button>
       <button data-go="timetable">📅 我的课表</button>
@@ -36,6 +36,7 @@
         <div class="card current-card">
           <div class="card-title">正在上的课</div>
           <div id="home-current" class="current-lesson">—</div>
+          <div id="home-next" class="next-lesson"></div>
         </div>
         <div class="card stat-card">
           <div class="card-title">未读邮件</div>

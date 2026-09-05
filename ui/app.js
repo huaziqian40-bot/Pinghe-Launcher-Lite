@@ -130,6 +130,8 @@ $("#nav").addEventListener("click", (e) => {
   if (btn) show(btn.dataset.go);
 });
 $("#btn-refresh").addEventListener("click", () => show(currentView));
+/* 点左上角软件名/logo 回首页 */
+$("#logo").addEventListener("click", () => show("home"));
 
 /* ================= 首页 ================= */
 function lessonLine(l) {
@@ -195,6 +197,10 @@ function renderHome(d) {
   $("#home-current").innerHTML = cur
     ? `${esc(cur.subject)}<small>${esc(cur.start)}-${esc(cur.end)} · ${esc(cur.room)} · ${esc(cur.teacher)}</small>`
     : `<span class="muted">此刻没有课</span>`;
+  const nxt = d.next_lesson;
+  $("#home-next").innerHTML = nxt
+    ? `下一节 · <b>${esc(nxt.subject)}</b><small>${esc(nxt.start)} 开始${nxt.room ? " · " + esc(nxt.room) : ""}${nxt.teacher ? " · " + esc(nxt.teacher) : ""}</small>`
+    : `<small class="muted">今天没有更多课了</small>`;
   $("#home-unread").textContent = d.unread_mail ?? "–";
   $("#home-lessons").innerHTML = (d.today_lessons || []).map(lessonLine).join("") ||
     `<div class="empty">${esc(d.timetable_error || "今天没有课")}</div>`;
@@ -350,7 +356,39 @@ function renderTimetable(d) {
   }
 
   $("#tt-week").innerHTML = html + spans.join("");
+  updateNowLine();
 }
+/* 当前时间指示线: 一根横线贯穿整张周课表, 落在"现在"对应的节次行内
+   (行内按时间比例插值)。只在看本周(ttOffset=0)且时间在校内时段时显示。 */
+function updateNowLine(nowMins) {
+  const wk = $("#tt-week");
+  const old = document.getElementById("tt-nowline");
+  if (old) old.remove();
+  if (currentView !== "timetable" || ttOffset !== 0) return;
+  if (!wk.querySelector(".tt-time")) return;   /* 骨架屏/空态不放线 */
+  const t = nowMins ?? (() => {
+    const n = new Date();
+    return n.getHours() * 60 + n.getMinutes() + n.getSeconds() / 60;
+  })();
+  const toMin = (s) => { const [h, m] = String(s).split(":").map(Number); return h * 60 + m; };
+  if (t < toMin(PERIODS[0].start) || t > toMin(PERIODS[PERIODS.length - 1].end)) return;
+  const pi = PERIODS.findIndex((p) => t < toMin(p.end));
+  if (pi < 0) return;
+  const p = PERIODS[pi];
+  const f = Math.min(1, Math.max(0, (t - toMin(p.start)) / (toMin(p.end) - toMin(p.start))));
+  /* 行号 = 时段下标 + 2(第 1 行是星期表头); 用该行时段标签格测量像素位置 */
+  const cell = [...wk.querySelectorAll(".tt-time")]
+    .find((el) => el.style.gridRow === String(pi + 2));
+  if (!cell) return;
+  const wkTop = wk.getBoundingClientRect().top;
+  const r = cell.getBoundingClientRect();
+  const y = r.top - wkTop + r.height * f;
+  const line = document.createElement("div");
+  line.id = "tt-nowline";
+  line.style.top = `${y}px`;
+  wk.appendChild(line);
+}
+setInterval(() => { if (currentView === "timetable") updateNowLine(); }, 30 * 1000);
 function loadTimetable() {
   /* 页面上已有一幅真课表时切周, 保留旧画面(压暗+转圈徽标), 不闪空白;
      首次进入才用骨架屏。 */
@@ -773,7 +811,7 @@ $("#gt-filter").addEventListener("input", renderGradett);
 function renderCourses(d) {
   const chips = [`<span class="chip ${!currentClassFilter ? "on" : ""}" data-cid="">全部</span>`]
     .concat(d.classes.map((c) =>
-      `<span class="chip ${currentClassFilter === c.id ? "on" : ""}" data-cid="${c.id}" title="点击筛选 · 按住拖动排序">${esc(c.name.slice(0, 22))}</span>`));
+      `<span class="chip ${currentClassFilter === c.id ? "on" : ""}" data-cid="${c.id}" title="点击筛选 · 拖动或用箭头排序"><span>${esc(c.name.slice(0, 22))}</span><span class="chip-arrows"><button class="chip-arrow" data-move="up" title="上移">▲</button><button class="chip-arrow" data-move="down" title="下移">▼</button></span></span>`));
   $("#co-chips").innerHTML = chips.join("");
   bindChipDrag(d);
   filterTasks(d);
@@ -788,6 +826,14 @@ function renderCourses(d) {
 function bindChipDrag(d) {
   const wrap = $("#co-chips");
   const allChips = () => $$("#co-chips .chip");
+  /* 拖拽与箭头共用的收尾: 按 DOM 顺序持久化 + 同步缓存 + 重绘任务列表 */
+  const saveChipOrder = () => {
+    const order = allChips().map((c) => c.dataset.cid).filter(Boolean);
+    d.classes.sort((a, b) => order.indexOf(a.id) - order.indexOf(b.id));
+    call("course_save_order", JSON.stringify(order)).catch(() => {});
+    Store.set("courses", d);   /* 本地缓存同步新顺序, 秒开不回跳旧序 */
+    filterTasks(d);
+  };
   const neighbor = (chip, dir) => {
     let el = dir > 0 ? chip.nextElementSibling : chip.previousElementSibling;
     while (el && !el.dataset.cid) {
@@ -807,6 +853,7 @@ function bindChipDrag(d) {
     let drag = null;                 // {x, moved, id}
     chip.addEventListener("pointerdown", (e) => {
       if (e.button !== 0) return;
+      if (e.target.closest(".chip-arrow")) return;   /* 点箭头不算拖拽/筛选 */
       drag = { x: e.clientX, moved: false, id: e.pointerId };
       chip.setPointerCapture(e.pointerId);
     });
@@ -835,11 +882,7 @@ function bindChipDrag(d) {
       const moved = drag.moved;
       drag = null;
       if (moved) {
-        const order = allChips().map((c) => c.dataset.cid).filter(Boolean);
-        d.classes.sort((a, b) => order.indexOf(a.id) - order.indexOf(b.id));
-        call("course_save_order", JSON.stringify(order)).catch(() => {});
-        Store.set("courses", d);   /* 本地缓存同步新顺序, 秒开不回跳旧序 */
-        filterTasks(d);
+        saveChipOrder();
       } else {
         currentClassFilter = chip.dataset.cid;
         allChips().forEach((c) => c.classList.toggle("on", c === chip));
@@ -853,6 +896,19 @@ function bindChipDrag(d) {
         drag = null;
       }
     });
+  });
+  /* 每个课程 chip 的 ▲▼: 与相邻课程互换位置(边界处为空操作) */
+  $$("#co-chips [data-move]").forEach((btn) => {
+    btn.onclick = (e) => {
+      e.stopPropagation();
+      const chip = btn.closest(".chip");
+      const down = btn.dataset.move === "down";
+      const other = neighbor(chip, down ? 1 : -1);
+      if (!other) return;
+      if (down) wrap.insertBefore(chip, other.nextElementSibling);
+      else wrap.insertBefore(chip, other);
+      saveChipOrder();
+    };
   });
 }
 function taskItemEl(t) {
