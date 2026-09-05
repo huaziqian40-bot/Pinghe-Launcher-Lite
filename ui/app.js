@@ -744,7 +744,7 @@ $("#schm-add").onclick = async () => {
 /* ================= 外观设置(参考 dsh-ui-appearance: 预设+颜色角色+实时生效) =================
  * 4 个颜色角色(主色/背景/面板/文字)驱动整套设计 token, 主色自动派生
  * 同系色阶; 字体缩放用 body zoom(WebView2=Chromium)。存 localStorage。 */
-const AP_DEFAULT = { accent: "#1f5a46", bg: "#fbfaf6", panel: "#ffffff", ink: "#18231e", scale: 100 };
+const AP_DEFAULT = { accent: "#1f5a46", bg: "#fbfaf6", panel: "#ffffff", ink: "#18231e", scale: 120 };
 const AP_PRESETS = [
   { name: "默认", accent: "#1f5a46", bg: "#fbfaf6", panel: "#ffffff", ink: "#18231e" },
   { name: "午夜", accent: "#34506e", bg: "#f3f6fa", panel: "#ffffff", ink: "#1b2430" },
@@ -809,15 +809,26 @@ function apApply(ap) {
 }
 apApply(apLoad());   /* 脚本加载即套用, 避免闪默认色 */
 
+let apPendingScale = null;   /* 滑块拖出的待应用值(按"应用"才生效) */
 function apBindPanel() {
   const ap = apLoad();
   const scale = $("#ap-scale"), scaleVal = $("#ap-scale-val");
-  scale.value = ap.scale || 100;
-  scaleVal.textContent = `${scale.value}%`;
+  scale.value = apPendingScale ?? (ap.scale || 120);
+  scaleVal.textContent = `${Math.round(Number(scale.value))}%`;
   scale.oninput = () => {
-    scaleVal.textContent = `${scale.value}%`;
-    const next = { ...apLoad(), scale: Number(scale.value) };
-    apApply(next); apSave(next);
+    apPendingScale = Number(scale.value);   /* 无极调节: 只记数值, 不立即应用 */
+    scaleVal.textContent = `${Math.round(apPendingScale)}%`;
+  };
+  const smoothApply = (fn) => {
+    document.body.style.transition = "zoom .28s cubic-bezier(.2,.7,.3,1)";
+    fn();
+    setTimeout(() => { document.body.style.transition = ""; }, 350);
+  };
+  $("#ap-apply").onclick = () => {
+    const next = { ...apLoad(), scale: Math.round(apPendingScale ?? (apLoad().scale || 120)) };
+    apPendingScale = null;
+    smoothApply(() => { apApply(next); apSave(next); apBindPanel(); });
+    toast(`外观已应用: 字体缩放 ${next.scale}%`);
   };
   $("#ap-accent").value = ap.accent; $("#ap-bg").value = ap.bg;
   $("#ap-panel").value = ap.panel; $("#ap-ink").value = ap.ink;
@@ -846,13 +857,15 @@ function apBindPanel() {
   $$("#ap-presets .ap-preset").forEach((b) => {
     b.onclick = () => {
       const p = AP_PRESETS.find((x) => x.name === b.dataset.p);
-      const next = { ...p, scale: apLoad().scale };
+      const next = { ...p, scale: apLoad().scale || 120 };
+      apPendingScale = null;
       apApply(next); apSave(next); apBindPanel();   /* 重绑控件值 */
     };
   });
   $("#ap-reset").onclick = () => {
     const next = { ...AP_DEFAULT };
-    apApply(next); apSave(next); apBindPanel();
+    apPendingScale = null;
+    smoothApply(() => { apApply(next); apSave(next); apBindPanel(); });
     toast("外观已恢复默认");
   };
 }
@@ -967,7 +980,21 @@ function bindCourseList(d) {
     };
   });
   /* 拖拽排序(纵向指针版): 按住行上下拖, 越过相邻行中线就互换;
-     与 ▲▼ 箭头共用 persistOrder。 */
+     被换位的行用 FLIP 动画平滑滑动, 被拖行深色提示; 与 ▲▼ 共用 persistOrder。 */
+  const flip = (el, mutate) => {
+    const r1 = el.getBoundingClientRect();
+    mutate();
+    const r2 = el.getBoundingClientRect();
+    const dy = r1.top - r2.top;
+    if (Math.abs(dy) < 1) return;
+    el.style.transition = "none";
+    el.style.transform = `translateY(${dy}px)`;
+    requestAnimationFrame(() => {
+      el.style.transition = "transform .2s cubic-bezier(.2,.7,.3,1)";
+      el.style.transform = "";
+      setTimeout(() => { el.style.transition = ""; }, 260);
+    });
+  };
   $$("#co-classes .course-row").forEach((row) => {
     let drag = null;   // {y0, moved, id}
     row.addEventListener("pointerdown", (e) => {
@@ -993,24 +1020,31 @@ function bindCourseList(d) {
       const r = other.getBoundingClientRect();
       const mid = r.top + r.height / 2;
       if (dy < 0 && e.clientY < mid) {
-        row.parentNode.insertBefore(row, other);
+        flip(other, () => row.parentNode.insertBefore(row, other));
         drag.y0 = e.clientY;
         row.style.transform = "";
       } else if (dy > 0 && e.clientY > mid) {
-        row.parentNode.insertBefore(other, row);
+        flip(other, () => row.parentNode.insertBefore(other, row));
         drag.y0 = e.clientY;
         row.style.transform = "";
       }
     });
     const finish = (e) => {
       if (!drag || drag.id !== e.pointerId) return;
-      row.style.transform = "";
-      row.classList.remove("dragging");
       const moved = drag.moved;
       drag = null;
       if (moved) {
         lastDragAt = Date.now();
         persistOrder();
+        /* 被拖行缓动归位, 归位后再摘掉深色提示 */
+        row.style.transition = "transform .2s cubic-bezier(.2,.7,.3,1)";
+        row.style.transform = "";
+        setTimeout(() => {
+          row.classList.remove("dragging");
+          row.style.transition = "";
+        }, 220);
+      } else {
+        row.classList.remove("dragging");
       }
     };
     row.addEventListener("pointerup", finish);
