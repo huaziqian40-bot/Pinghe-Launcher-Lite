@@ -56,8 +56,10 @@ cd installer
 ..\tools\wix314\light.exe HelloPingheLauncher.wixobj -out HelloPingheLauncher.msi -nologo
 rm -f HelloPingheLauncher.wixobj HelloPingheLauncher.wixpdb   # 清理中间产物
 
-# 打包前隐私扫描(必须零命中): REDACTED-ACCOUNT / REDACTED-PASSWORD / REDACTED-PASSWORD / REDACTED-AUTHCODE / REDACTED-KEY
-grep -rilE "REDACTED-ACCOUNT|REDACTED-PASSWORD|REDACTED-AUTHCODE|REDACTED-KEY" --include="*.py" --include="*.js" --include="*.html" --include="*.css" --include="*.wxs" --exclude-dir=.git .
+# 打包前隐私扫描(必须零命中): 模式为 用户账号名/各密码/授权码/AI密钥的
+# 关键片段 —— 2026-09-05 用户已要求清除全部测试凭据, 字面模式不再入库;
+# 打包前向用户索取模式或用通用规则(邮箱/16进制长串)扫描
+grep -rilE "<账号名>|<密码>|<授权码片段>|<密钥片段>" --include="*.py" --include="*.js" --include="*.html" --include="*.css" --include="*.wxs" --exclude-dir=.git .
 ```
 
 ## 三、代码架构
