@@ -20,6 +20,26 @@ MAX_ROUNDS = 8
 PROPOSAL_TTL = 600  # 10 分钟
 SESSIONS_DIR = Path.home() / ".hellopinghe" / "agent_sessions"
 
+# ---------------------------------------------------------------- 权限模式
+# readonly        只读: 写工具全部禁用
+# confirm         操作前确认(默认): 写操作全部走提案
+# workspace_write 工作区写入: workspace 内写文档自动执行, 对外操作仍走提案
+# full_access     完全访问: 所有写操作立即执行(切换时前端双重确认)
+AGENT_MODES = ("readonly", "confirm", "workspace_write", "full_access")
+
+#: 写工具的许可级别: workspace = 工作区内的写操作; external = 对外/全局操作
+_TOOL_LEVEL = {
+    "create_docx": "workspace",
+    "append_to_docx": "workspace",
+    "add_schedule_event": "external",
+    "send_email": "external",
+    "submit_managebac_task": "external",
+}
+
+
+def _mode_of(cfg: Config) -> str:
+    return cfg.agent_mode if cfg.agent_mode in AGENT_MODES else "confirm"
+
 
 def _now_str() -> str:
     now = datetime.now()
@@ -28,18 +48,36 @@ def _now_str() -> str:
 
 def _system_prompt(cfg: Config, workspace: str | None) -> str:
     subjects = "、".join(s["subject"] for s in (cfg.selected_lessons or [])) or "(未选课)"
+    mode = _mode_of(cfg)
     lines = [
         "你是 Hello! Pinghe 学习助手, 运行在学生自己的电脑上.",
         f"当前时间: {_now_str()}.",
         f"学生已选科目: {subjects}.",
         f"工作目录(workspace): {workspace or '(未设置)'}",
+        f"当前权限模式: {mode}.",
         "规则:",
         "1. 需要课表/DDL/成绩/邮件/日程信息时, 先调用工具查询, 不要编造.",
         "2. 写作业时用 read_docx 查看已有文档, 用 create_docx / append_to_docx 产出草稿.",
-        "3. 所有写操作(create_docx/append_to_docx/add_schedule_event/send_email/"
-        "submit_managebac_task)都只是提案, 由用户确认后执行, 请在提案前说明你要做什么.",
-        "4. 回答使用简体中文, 简洁直接.",
     ]
+    if mode == "readonly":
+        lines.append(
+            "3. 当前为只读模式: 一切写工具(create_docx/append_to_docx/"
+            "add_schedule_event/send_email/submit_managebac_task)都被禁用, "
+            "不要尝试调用; 用户需要写操作时应提示他到 Agent 助手页切换权限模式.")
+    elif mode == "confirm":
+        lines.append(
+            "3. 所有写操作(create_docx/append_to_docx/add_schedule_event/send_email/"
+            "submit_managebac_task)都只是提案, 由用户确认后执行, 请在提案前说明你要做什么.")
+    elif mode == "workspace_write":
+        lines.append(
+            "3. 当前为工作区写入模式: create_docx/append_to_docx 会直接执行不必确认;"
+            " add_schedule_event/send_email/submit_managebac_task 仍走提案, "
+            "请在提案前说明你要做什么.")
+    else:
+        lines.append(
+            "3. 当前为完全访问模式: 所有写操作都会立即执行, 不再有确认弹窗."
+            " 请先向用户说明你要做什么再执行, 谨慎操作.")
+    lines.append("4. 回答使用简体中文, 简洁直接.")
     if not cfg.send_grades_to_llm:
         lines.append("5. 用户关闭了成绩共享: get_grades 会返回错误, 不要反复尝试.")
     return "\n".join(lines)
@@ -217,8 +255,17 @@ class AgentEngine:
             raise PingheError(f"路径越出 workspace: {rel}")
         return p
 
+    # ------------------------------------------------------------ 权限模式
+    @property
+    def mode(self) -> str:
+        return _mode_of(self.cfg)
+
     # ------------------------------------------------------------ 提案
-    def _propose(self, title: str, detail: str, fn) -> dict:
+    def _propose(self, title: str, detail: str, fn, level: str = "external") -> dict:
+        mode = self.mode
+        if mode == "full_access" or (mode == "workspace_write" and level == "workspace"):
+            # 高权限模式(开启时已经过双重确认): 直接执行, 不再逐次弹确认
+            return {"executed": True, "title": title, "result": fn()}
         self._gc_proposals()
         self._pid += 1
         pid = f"p{int(time.time())}-{self._pid}"
@@ -254,6 +301,12 @@ class AgentEngine:
     # ------------------------------------------------------------ 工具执行
     def _exec_tool(self, name: str, args: dict) -> str:
         try:
+            # 只读模式: 一切写工具直接拒绝(LLM 会看到错误并向用户解释)
+            if name in _TOOL_LEVEL and self.mode == "readonly":
+                raise PingheError(
+                    f"当前 Agent 为只读模式, 无法执行写操作({name})。"
+                    "请告诉用户: 到 Agent 助手页把权限模式切换为"
+                    "「操作前确认/工作区写入/完全访问」后再试。")
             return json.dumps({"ok": True, **self._dispatch(name, args)}, ensure_ascii=False)
         except PingheError as exc:
             return json.dumps({"ok": False, "error": str(exc)}, ensure_ascii=False)
@@ -346,7 +399,8 @@ class AgentEngine:
                 doc.save(str(p))
                 return f"已创建 {p}"
 
-            return self._propose(f"新建 Word: {path}", f"标题: {title}\n段落数: {len(paras)}", fn)
+            return self._propose(f"新建 Word: {path}", f"标题: {title}\n段落数: {len(paras)}", fn,
+                                 level="workspace")
 
         if name == "append_to_docx":
             path = args["path"]
@@ -362,7 +416,8 @@ class AgentEngine:
                 doc.save(str(p))
                 return f"已追加 {len(paras)} 段到 {p}"
 
-            return self._propose(f"追加 Word: {path}", f"追加 {len(paras)} 段", fn)
+            return self._propose(f"追加 Word: {path}", f"追加 {len(paras)} 段", fn,
+                                 level="workspace")
 
         if name == "add_schedule_event":
             def fn():

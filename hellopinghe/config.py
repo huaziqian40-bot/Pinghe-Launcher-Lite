@@ -156,6 +156,7 @@ class Config:
     agent_workspaces: list = field(default_factory=list)   # 历史工作区列表
     course_class_order: list = field(default_factory=list)  # 我的课程课程排序
     task_order: list = field(default_factory=list)  # 我的课程作业条目排序(title|due_at 键)
+    agent_mode: str = "confirm"  # agent 权限: readonly/confirm/workspace_write/full_access
 
     # --- 行为开关 ---
     send_grades_to_llm: bool = False      # 隐私: 默认不把成绩发给 LLM

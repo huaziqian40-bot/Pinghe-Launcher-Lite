@@ -1434,9 +1434,97 @@ async function loadAgent() {
   };
 
   renderProposals(d.proposals);
+  renderModebar(d.mode);
   refreshFiles();
   await refreshSessions();
 }
+/* ---------------- Agent 权限模式(4 档; 高权限切换需双重确认) ---------------- */
+const MODE_DESC = {
+  readonly: "当前: 只读 — Agent 只能查询, 所有写操作被禁用",
+  confirm: "当前: 操作前确认 — 写操作会先提案, 你确认后才执行",
+  workspace_write: "当前: 工作区写入 — workspace 内写文档自动执行, 发邮件/交作业仍需确认",
+  full_access: "当前: 完全访问 — 所有写操作立即执行, 不再有确认弹窗(后果自负)",
+};
+const MODE_WARN1 = {
+  workspace_write:
+    "⚠️ 即将启用「工作区写入」\n\n" +
+    "启用后, Agent 在你的 workspace 里新建/修改文件将不再逐次询问你 — " +
+    "文档可能被直接创建或覆盖。\n\n只有 workspace 内的文档操作会自动执行; " +
+    "发邮件 / 提交作业等对外操作仍会先征求你同意。",
+  full_access:
+    "⚠️⚠️ 即将启用「完全访问」— 这是最高风险的模式\n\n" +
+    "启用后, Agent 的所有写操作(包括 发邮件、提交作业、新增日程、修改文件)" +
+    "都会立即执行, 不再弹出任何确认。\n\n" +
+    "发错的邮件、交错的作业都无法由本程序撤回 — 启用即表示你了解风险并自愿承担一切后果。",
+};
+const MODE_WARN2 = {
+  workspace_write:
+    "最后确认: 确实要让 Agent 免确认写入你的 workspace 文件吗?\n\n" +
+    "(立即生效并保存; 随时可切回「操作前确认」)",
+  full_access:
+    "最后确认: 确实要授予 Agent 完全访问权限吗?\n\n" +
+    "(立即生效并保存, 后果自负; 随时可切回「操作前确认」)",
+};
+function renderModebar(mode) {
+  $$("#ag-modebar .modebtn").forEach((b) => {
+    b.classList.toggle("on", b.dataset.mode === mode);
+  });
+  $("#ag-mode-desc").textContent = MODE_DESC[mode] || "";
+}
+let pendingMode = null;
+function closeModeModal() {
+  pendingMode = null;
+  delete $("#mode-next").dataset.step;
+  $("#mode-next").textContent = "我已了解风险，继续";
+  $("#mode-modal").classList.add("hidden");
+}
+$$("#ag-modebar .modebtn").forEach((btn) => {
+  btn.onclick = async () => {
+    const mode = btn.dataset.mode;
+    if (mode === "workspace_write" || mode === "full_access") {
+      pendingMode = mode;
+      $("#mode-title").textContent = mode === "full_access"
+        ? "⚠️ 启用完全访问(第 1/2 步)" : "⚠️ 启用工作区写入(第 1/2 步)";
+      $("#mode-warn").textContent = MODE_WARN1[mode];
+      $("#mode-next").textContent = "我已了解风险，继续";
+      delete $("#mode-next").dataset.step;
+      $("#mode-modal").classList.remove("hidden");
+      return;
+    }
+    try {
+      const r = await call("agent_set_mode", mode);
+      renderModebar(r.mode);
+      toast(`权限模式: ${mode === "readonly" ? "只读" : "操作前确认"}`);
+    } catch (e) { toast(e.message); }
+  };
+});
+$("#mode-next").onclick = async () => {
+  const mode = pendingMode;
+  if (!mode) return;
+  if ($("#mode-next").dataset.step !== "2") {
+    /* 第一次确认 → 出示第二道警告 */
+    $("#mode-title").textContent = mode === "full_access"
+      ? "⚠️ 启用完全访问(第 2/2 步)" : "⚠️ 启用工作区写入(第 2/2 步)";
+    $("#mode-warn").textContent = MODE_WARN2[mode];
+    $("#mode-next").textContent = "确认启用（后果自负）";
+    $("#mode-next").dataset.step = "2";
+    return;
+  }
+  try {
+    const r = await call("agent_set_mode", mode);
+    renderModebar(r.mode);
+    toast(`权限模式已切换: ${mode === "full_access" ? "完全访问" : "工作区写入"}`);
+  } catch (e) { toast(e.message); }
+  closeModeModal();
+};
+$("#mode-cancel").onclick = closeModeModal;
+$("#mode-close").onclick = closeModeModal;
+$("#mode-modal").addEventListener("click", (e) => {
+  if (e.target.id === "mode-modal") closeModeModal();
+});
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") $("#mode-modal").classList.add("hidden");
+});
 async function refreshSessions() {
   try {
     const r = await call("agent_sessions");

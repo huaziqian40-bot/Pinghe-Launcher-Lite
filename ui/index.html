@@ -151,7 +151,15 @@
     <section class="view" id="view-agent">
       <div class="agent-split">
         <aside class="agent-side card">
-          <div class="card-title">会话</div>
+          <div class="card-title">权限模式</div>
+          <div class="modebar" id="ag-modebar">
+            <button class="modebtn" data-mode="readonly" title="Agent 只能查询, 写操作全部禁用">🔒 只读</button>
+            <button class="modebtn" data-mode="confirm" title="所有写操作先提案, 你确认后才执行">✋ 操作前确认</button>
+            <button class="modebtn" data-mode="workspace_write" title="工作区内写文档自动执行, 对外操作仍需确认">📝 工作区写入</button>
+            <button class="modebtn" data-mode="full_access" title="所有写操作立即执行, 不再确认">⚡ 完全访问</button>
+          </div>
+          <div id="ag-mode-desc" class="muted small">当前: 操作前确认 — 写操作会先提案, 你确认后才执行</div>
+          <div class="card-title" style="margin-top:14px">会话</div>
           <button class="primary" id="ag-new-chat" style="width:100%;margin-bottom:8px">＋ 新会话</button>
           <div id="ag-sessions" class="session-list"><div class="empty">暂无历史</div></div>
           <div class="card-title" style="margin-top:14px">Workspace</div>
@@ -466,6 +474,21 @@
     <div class="wizard-foot">
       <button class="ghost" id="core-open-mb">在 ManageBac 打开 ↗</button>
       <button class="ghost" id="core-close2">关闭</button>
+    </div>
+  </div>
+</div>
+
+<!-- ================= Agent 权限模式双重确认弹卡 ================= -->
+<div id="mode-modal" class="overlay hidden">
+  <div class="mail-card tt-card">
+    <div class="wizard-head">
+      <b id="mode-title">⚠️ 权限变更确认</b>
+      <button class="ghost" id="mode-close">✕</button>
+    </div>
+    <div id="mode-warn" class="mode-warn"></div>
+    <div class="wizard-foot">
+      <button class="ghost" id="mode-cancel">取消</button>
+      <button class="danger" id="mode-next">我已了解风险，继续</button>
     </div>
   </div>
 </div>

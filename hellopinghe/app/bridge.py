@@ -726,6 +726,7 @@ class Api:
             return {
                 "workspace": self.cfg.agent_workspace,
                 "workspaces": self.agent.list_workspaces(),
+                "mode": self.agent.mode,
                 "provider": {
                     "name": provider.get("name", ""),
                     "model": self.cfg.agent_model or (models[0] if models else "?"),
@@ -735,6 +736,17 @@ class Api:
                 },
                 "proposals": self.agent.list_proposals(),
             }
+        return _wrap(job)
+
+    def agent_set_mode(self, mode: str) -> dict:
+        """切换 Agent 权限模式。workspace_write/full_access 的双重确认
+        警告由前端负责展示, 后端只校验取值并持久化。"""
+        def job():
+            if mode not in ("readonly", "confirm", "workspace_write", "full_access"):
+                raise ValueError(f"未知的权限模式: {mode}")
+            self.cfg.agent_mode = mode
+            self._save_cfg()
+            return {"mode": mode}
         return _wrap(job)
 
     def ai_get(self) -> dict:
