@@ -52,9 +52,17 @@ class EdupageService:
         self.cfg = cfg
         self._ed = None
         self._lock = threading.Lock()
-        self._plan_cache: dict[date, list] = {}
-        self._week_cache: dict[str, dict[str, list]] = {}
+        # Edupage 的 gcall 课卡是"按登录账号可见"的 —— 换账号登录后数据完全
+        # 不同, 所以所有缓存键必须带班级 id(跨账号隔离), 否则 B 账号会读到
+        # A 账号缓存的课卡, _for_my_class 过滤后几乎全部消失。
+        self._plan_cache: dict[tuple, list] = {}
+        self._week_cache: dict[tuple, dict[str, list]] = {}
         self._rooms_cache: list | None = None
+
+    def _ed_caches_clear(self) -> None:
+        """登录账号切换后清空 Edupage 相关缓存."""
+        self._plan_cache.clear()
+        self._week_cache.clear()
 
     # ---- 会话 ----
     def _patch(self, ed) -> None:
@@ -110,6 +118,7 @@ class EdupageService:
         ed.login(username, password, subdomain)
         self._speed_patch(ed)
         self._ed = ed
+        self._ed_caches_clear()   # 换账号: 旧账号的课卡缓存全部作废
         secret_set(f"edupage:{subdomain}:{username}", password)
 
     def _ensure(self):
@@ -143,14 +152,16 @@ class EdupageService:
         请求只有周日~周二, 周三~周五落进 get_my_timetable 回退(残缺,
         周五下午整段丢失)。
 
-        带磁盘缓存(6 小时过期, v3 文件名与旧截断/泄漏缓存隔离)。
+        带磁盘缓存(6 小时过期, v4 文件名带班级 id —— gcall 课卡按登录
+        账号可见, 不同账号的数据完全不同, 缓存绝不能跨账号共用)。
         """
         monday = self.week_monday(start)
-        key = monday.isoformat()
+        cid = self.my_class_id()
+        key = (cid, monday)
         if key in self._week_cache:
             return self._week_cache[key]
 
-        cache_file = paths.data_dir() / f"edupage_week_v3_{key}.json"
+        cache_file = paths.data_dir() / f"edupage_week_v4_{monday.isoformat()}_{cid or 'all'}.json"
         if cache_file.exists():
             age = _time.time() - cache_file.stat().st_mtime
             if age < 6 * 3600:
@@ -214,11 +225,11 @@ class EdupageService:
         try:
             cache_file.parent.mkdir(parents=True, exist_ok=True)
             cache_file.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
-            # 清掉旧版(截断的 / 含泄漏日的)整周缓存
-            for old in cache_file.parent.glob("edupage_week_2*.json"):
-                old.unlink(missing_ok=True)
-            for old in cache_file.parent.glob("edupage_week_v2_*.json"):
-                old.unlink(missing_ok=True)
+            # 清掉旧版缓存(v2 截断 / v3 泄漏日 / v3 跨账号共用)
+            for pattern in ("edupage_week_2*.json", "edupage_week_v2_*.json",
+                            "edupage_week_v3_*.json"):
+                for old in cache_file.parent.glob(pattern):
+                    old.unlink(missing_ok=True)
         except Exception:  # noqa: BLE001
             pass
 
@@ -251,13 +262,15 @@ class EdupageService:
                 return lessons
         except Exception:  # noqa: BLE001
             pass
-        # 回退: 单日拉取
-        if day in self._plan_cache:
-            return self._plan_cache[day]
+        # 回退: 单日拉取(缓存键带班级 id, 跨账号隔离)
+        cid = self.my_class_id()
+        mkey = (cid, day)
+        if mkey in self._plan_cache:
+            return self._plan_cache[mkey]
         ed = self._ensure()
         tt = ed.get_my_timetable(day)
         lessons = list(tt or [])
-        self._plan_cache[day] = lessons
+        self._plan_cache[mkey] = lessons
         return lessons
 
     def rooms(self) -> list[str]:
@@ -375,23 +388,29 @@ class EdupageService:
         ]
 
     def personal(self, day: date) -> list[dict]:
-        """按向导选课结果过滤出的个人课表(当天).
+        """按选课结果过滤出的个人课表(当天) —— 对所有账号一视同仁.
 
-        带磁盘缓存(2 小时): 整周缓存缺这一天时 master_plan 要回退单日拉取,
-        Edupage 高峰期可达 1 分钟以上 —— 缓存让重启/当天重复访问零等待。
-        文件名带选课哈希, 改选课后自动失效。
+        通用三层规则(没有任何账号特判, 全部由 Edupage 课卡数据驱动):
+        ① 选课命中(科目族+组号+老师) → 显示;
+        ② 课卡无教学组 = 全班必修(班会/国家课程这类 Edupage 不打组的课) → 显示;
+        ③ 无组也不命中选课时: 该科目族在当天只有**一个**教学组(或该时段
+           该族只有一组, 没有并行可选) = 全班一起上的课 → 自动显示。
+           多组并行的课(真正的选修/走班)才需要学生选课。
+
+        带磁盘缓存(2 小时, v6 文件名带班级 id + 选课哈希 —— 课卡按登录
+        账号可见, 缓存绝不能跨账号共用)。
         """
         import hashlib
+        from collections import defaultdict
 
         selected = self.cfg.selected_lessons or []
-        if not selected:
-            raise PingheError("还没有选课: 请在向导或设置里选择自己的课")
-
         sel_key = hashlib.sha1(
             json.dumps(selected, sort_keys=True).encode("utf-8")
         ).hexdigest()[:8]
+        cid = self.my_class_id()
         cache_dir = paths.data_dir()
-        cache_file = cache_dir / f"edupage_personal_v5_{day.isoformat()}_{sel_key}.json"
+        cache_file = (cache_dir /
+                      f"edupage_personal_v6_{day.isoformat()}_{cid or 'all'}_{sel_key}.json")
         if cache_file.exists():
             age = _time.time() - cache_file.stat().st_mtime
             if age < 2 * 3600:
@@ -400,15 +419,26 @@ class EdupageService:
                 except Exception:  # noqa: BLE001
                     pass  # 缓存损坏则重新计算
 
-        # 按"教学组"匹配, 分两类课卡(通用规则, 不针对任何账号):
-        # - 无组课卡 = 全班必修课(班会/语文/体育这类 Edupage 不打组的课),
-        #   不需要选, 一律进课表 —— 否则像班会这种"没人会去勾"的课会消失;
-        # - 有组课卡 = 走班/选修, 按选课(科目族, 组号, 老师)解析。
-        #   课名会换(History HL/SL2 ↔ History HL2), 所以科目用 family 比对;
-        #   老师做宽松匹配(选课老师 ∈ 课卡老师, CS 组P 一周轮换两位老师);
-        #   兼容旧选课: 无 group = 该组维度不筛(如 TOK 全部组), 无 teacher 同理。
-        # 课程来源上先过一遍本班过滤(见 _for_my_class)。
-        # 选课去重(同一门课勾了两次只会显示一遍)
+        # 第一遍: 收集本班课卡(课程来源过滤见 _for_my_class)
+        cards = []
+        for l in self.master_plan(day):
+            if not self._for_my_class(l):
+                continue
+            subject = (l.subject.name if l.subject else "").strip()
+            cards.append({
+                "lesson": l,
+                "subject": subject,
+                "family": subject_family(subject),
+                "start": l.start_time.strftime("%H:%M") if l.start_time else "",
+                "end": l.end_time.strftime("%H:%M") if l.end_time else "",
+                "group": ",".join(l.groups) if l.groups else "",
+                "teachers": {t.name.strip() for t in (l.teachers or [])},
+            })
+        if not cards:
+            return []
+
+        # 选课去重(同一门课勾了两次只算一遍); 兼容旧选课:
+        # 空 group/teacher = 该维度不筛。老师宽松匹配(选课老师 ∈ 课卡老师)。
         seen_sel = set()
         uniq = []
         for s in selected:
@@ -418,29 +448,46 @@ class EdupageService:
             if k not in seen_sel:
                 seen_sel.add(k)
                 uniq.append(k)
+
+        # 通用规则③的普查: 每个 (科目族) / (科目族, 时段) 的教学组集合
+        fam_groups: dict[str, set] = defaultdict(set)
+        slot_groups: dict[tuple[str, str], set] = defaultdict(set)
+        for c in cards:
+            for g in c["group"].split(","):
+                g = g.strip()
+                if g:
+                    fam_groups[c["family"]].add(g)
+                    slot_groups[(c["family"], c["start"])].add(g)
+
+        def auto_include(c: dict) -> bool:
+            """规则③: 没得选的课自动显示(单组 = 全班一起上)."""
+            groups = {g for g in c["group"].split(",") if g.strip()}
+            if groups and len(fam_groups.get(c["family"]) or set()) == 1:
+                return True
+            if groups and len(slot_groups.get((c["family"], c["start"])) or set()) == 1:
+                return True
+            return False
+
         out = []
-        for l in self.master_plan(day):
-            if not self._for_my_class(l):
+        for c in cards:
+            matched = any(
+                c["family"] == fam
+                and (not w_teacher or w_teacher in c["teachers"])
+                and (not w_group or w_group in
+                     {g.strip() for g in c["group"].split(",") if g.strip()})
+                for fam, w_teacher, w_group in uniq
+            )
+            no_group = not c["group"]
+            if not (matched or no_group or auto_include(c)):
                 continue
-            subject = (l.subject.name if l.subject else "").strip()
-            card_teachers = {t.name.strip() for t in (l.teachers or [])}
-            group = ",".join(l.groups) if l.groups else ""
-            card_groups = [g.strip() for g in group.split(",") if g.strip()]
-            if card_groups:  # 有组 → 必须命中选课之一
-                if not any(
-                    fam == subject_family(subject)
-                    and (not w_teacher or w_teacher in card_teachers)
-                    and (not w_group or w_group in card_groups)
-                    for fam, w_teacher, w_group in uniq
-                ):
-                    continue
+            l = c["lesson"]
             out.append({
-                "start": l.start_time.strftime("%H:%M") if l.start_time else "",
-                "end": l.end_time.strftime("%H:%M") if l.end_time else "",
-                "subject": subject,
+                "start": c["start"],
+                "end": c["end"],
+                "subject": c["subject"],
                 "teacher": l.teachers[0].name.strip() if l.teachers else "",
                 "room": l.classrooms[0].name if l.classrooms else "",
-                "group": group,
+                "group": c["group"],
                 "cancelled": bool(l.is_cancelled),
                 "curriculum": getattr(l, "curriculum", None) or "",
             })
@@ -448,17 +495,12 @@ class EdupageService:
         try:
             cache_dir.mkdir(parents=True, exist_ok=True)
             cache_file.write_text(json.dumps(out, ensure_ascii=False), encoding="utf-8")
-            for old in cache_dir.glob("edupage_personal_2*.json"):
-                old.unlink(missing_ok=True)   # 旧版缓存(截断数据)直接清理
-            for old in cache_dir.glob("edupage_personal_v2_*.json"):
-                old.unlink(missing_ok=True)   # v2(未按班级过滤)整批作废
-            for old in cache_dir.glob("edupage_personal_v3_*.json"):
-                old.unlink(missing_ok=True)   # v3(课名精确匹配, 会丢换名卡)作废
-            for old in cache_dir.glob("edupage_personal_v4_*.json"):
-                old.unlink(missing_ok=True)   # v4(无全班必修规则, 缺班会等)作废
-            for old in cache_dir.glob(f"edupage_personal_v5_{day.isoformat()}_*.json"):
-                if old != cache_file:
-                    old.unlink(missing_ok=True)
+            for pattern in ("edupage_personal_2*.json", "edupage_personal_v2_*.json",
+                            "edupage_personal_v3_*.json", "edupage_personal_v4_*.json",
+                            "edupage_personal_v5_*.json"):
+                for old in cache_dir.glob(pattern):
+                    if old != cache_file:
+                        old.unlink(missing_ok=True)
         except Exception:  # noqa: BLE001
             pass
         return out
