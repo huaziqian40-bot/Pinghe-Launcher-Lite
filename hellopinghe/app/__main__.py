@@ -1,4 +1,4 @@
-"""Hello! Pinghe launcher 桌面应用入口: python -m hellopinghe.app [--smoke]"""
+"""Hello Pinghe! Launcher 桌面应用入口: python -m hellopinghe.app [--smoke]"""
 from __future__ import annotations
 
 import sys
@@ -37,7 +37,7 @@ def main() -> None:
     smoke = "--smoke" in sys.argv
     api = Api()
     window = webview.create_window(
-        "Hello! Pinghe launcher",
+        "Hello Pinghe! Launcher",
         str(_UI_DIR / "index.html"),
         js_api=api,
         width=1340,

@@ -50,7 +50,7 @@ def _system_prompt(cfg: Config, workspace: str | None) -> str:
     subjects = "、".join(s["subject"] for s in (cfg.selected_lessons or [])) or "(未选课)"
     mode = _mode_of(cfg)
     lines = [
-        "你是 Hello! Pinghe 学习助手, 运行在学生自己的电脑上.",
+        "你是 Hello Pinghe! 学习助手, 运行在学生自己的电脑上.",
         f"当前时间: {_now_str()}.",
         f"学生已选科目: {subjects}.",
         f"工作目录(workspace): {workspace or '(未设置)'}",

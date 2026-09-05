@@ -1,4 +1,4 @@
-# Hello! Pinghe launcher — 项目交接文档
+# Hello Pinghe! Launcher — 项目交接文档
 
 > 写给接手的新 agent。这里包含项目的全部背景、架构、踩过的坑和当前状态。
 > 读完后你应该能独立继续开发和维护这个项目。
@@ -7,7 +7,7 @@
 
 ## 一、项目是什么
 
-**Hello! Pinghe launcher**(原名 SchoolHub)是给上海平和学校学生用的本地学习助手:
+**Hello Pinghe! Launcher**(原名 SchoolHub)是给上海平和学校学生用的本地学习助手:
 
 - **数据源**:Edupage(课表/考勤)、ManageBac(IB 课程作业/成绩/DDL)、网易企业邮箱(邮件/通讯录)
 - **核心卖点**:本地运行、数据不出机器;AI 助手可以查课表/DDL/邮件/联系人、起草 Word 作业、代发邮件、代交作业(全部要用户确认)

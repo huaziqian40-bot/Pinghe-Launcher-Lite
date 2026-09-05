@@ -107,8 +107,8 @@ def main():
     stamp = time.strftime("%Y%m%d")
     dmg = f"HelloPingheLauncher-mac-{stamp}.dmg"
     sh(ssh, f"cd {REMOTE_DIR}/src/dist && rm -f {dmg} && "
-            f"hdiutil create -volname 'Hello Pinghe Launcher' -srcfolder "
-            f"'Hello Pinghe Launcher.app' -ov -format UDZO {dmg} | tail -2")
+            f"hdiutil create -volname 'Hello Pinghe! Launcher' -srcfolder "
+            f"'Hello Pinghe! Launcher.app' -ov -format UDZO {dmg} | tail -2")
 
     print("[8/8] 拉回 DMG …")
     deliver = os.path.join(HERE, "deliver")

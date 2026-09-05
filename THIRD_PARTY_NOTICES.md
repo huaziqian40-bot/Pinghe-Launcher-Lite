@@ -1,6 +1,6 @@
 # 第三方组件与致谢(Third-Party Notices)
 
-本项目(Hello! Pinghe launcher)以 **GPL-3.0-or-later** 发布。
+本项目(Hello Pinghe! Launcher)以 **GPL-3.0-or-later** 发布。
 本文件列出项目引用/使用的开源组件及其许可证, 感谢这些项目的作者。
 
 ## 直接依赖(运行时)
