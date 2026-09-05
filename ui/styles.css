@@ -361,7 +361,8 @@ input[type="range"]{accent-color:var(--green-800);flex:1;min-width:160px;max-wid
 #view-settings .card{margin-bottom:14px}
 
 /* ---------- 向导 ---------- */
-.overlay{position:fixed;inset:0;background:rgba(16,45,37,.55);backdrop-filter:blur(4px);
+.overlay{position:fixed;inset:0;background:rgba(16,45,37,.55);
+  -webkit-backdrop-filter:blur(4px);backdrop-filter:blur(4px);
   display:flex;align-items:center;justify-content:center;z-index:50}
 .wizard{width:min(680px, calc(94vw / var(--ap-zoom,1)));max-height:calc(84vh / var(--ap-zoom,1));overflow:auto;background:var(--ivory-50)}
 .wizard-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:12px}

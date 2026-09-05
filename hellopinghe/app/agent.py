@@ -624,60 +624,83 @@ class AgentEngine:
 
 
 def detect_ai_environment() -> dict:
-    """粗略检测硬件, 给出 Ollama 模型或 API 建议."""
+    """粗略检测硬件, 给出 Ollama 模型或 API 建议. (Windows/macOS/Linux 兼容)"""
     import os
     import platform
 
+    system = platform.system()
     ram_gb = 0.0
     gpu = ""
-    try:
-        import ctypes
+    if system == "Windows":
+        try:
+            import ctypes
 
 
-        class MEMORYSTATUSEX(ctypes.Structure):
-            _fields_ = [
-                ("dwLength", ctypes.c_ulong),
-                ("dwMemoryLoad", ctypes.c_ulong),
-                ("ullTotalPhys", ctypes.c_ulonglong),
-                ("ullAvailPhys", ctypes.c_ulonglong),
-                ("ullTotalPageFile", ctypes.c_ulonglong),
-                ("ullAvailPageFile", ctypes.c_ulonglong),
-                ("ullTotalVirtual", ctypes.c_ulonglong),
-                ("ullAvailVirtual", ctypes.c_ulonglong),
-                ("ullAvailExtendedVirtual", ctypes.c_ulonglong),
+            class MEMORYSTATUSEX(ctypes.Structure):
+                _fields_ = [
+                    ("dwLength", ctypes.c_ulong),
+                    ("dwMemoryLoad", ctypes.c_ulong),
+                    ("ullTotalPhys", ctypes.c_ulonglong),
+                    ("ullAvailPhys", ctypes.c_ulonglong),
+                    ("ullTotalPageFile", ctypes.c_ulonglong),
+                    ("ullAvailPageFile", ctypes.c_ulonglong),
+                    ("ullTotalVirtual", ctypes.c_ulonglong),
+                    ("ullAvailVirtual", ctypes.c_ulonglong),
+                    ("ullAvailExtendedVirtual", ctypes.c_ulonglong),
+                ]
+
+            stat = MEMORYSTATUSEX()
+            stat.dwLength = ctypes.sizeof(MEMORYSTATUSEX)
+            ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(stat))
+            ram_gb = stat.ullTotalPhys / (1024 ** 3)
+        except Exception:  # noqa: BLE001
+            pass
+    else:
+        try:
+            # POSIX(macOS/Linux): 页大小 × 物理页数
+            page = os.sysconf("SC_PAGE_SIZE")
+            phys = os.sysconf("SC_PHYS_PAGES")
+            ram_gb = page * phys / (1024 ** 3)
+        except Exception:  # noqa: BLE001
+            pass
+    if system == "Windows":
+        try:
+            import subprocess
+
+            out = subprocess.run(
+                ["wmic", "path", "win32_VideoController", "get", "name"],
+                capture_output=True, text=True, timeout=10,
+            ).stdout
+            candidates = [
+                line.strip() for line in out.splitlines()
+                if line.strip() and "VideoController" not in line and "Name" not in line
             ]
+            # 优先真实显卡, 过滤虚拟显示适配器(OrayIdd/向日葵 等)
+            def rank(name: str) -> int:
+                upper = name.upper()
+                if any(k in upper for k in ("NVIDIA", "GEFORCE", "RADEON", "AMD")):
+                    return 0
+                if "INTEL" in upper and "IDD" not in upper and "VIRTUAL" not in upper:
+                    return 1
+                if "IDD" in upper or "VIRTUAL" in upper or "MIRROR" in upper:
+                    return 9
+                return 5
+            if candidates:
+                gpu = sorted(candidates, key=rank)[0]
+        except Exception:  # noqa: BLE001
+            pass
+    elif system == "Darwin":
+        try:
+            import subprocess
 
-        stat = MEMORYSTATUSEX()
-        stat.dwLength = ctypes.sizeof(MEMORYSTATUSEX)
-        ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(stat))
-        ram_gb = stat.ullTotalPhys / (1024 ** 3)
-    except Exception:  # noqa: BLE001
-        pass
-    try:
-        import subprocess
-
-        out = subprocess.run(
-            ["wmic", "path", "win32_VideoController", "get", "name"],
-            capture_output=True, text=True, timeout=10,
-        ).stdout
-        candidates = [
-            line.strip() for line in out.splitlines()
-            if line.strip() and "VideoController" not in line and "Name" not in line
-        ]
-        # 优先真实显卡, 过滤虚拟显示适配器(OrayIdd/向日葵 等)
-        def rank(name: str) -> int:
-            upper = name.upper()
-            if any(k in upper for k in ("NVIDIA", "GEFORCE", "RADEON", "AMD")):
-                return 0
-            if "INTEL" in upper and "IDD" not in upper and "VIRTUAL" not in upper:
-                return 1
-            if "IDD" in upper or "VIRTUAL" in upper or "MIRROR" in upper:
-                return 9
-            return 5
-        if candidates:
-            gpu = sorted(candidates, key=rank)[0]
-    except Exception:  # noqa: BLE001
-        pass
+            out = subprocess.run(
+                ["system_profiler", "SPDisplaysDataType"],
+                capture_output=True, text=True, timeout=15,
+            ).stdout
+            m = re.search(r"Chipset Model:\s*(.+)", out)
+            gpu = m.group(1).strip() if m else ""
+        except Exception:  # noqa: BLE001
+            pass
 
     has_nvidia = "NVIDIA" in (gpu or "").upper()
     if ram_gb >= 16 or has_nvidia:

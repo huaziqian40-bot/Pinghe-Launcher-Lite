@@ -844,12 +844,21 @@ class Api:
 
     def agent_open_explorer(self) -> dict:
         def job():
-            import os
+            import platform
+            import subprocess
 
             root = self.agent.workspace_root()
             if root is None:
                 raise PingheError("未设置 workspace")
-            os.startfile(str(root))  # noqa: S606
+            system = platform.system()
+            if system == "Windows":
+                import os
+
+                os.startfile(str(root))  # noqa: S606
+            elif system == "Darwin":
+                subprocess.Popen(["open", str(root)])
+            else:
+                subprocess.Popen(["xdg-open", str(root)])
             return {"opened": str(root)}
         return _wrap(job)
 
