@@ -9,6 +9,7 @@
 """
 from __future__ import annotations
 
+import json
 import re
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
@@ -275,3 +276,139 @@ def extract_overall_grade(units_html: str) -> str | None:
         return None
     grade = parts[1].replace("(", "").replace(")", "").strip()
     return grade or None
+
+
+def _txt(el, limit: int = 200) -> str:
+    return re.sub(r"\s+", " ", el.get_text(" ", strip=True)).strip()[:limit]
+
+
+def extract_files(files_html: str) -> list[dict]:
+    """课程 Files 页: div.row.file, 下载链接在 data-ec3-info JSON 里
+    (S3 预签名 URL, 约 36 分钟有效, 因此列表不能缓存太久)."""
+    soup = BeautifulSoup(files_html, "html.parser")
+    out = []
+    for row in soup.select("div.row.file"):
+        info = {}
+        raw = row.get("data-ec3-info")
+        if raw:
+            try:
+                info = json.loads(raw)
+            except Exception:  # noqa: BLE001
+                info = {}
+        name = (info.get("name") or "").strip() or _txt(row, 120)
+        out.append({
+            "name": name,
+            "url": info.get("download_url") or "",
+            "meta": _txt(row, 160),
+        })
+    return out
+
+
+def extract_task_detail(task_html: str) -> dict:
+    """任务详情页(.core-task-show): 头部卡(标题/类别/状态/截止/分数)
+    + Dropbox 状态 + 正文(头部卡之后、Dropbox 段之前的文本)."""
+    soup = BeautifulSoup(task_html, "html.parser")
+    show = soup.select_one(".core-task-show")
+    out: dict = {"title": "", "category": None, "kind": None, "status": None,
+                 "due_badge": "", "past_due": False, "due_text": "",
+                 "score": "", "dropbox": "", "description": ""}
+    if show is None:
+        return out
+    head = show.select_one(".fusion-card-item")
+    if head is not None:
+        # 详情页的标题不是链接(.h4.title 直接着文本); 列表页才是 a 链接
+        title_el = head.select_one(".h4.title")
+        link = head.select_one(".h4.title a")
+        if link is not None:
+            out["title"] = link.get_text(strip=True)
+        elif title_el is not None:
+            out["title"] = _txt(title_el, 120)
+        else:
+            out["title"] = _txt(head, 80)
+        badge = head.select_one(".date-badge")
+        if badge is not None:
+            out["due_badge"] = _txt(badge, 40)
+            out["past_due"] = "past-due" in (badge.get("class") or [])
+        labels = [_txt(el, 30) for el in head.select(".labels-set div.label")]
+        out["category"] = next(
+            (t for t in labels if t.lower() in ("formative", "summative")), None)
+        out["kind"] = next(
+            (t for t in labels if t.lower() not in ("formative", "summative")), None)
+        st = head.select_one(".badge .badge-label")
+        out["status"] = st.get_text(strip=True) if st is not None else None
+        due = head.select_one(".due-date")
+        out["due_text"] = _txt(due, 60) if due is not None else ""
+        score = head.select_one(".assessment")
+        score_txt = _txt(score, 60) if score is not None else ""
+        m = re.search(r"\d+\s*/\s*\d+\s*pts", score_txt, re.I)
+        out["score"] = m.group(0) if m else score_txt
+    # 正文: 头部卡之后逐个子块收集, 碰到 Dropbox 段(f-title header)就停
+    parts: list[str] = []
+    for ch in show.children:
+        if getattr(ch, "name", None) is None:
+            continue
+        if ch is head or ch.name == "hr":
+            continue
+        cls = " ".join(ch.get("class") or [])
+        if "f-title" in cls or "recent-discussions" in cls:
+            break
+        txt = _txt(ch, 4000)
+        if txt:
+            parts.append(txt)
+    out["description"] = "\n".join(parts)[:4000]
+    drop = show.select_one("div.mb-6")
+    if drop is not None:
+        out["dropbox"] = _txt(drop, 120)
+    return out
+
+
+def extract_units_tab(units_html: str) -> dict:
+    """Units 页的 Weekly Planner 列表(不少课是空的)."""
+    soup = BeautifulSoup(units_html, "html.parser")
+    tab = soup.select_one(".units-list-tab") or soup.select_one(".units-tabs")
+    text = _txt(tab, 3000) if tab is not None else ""
+    empty = (not text) or ("No records" in text) or ("No Current Units" in text)
+    return {"text": "" if empty else text, "empty": empty}
+
+
+def extract_core_digest(page_html: str,
+                        focus: list[tuple[str, str]] | None = None) -> dict:
+    """通用页面摘要(CAS worksheet / EE 项目页): 优先按 focus 的定向选择器
+    [(css, 标题)] 提取内容块, 没给 focus 或全空时退回 h2/h3 通用分段。
+    去掉导航/页脚/cookie 弹窗等噪音。"""
+    soup = BeautifulSoup(page_html, "html.parser")
+    for sel in ("script", "style", "nav", "footer", "aside",
+                ".f-cookie-consent-modal", ".f-menu", ".sidebar-items-list",
+                "#f-menu", ".f-topbar", ".alert-content"):
+        for el in soup.select(sel):
+            el.decompose()
+    sections: list[dict] = []
+    for sel, label in (focus or []):
+        els = soup.select(sel)[:4]
+        for i, el in enumerate(els):
+            t = _txt(el, 1200)
+            if t:
+                sections.append(
+                    {"h": label if len(els) == 1 else f"{label} {i + 1}", "text": t})
+    if not sections:
+        seen: set[str] = set()
+        for h2 in soup.find_all(["h2", "h3"]):
+            head = _txt(h2, 80)
+            if not head or head in seen:
+                continue
+            parts: list[str] = []
+            for sib in h2.find_next_siblings():
+                if sib.name in ("h2", "h3"):
+                    break
+                txt = _txt(sib, 800)
+                if txt and txt not in parts:
+                    parts.append(txt)
+            body = "\n".join(parts)[:1200]
+            seen.add(head)
+            if body:
+                sections.append({"h": head, "text": body})
+    h1 = soup.find("h1")
+    return {
+        "title": _txt(h1, 100) if h1 is not None else "",
+        "sections": sections[:10],
+    }

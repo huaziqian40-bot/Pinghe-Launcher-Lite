@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import json
+import re
 import threading
 import time as _time
 import uuid
@@ -495,10 +496,14 @@ class Api:
                 rank.get(f'{t["title"]}|{t["due_at"] or ""}', len(rank)),
                 t["due_at"] or "",
             ))
-            # 按用户拖拽保存的顺序排课程, 未出现的课程追加在后
+            # 按用户拖拽保存的顺序排课程, 未出现的课程追加在后;
+            # 总评直接并进行里(课程列表一行 = 课程名 + 总评徽章)
             order = list(self.cfg.course_class_order)
             rank = {cid: i for i, cid in enumerate(order)}
-            class_list = [{"id": k, "name": v} for k, v in classes.items()]
+            class_list = [
+                {"id": k, "name": v, "grade": grades.get(v)}
+                for k, v in classes.items()
+            ]
             class_list.sort(
                 key=lambda c: (rank.get(c["id"], len(order)), c["name"]))
             out = {
@@ -570,6 +575,82 @@ class Api:
         def job():
             tasks = self.svc.courses.all_tasks()
             return {"tasks": [t for t in tasks if t["class_id"] == str(class_id)]}
+        return _wrap(job)
+
+    # ------------------- 课程详情页 / 任务详情 / CAS·EE -------------------
+    def course_files(self, class_id: str) -> dict:
+        def job():
+            key = f"cfiles|{class_id}"
+            cached = _snap_get(key, 300)   # 下载链接是短时效预签名, 别缓存太久
+            if cached is not None:
+                return cached
+            out = {"files": self.svc.courses.class_files(class_id)}
+            _snap_put(key, out)
+            return out
+        return _wrap(job)
+
+    def course_events(self, class_id: str) -> dict:
+        def job():
+            key = f"cevents|{class_id}"
+            cached = _snap_get(key, 300)
+            if cached is not None:
+                return cached
+            out = {"events": self.svc.courses.class_events(class_id)}
+            _snap_put(key, out)
+            return out
+        return _wrap(job)
+
+    def course_units(self, class_id: str) -> dict:
+        def job():
+            key = f"cunits|{class_id}"
+            cached = _snap_get(key, 600)
+            if cached is not None:
+                return cached
+            out = self.svc.courses.class_units(class_id)
+            _snap_put(key, out)
+            return out
+        return _wrap(job)
+
+    def task_detail(self, class_id: str, task_id: str) -> dict:
+        def job():
+            key = f"tdetail|{class_id}|{task_id}"
+            cached = _snap_get(key, 300)
+            if cached is not None:
+                return cached
+            out = self.svc.courses.task_detail(class_id, task_id)
+            _snap_put(key, out)
+            return out
+        return _wrap(job)
+
+    def cas_overview(self) -> dict:
+        def job():
+            cached = _snap_get("cas", 600)
+            if cached is not None:
+                return cached
+            out = self.svc.courses.cas_overview()
+            _snap_put("cas", out)
+            return out
+        return _wrap(job)
+
+    def ee_overview(self) -> dict:
+        def job():
+            cached = _snap_get("ee", 600)
+            if cached is not None:
+                return cached
+            out = self.svc.courses.ee_overview()
+            _snap_put("ee", out)
+            return out
+        return _wrap(job)
+
+    def open_external(self, url: str) -> dict:
+        """用系统默认浏览器打开 ManageBac 页面/文件下载链接(只放行 http/https)."""
+        def job():
+            import webbrowser
+
+            if not re.match(r"^https?://", str(url or "")):
+                raise ValueError("只允许打开 http(s) 链接")
+            webbrowser.open(str(url))
+            return {"opened": str(url)}
         return _wrap(job)
 
     def refresh_tasks(self) -> dict:

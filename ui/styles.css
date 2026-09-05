@@ -103,6 +103,29 @@ a{color:var(--green-700)}
   line-height:11px;padding:0 3px;cursor:pointer;opacity:.65;border-radius:3px}
 .move-btn:hover{opacity:1;color:var(--green-800);background:var(--green-50);transform:none}
 
+/* ---------- 课程列表(课程+总评合并)与课程详情弹卡 ---------- */
+.course-row{cursor:pointer}
+.course-row:hover{border-color:var(--green-700);transform:translateY(-1px)}
+.course-row .co-name{font-weight:650}
+.course-row .co-name small{display:block;font-weight:400;color:var(--ink-3);font-size:12px}
+.core-row{border-left:3px solid var(--gold-500);cursor:pointer}
+.core-row:hover{border-color:var(--gold-600);transform:translateY(-1px)}
+.tabbar{display:flex;gap:6px;margin-bottom:10px;border-bottom:1px solid var(--border);
+  padding-bottom:8px}
+.tabbtn{background:transparent;color:var(--ink-2);padding:5px 12px;border-radius:99px}
+.tabbtn.on{background:var(--green-800);color:var(--white)}
+.tabbtn:hover{transform:none}
+.cd-card{width:min(760px,94vw);height:86vh}
+.cd-head-right{display:flex;gap:8px;align-items:center}
+.cd-body{flex:1;min-height:0;overflow:auto}
+.cd-body .item{cursor:default}
+.cd-body .item.clickable{cursor:pointer}
+.file-row .dim{word-break:break-all}
+.td-desc{white-space:pre-wrap;font-size:13px;line-height:1.65;color:var(--ink-2);
+  background:var(--ivory-100);border-radius:8px;padding:10px 12px;margin-top:8px;
+  max-height:300px;overflow:auto}
+.td-desc:empty{display:none}
+
 /* ---------- 按钮 ---------- */
 .primary{background:var(--green-800);color:var(--white);padding:8px 16px}
 .primary:hover{background:var(--green-700)}

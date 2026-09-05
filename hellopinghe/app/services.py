@@ -1171,6 +1171,31 @@ class CoursesService:
         self._grades_cache = (now, grades)
         return grades
 
+    # ---------- 课程详情页(Files/Calendar/Units/任务详情)与 CAS/EE ----------
+    def class_files(self, class_id: str) -> list[dict]:
+        self.ensure_login()
+        return self._client_ready().get_class_files(class_id)
+
+    def class_events(self, class_id: str) -> list:
+        self.ensure_login()
+        return self._client_ready().get_class_events(class_id)
+
+    def class_units(self, class_id: str) -> dict:
+        self.ensure_login()
+        return self._client_ready().get_class_units(class_id)
+
+    def task_detail(self, class_id: str, task_id: str) -> dict:
+        self.ensure_login()
+        return self._client_ready().get_task_detail(class_id, task_id)
+
+    def cas_overview(self) -> dict:
+        self.ensure_login()
+        return self._client_ready().get_cas_overview()
+
+    def ee_overview(self) -> dict:
+        self.ensure_login()
+        return self._client_ready().get_ee_overview()
+
     def submit_task(self, class_id: str, task_id: str, file_path: str) -> str:
         """交作业: 从任务页动态解析提交入口再 multipart 上传.
 

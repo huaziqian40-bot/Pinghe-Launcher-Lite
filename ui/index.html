@@ -104,16 +104,15 @@
     <!-- ================= 我的课程 ================= -->
     <section class="view" id="view-courses">
       <div class="row-tools">
-        <span id="co-chips" class="chip-wrap"></span>
+        <b>课程列表</b><span class="muted small">含各科总评 · 点课程看详情 · ▲▼ 调顺序</span>
         <span class="flex1"></span>
         <button class="ghost" id="co-refresh">↻ 同步 ManageBac</button>
       </div>
-      <div class="grid-2">
-        <div class="card"><div class="card-title">未截止的作业 / 考试</div><div id="co-tasks" class="list"></div></div>
-        <div class="card">
-          <div class="card-title">各科总评</div><div id="co-grades" class="list"></div>
-          <div class="footnote">更多成绩单与详细信息请访问 <a href="#" id="co-link">ManageBac</a> ↗</div>
-        </div>
+      <div class="card"><div id="co-classes" class="list"><div class="empty">加载中…</div></div></div>
+      <div class="card">
+        <div class="card-title">未截止的作业 / 考试</div>
+        <div id="co-tasks" class="list"></div>
+        <div class="footnote">点作业看详情 · ▲▼ 调顺序 · 左滑移除(可在设置恢复) · 更多请访问 <a href="#" id="co-link">ManageBac</a> ↗</div>
       </div>
     </section>
 
@@ -391,6 +390,66 @@
   <button id="tt-menu-add">📅 添加到日程</button>
   <button id="tt-menu-hl">★ 高亮这节课</button>
   <button id="tt-menu-gray">变灰(弱化显示)</button>
+</div>
+
+<!-- ================= 课程详情弹卡(仿 ManageBac: 作业/单元/文件/日历) ================= -->
+<div id="cd-modal" class="overlay hidden">
+  <div class="mail-card cd-card">
+    <div class="wizard-head">
+      <b id="cd-title">课程</b>
+      <span class="cd-head-right">
+        <span class="badge" id="cd-grade"></span>
+        <button class="ghost" id="cd-open-mb">在 ManageBac 打开 ↗</button>
+        <button class="ghost" id="cd-close">✕</button>
+      </span>
+    </div>
+    <div class="tabbar">
+      <button class="tabbtn on" data-tab="tasks">📝 作业</button>
+      <button class="tabbtn" data-tab="units">📚 单元</button>
+      <button class="tabbtn" data-tab="files">📁 文件</button>
+      <button class="tabbtn" data-tab="events">📅 日历</button>
+    </div>
+    <div id="cd-body" class="cd-body list"><div class="empty">加载中…</div></div>
+  </div>
+</div>
+
+<!-- ================= 作业/考试详情弹卡 ================= -->
+<div id="td-modal" class="overlay hidden">
+  <div class="mail-card tt-card">
+    <div class="wizard-head">
+      <b id="td-title">作业</b>
+      <button class="ghost" id="td-close">✕</button>
+    </div>
+    <div class="ttm-meta">
+      <span class="badge" id="td-category"></span>
+      <span class="badge" id="td-kind"></span>
+      <span class="badge" id="td-status"></span>
+    </div>
+    <div class="item"><span class="dim" style="width:52px">课程</span><span class="grow" id="td-course"></span></div>
+    <div class="item"><span class="dim" style="width:52px">截止</span><span class="grow" id="td-due"></span></div>
+    <div class="item hidden" id="td-score-row"><span class="dim" style="width:52px">分数</span><span class="grow" id="td-score"></span></div>
+    <div class="item hidden" id="td-dropbox-row"><span class="dim" style="width:52px">提交</span><span class="grow" id="td-dropbox"></span></div>
+    <div id="td-desc" class="td-desc"></div>
+    <div class="wizard-foot">
+      <button class="ghost" id="td-open-mb">在 ManageBac 打开 ↗</button>
+      <button class="ghost" id="td-close2">关闭</button>
+    </div>
+  </div>
+</div>
+
+<!-- ================= CAS / EE 弹卡 ================= -->
+<div id="core-modal" class="overlay hidden">
+  <div class="mail-card cd-card">
+    <div class="wizard-head">
+      <b id="core-title">IB Core</b>
+      <button class="ghost" id="core-close">✕</button>
+    </div>
+    <div id="core-body" class="cd-body list"><div class="empty">加载中…</div></div>
+    <div class="wizard-foot">
+      <button class="ghost" id="core-open-mb">在 ManageBac 打开 ↗</button>
+      <button class="ghost" id="core-close2">关闭</button>
+    </div>
+  </div>
 </div>
 
 <!-- ================= 通讯录: 查看 / 增删改联系人 ================= -->

@@ -147,6 +147,32 @@ Edupage / ManageBac / 网易IMAP·SMTP / SQLite / keyring / 文件系统
 - 探测脚本 `_probe_dropbox.py` / `_probe_locate.py`(gitignored)是只读的
   (绝不 POST/不真实提交), 学校改版时可重跑看新路由。
 
+### ManageBac 课程详情页 / CAS·EE(2026-09-05 只读探测实测定论)
+
+- **课程子页签**: `/student/classes/<cid>/` 下有 calendar / class_stream /
+  core_tasks / discussions / files / internal-assignments / students / units。
+  App 的课程详情弹卡实现了 作业(course_tasks) / 单元(units, 大多课为空,
+  `.units-list-tab` 含 "No records" 即空) / 文件 / 日历, 其余页签靠
+  "在 ManageBac 打开" 按钮跳网页。
+- **Files**: 文件行 `div.row.file`, 下载链接在其 `data-ec3-info` JSON 的
+  `download_url`(S3 预签名, ~36 分钟有效) → 快照缓存只能 300s。
+- **Calendar**: `/student/classes/<cid>/events.json` 直接给 JSON(很多班为空)。
+- **任务详情页**: `.core-task-show` 里 头部卡(.fusion-card-item: 标题在
+  `.h4.title` 但**不是链接**/labels/status/.due-date/.assessment 分数) +
+  正文(头部卡之后、Dropbox 段之前) + Dropbox 段(div.mb-6) + 讨论
+  (.recent-discussions)。分数用 `数字/数字 pts` 正则抠。
+- **CAS**: `/student/ib/activity/cas`(IB 活动页族: overview/cas/documents/
+  notes/files/members)。内容极少时只有 `.aims-and-goals`(提示 Add) +
+  `.statuses-legend` 状态图例。
+- **EE**: 没有独立 /student/ee 路由, 本校挂在 `/student/ib/pbl/778`
+  (页面 title "Extended Essay"; 另有 pbl/2150 标题 "EE")。内容在
+  `.pbl-worksheet`(Proposal/Deadlines) + `.js-core-project-documents`。
+- 解析器: `parse.py::extract_files/extract_task_detail/extract_units_tab/
+  extract_core_digest(focus=定向选择器)`; bridge 缓存键
+  `cfiles|cid`(300s)/`cevents|cid`(300s)/`cunits|cid`(600s)/
+  `tdetail|cid|tid`(300s)/`cas`/`ee`(600s); `open_external(url)` 只放行
+  http(s) 并用系统浏览器打开。
+
 ### 构建陷阱
 
 - **WiX light 千万不要加 `-ext WixUIExtension`** — 它内嵌的 en-US .wxl 会把数据库代码页强制回 1252,中文内容直接 LGHT0311 失败(即使 Product/@Codepage="936")
@@ -218,6 +244,10 @@ Edupage / ManageBac / 网易IMAP·SMTP / SQLite / keyring / 文件系统
 ## 八、git 提交历史(最近)
 
 ```
+(本条 = 2026-09-05 第三轮) Courses view redesign: 课程列表=课程+总评合并行
+        (CAS/EE 固定最上, 旧 chips/各科总评取消), 课程详情弹卡(作业/单元/
+        文件/日历), 作业详情弹卡, CAS/EE 概览弹卡; parse 新增
+        files/task_detail/units/core_digest 解析器(全部真实页面验证)
 (本条 = 2026-09-05 第二轮 UI) UI: timetable now-line + logo-to-home + hero-duo
         (当前课+下一节并排小卡, next_lesson 跨天查找) + 课程chip与作业条目 ▲▼ 排序
 9c072e1→8369142 第一轮 UI 提交(其 HANDOFF.md 曾被 PowerShell Set-Content 以

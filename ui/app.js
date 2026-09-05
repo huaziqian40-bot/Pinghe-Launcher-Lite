@@ -109,7 +109,6 @@ const TITLES = {
 let currentView = "home";
 let ttOffset = 0;
 let mailMode = 0;
-let currentClassFilter = "";
 
 function show(view) {
   currentView = view;
@@ -165,6 +164,7 @@ function swipeableItemEl(className, innerHtml, onSwipe) {
     dragging = false;
     el.classList.remove("swiping");
     if (dx < -70) {
+      el._swipedAt = Date.now();
       try { await onSwipe(); } catch (e) { /* 静默 */ }
       el.style.transform = "translateX(-110%)";
       setTimeout(() => el.remove(), 160);
@@ -808,108 +808,93 @@ $("#gt-today").onclick = () => {
 $("#gt-filter").addEventListener("input", renderGradett);
 
 /* ================= 我的课程 ================= */
+/* 课程列表(课程 + 各科总评合并成一行): CAS/EE 两个 IB Core 入口固定在
+   最上面, 课程行 = ▲▼ + 课名 + 总评徽章, 点击行弹课程详情(作业/单元/
+   文件/日历), 点作业行弹作业详情。旧的墨绿色筛选 chips 已取消。 */
+let coData = null;   /* courses_data 引用(箭头排序后重渲染共用) */
+const CORE_ENTRIES = [
+  { key: "cas", icon: "🎨", name: "CAS 创意 · 行动 · 服务", sub: "IB Core · 不属于任何课程" },
+  { key: "ee", icon: "📄", name: "EE 拓展论文", sub: "IB Core · 不属于任何课程" },
+];
+const CORE_URLS = {
+  cas: "https://shph.managebac.cn/student/ib/activity/cas",
+  ee: "https://shph.managebac.cn/student/ib/pbl/778",
+};
+
 function renderCourses(d) {
-  const chips = [`<span class="chip ${!currentClassFilter ? "on" : ""}" data-cid="">全部</span>`]
-    .concat(d.classes.map((c) =>
-      `<span class="chip ${currentClassFilter === c.id ? "on" : ""}" data-cid="${c.id}" title="点击筛选 · 拖动或用箭头排序"><span>${esc(c.name.slice(0, 22))}</span><span class="chip-arrows"><button class="chip-arrow" data-move="up" title="上移">▲</button><button class="chip-arrow" data-move="down" title="下移">▼</button></span></span>`));
-  $("#co-chips").innerHTML = chips.join("");
-  bindChipDrag(d);
-  filterTasks(d);
-  $("#co-grades").innerHTML = Object.entries(d.grades || {}).map(
-    ([name, grade]) => `<div class="item"><span class="grow">${esc(name)}</span>
-      ${badge(grade || "未出分", grade ? "green" : "")}</div>`).join("") ||
-    `<div class="empty">暂无成绩数据</div>`;
+  coData = d;
+  const coreRows = CORE_ENTRIES.map((c) => `
+    <div class="item core-row" data-core="${c.key}">
+      <span class="grow"><span class="co-name">${c.icon} ${esc(c.name)}</span>
+      <small>${esc(c.sub)}</small></span>
+      <span class="dim">查看 ↗</span>
+    </div>`).join("");
+  const classRows = (d.classes || []).map((c) => `
+    <div class="item course-row" data-cid="${esc(c.id)}">
+      <span class="move-btns"><button class="move-btn" data-move="up" title="上移">▲</button><button class="move-btn" data-move="down" title="下移">▼</button></span>
+      <span class="grow"><span class="co-name">${esc(c.name)}</span>
+      <small>总评 ${c.grade ? esc(c.grade) : "未出分"} · 点击看课程详情</small></span>
+      ${badge(c.grade || "未出分", c.grade ? "green" : "")}
+    </div>`).join("");
+  $("#co-classes").innerHTML = coreRows + classRows;
+  bindCourseList(d);
+  renderCourseTasks(d);
   $("#co-link").href = "https://shph.managebac.cn/student";
 }
-/* 课程 chip 拖拽排序(指针事件版): 按住 chip 水平拖, 越过相邻 chip 中点
-   就互换; 轻点(位移<6px)= 筛选该课程。"全部"固定首位, 顺序存配置。 */
-function bindChipDrag(d) {
-  const wrap = $("#co-chips");
-  const allChips = () => $$("#co-chips .chip");
-  /* 拖拽与箭头共用的收尾: 按 DOM 顺序持久化 + 同步缓存 + 重绘任务列表 */
-  const saveChipOrder = () => {
-    const order = allChips().map((c) => c.dataset.cid).filter(Boolean);
-    d.classes.sort((a, b) => order.indexOf(a.id) - order.indexOf(b.id));
-    call("course_save_order", JSON.stringify(order)).catch(() => {});
-    Store.set("courses", d);   /* 本地缓存同步新顺序, 秒开不回跳旧序 */
-    filterTasks(d);
-  };
-  const neighbor = (chip, dir) => {
-    let el = dir > 0 ? chip.nextElementSibling : chip.previousElementSibling;
-    while (el && !el.dataset.cid) {
-      el = dir > 0 ? el.nextElementSibling : el.previousElementSibling;
-    }
-    return el;
-  };
-  /* "全部" chip: 只参与点击筛选, 不参与拖拽 */
-  const allBtn = wrap.querySelector('.chip[data-cid=""]');
-  if (allBtn) allBtn.onclick = () => {
-    currentClassFilter = "";
-    allChips().forEach((c) => c.classList.toggle("on", !c.dataset.cid));
-    filterTasks(d);
-  };
-  allChips().forEach((chip) => {
-    if (!chip.dataset.cid) return;   /* "全部" 固定第一位 */
-    let drag = null;                 // {x, moved, id}
-    chip.addEventListener("pointerdown", (e) => {
-      if (e.button !== 0) return;
-      if (e.target.closest(".chip-arrow")) return;   /* 点箭头不算拖拽/筛选 */
-      drag = { x: e.clientX, moved: false, id: e.pointerId };
-      chip.setPointerCapture(e.pointerId);
-    });
-    chip.addEventListener("pointermove", (e) => {
-      if (!drag || drag.id !== e.pointerId) return;
-      const dx = e.clientX - drag.x;
-      if (!drag.moved) {
-        if (Math.abs(dx) < 6) return;
-        drag.moved = true;
-        chip.classList.add("dragging");
-      }
-      const other = neighbor(chip, dx > 0 ? 1 : -1);
-      if (!other) return;
-      const r = other.getBoundingClientRect();
-      if (dx > 0 && e.clientX > r.left + r.width / 2) {
-        wrap.insertBefore(other, chip.nextElementSibling);
-        drag.x = e.clientX;
-      } else if (dx < 0 && e.clientX < r.left + r.width / 2) {
-        wrap.insertBefore(chip, other);
-        drag.x = e.clientX;
-      }
-    });
-    const finish = (e) => {
-      if (!drag || drag.id !== e.pointerId) return;
-      chip.classList.remove("dragging");
-      const moved = drag.moved;
-      drag = null;
-      if (moved) {
-        saveChipOrder();
-      } else {
-        currentClassFilter = chip.dataset.cid;
-        allChips().forEach((c) => c.classList.toggle("on", c === chip));
-        filterTasks(d);
-      }
+function bindCourseList(d) {
+  $$("#co-classes .course-row").forEach((row) => {
+    row.onclick = (e) => {
+      if (e.target.closest("button")) return;
+      const c = (d.classes || []).find((x) => x.id === row.dataset.cid);
+      if (c) openCourseModal(c);
     };
-    chip.addEventListener("pointerup", finish);
-    chip.addEventListener("pointercancel", (e) => {
-      if (drag && drag.id === e.pointerId) {
-        chip.classList.remove("dragging");
-        drag = null;
-      }
-    });
   });
-  /* 每个课程 chip 的 ▲▼: 与相邻课程互换位置(边界处为空操作) */
-  $$("#co-chips [data-move]").forEach((btn) => {
+  $$("#co-classes .course-row .move-btn").forEach((btn) => {
     btn.onclick = (e) => {
       e.stopPropagation();
-      const chip = btn.closest(".chip");
+      const row = btn.closest(".course-row");
       const down = btn.dataset.move === "down";
-      const other = neighbor(chip, down ? 1 : -1);
-      if (!other) return;
-      if (down) wrap.insertBefore(chip, other.nextElementSibling);
-      else wrap.insertBefore(chip, other);
-      saveChipOrder();
+      let el = down ? row.nextElementSibling : row.previousElementSibling;
+      while (el && !el.dataset.cid) {
+        el = down ? el.nextElementSibling : el.previousElementSibling;
+      }
+      if (!el) return;
+      el.parentNode.insertBefore(row, down ? el.nextElementSibling : el);
+      const order = $$("#co-classes .course-row").map((r) => r.dataset.cid);
+      d.classes.sort((a, b) => order.indexOf(a.id) - order.indexOf(b.id));
+      call("course_save_order", JSON.stringify(order)).catch(() => {});
+      Store.set("courses", d);   /* 本地缓存同步新顺序 */
     };
   });
+  $$("#co-classes .core-row").forEach((row) => {
+    row.onclick = () => openCoreModal(row.dataset.core);
+  });
+}
+function renderCourseTasks(d) {
+  const tasks = d.tasks_upcoming || [];
+  const box = $("#co-tasks");
+  box.innerHTML = "";
+  if (!tasks.length) {
+    box.innerHTML = `<div class="empty">没有未截止的作业 (左滑可移除, ▲▼ 可调顺序, 点击看详情)</div>`;
+    return;
+  }
+  const frag = document.createDocumentFragment();
+  tasks.forEach((t) => {
+    const el = taskItemEl(t);
+    el.querySelectorAll(".move-btn").forEach((btn) => {
+      btn.onclick = (e) => {
+        e.stopPropagation();
+        moveTask(d, tasks, t, btn.dataset.move === "down" ? 1 : -1);
+      };
+    });
+    el.addEventListener("click", (e) => {
+      if (e.target.closest("button")) return;
+      if (Date.now() - (el._swipedAt || 0) < 500) return;   /* 刚左滑完不弹卡 */
+      openTaskModal(t);
+    });
+    frag.appendChild(el);
+  });
+  box.appendChild(frag);
 }
 function taskItemEl(t) {
   return swipeableItemEl("item ddl-item",
@@ -926,32 +911,10 @@ function taskItemEl(t) {
 const loadCourses = swr("courses", TTL.courses,
   () => call("courses_data"), renderCourses,
   () => {
-    $("#co-chips").innerHTML = "";
-    $("#co-tasks").innerHTML = `<div class="empty">⏳ 正在同步 ManageBac…</div>`;
-    $("#co-grades").innerHTML = "";
+    $("#co-classes").innerHTML = `<div class="empty">⏳ 正在同步 ManageBac…</div>`;
+    $("#co-tasks").innerHTML = "";
   },
   () => currentView === "courses");
-function filterTasks(d) {
-  const tasks = (d.tasks_upcoming || []).filter(
-    (t) => !currentClassFilter || t.class_id === currentClassFilter);
-  $("#co-tasks").innerHTML = "";
-  if (!tasks.length) {
-    $("#co-tasks").innerHTML = `<div class="empty">没有未截止的作业 (左滑作业条目可移除, ▲▼ 可调顺序)</div>`;
-    return;
-  }
-  const frag = document.createDocumentFragment();
-  tasks.forEach((t) => {
-    const el = taskItemEl(t);
-    el.querySelectorAll(".move-btn").forEach((btn) => {
-      btn.onclick = (e) => {
-        e.stopPropagation();
-        moveTask(d, tasks, t, btn.dataset.move === "down" ? 1 : -1);
-      };
-    });
-    frag.appendChild(el);
-  });
-  $("#co-tasks").appendChild(frag);
-}
 /* ▲▼ 移动作业条目: 在当前可见列表内互换位置; 持久化顺序 = 可见列表
    的新顺序在前 + 未显示的任务按原相对顺序排在后面(新作业按截止时间
    排在最后)。key 与已移除 DDL 同款: title|due_at */
@@ -966,7 +929,7 @@ function moveTask(d, visible, t, dir) {
   d.tasks_upcoming = [...visible, ...rest];
   call("task_save_order", JSON.stringify([...visKeys, ...rest.map(key)])).catch(() => {});
   Store.set("courses", d);   /* 本地缓存同步, 秒开不回跳旧顺序 */
-  filterTasks(d);
+  renderCourseTasks(d);
 }
 $("#co-refresh").onclick = async () => {
   toast("正在同步 ManageBac…");
@@ -977,6 +940,174 @@ $("#co-refresh").onclick = async () => {
     show("courses");
   } catch (e) { toast(e.message); }
 };
+
+/* ---------------- 课程详情弹卡(仿 ManageBac: 作业/单元/文件/日历) ---------------- */
+let cdState = { cid: null, name: "", grade: null, tab: "tasks" };
+function openCourseModal(c) {
+  cdState = { cid: c.id, name: c.name, grade: c.grade, tab: "tasks" };
+  $("#cd-title").textContent = c.name || "课程";
+  $("#cd-grade").textContent = c.grade || "未出分";
+  $("#cd-modal").classList.remove("hidden");
+  setCourseTab("tasks");
+}
+function setCourseTab(tab) {
+  cdState.tab = tab;
+  $$("#cd-modal .tabbtn").forEach((b) => b.classList.toggle("on", b.dataset.tab === tab));
+  const body = $("#cd-body");
+  body.innerHTML = `<div class="empty">加载中…</div>`;
+  const cid = cdState.cid;
+  const stale = () => cdState.cid !== cid || cdState.tab !== tab;
+  if (tab === "tasks") {
+    call("course_tasks", cid).then((r) => {
+      if (stale()) return;
+      const tasks = r.tasks || [];
+      if (!tasks.length) { body.innerHTML = `<div class="empty">这门课没有作业卡</div>`; return; }
+      body.innerHTML = "";
+      tasks.forEach((t) => {
+        const el = document.createElement("div");
+        el.className = "item clickable";
+        el.innerHTML = `<span class="dim">${esc((t.due_at || "").slice(5, 16))}</span>
+          <span class="grow">${esc(t.title)}<span class="dim"> · ${esc(t.status || "?")}</span></span>
+          ${badge(t.status || "?", t.status === "Pending" ? "red" : "green")}`;
+        el.onclick = () => openTaskModal(t);
+        body.appendChild(el);
+      });
+    }).catch((e) => { if (!stale()) body.innerHTML = `<div class="empty">${esc(e.message)}</div>`; });
+  } else if (tab === "units") {
+    call("course_units", cid).then((r) => {
+      if (stale()) return;
+      body.innerHTML = r.empty
+        ? `<div class="empty">这门课还没有单元内容</div>`
+        : `<div class="td-desc">${esc(r.text)}</div>`;
+    }).catch((e) => { if (!stale()) body.innerHTML = `<div class="empty">${esc(e.message)}</div>`; });
+  } else if (tab === "files") {
+    call("course_files", cid).then((r) => {
+      if (stale()) return;
+      const files = r.files || [];
+      if (!files.length) { body.innerHTML = `<div class="empty">这门课还没有共享文件</div>`; return; }
+      body.innerHTML = "";
+      files.forEach((f) => {
+        const el = document.createElement("div");
+        el.className = "item clickable file-row";
+        el.innerHTML = `<span class="grow">${esc(f.name)}<span class="dim">${esc(f.meta || "")}</span></span>
+          <button class="ghost">下载 ↗</button>`;
+        el.querySelector("button").onclick = (e) => {
+          e.stopPropagation();
+          if (!f.url) { toast("这个文件没有下载链接"); return; }
+          call("open_external", f.url).then(() => toast("已在浏览器打开下载")).catch((er) => toast(er.message));
+        };
+        body.appendChild(el);
+      });
+    }).catch((e) => { if (!stale()) body.innerHTML = `<div class="empty">${esc(e.message)}</div>`; });
+  } else if (tab === "events") {
+    call("course_events", cid).then((r) => {
+      if (stale()) return;
+      const evs = (r.events || []).slice(0, 80);
+      if (!evs.length) { body.innerHTML = `<div class="empty">这门课的日历没有日程</div>`; return; }
+      const when = (ev) => String(ev.starts_at || ev.start || ev.date || ev.due_at || "");
+      evs.sort((a, b) => when(a).localeCompare(when(b)));
+      body.innerHTML = "";
+      evs.forEach((ev) => {
+        const el = document.createElement("div");
+        el.className = "item";
+        el.innerHTML = `<span class="dim">${esc(when(ev).slice(0, 16).replace("T", " "))}</span>
+          <span class="grow">${esc(String(ev.title || ev.name || ev.summary || "未命名"))}</span>`;
+        body.appendChild(el);
+      });
+    }).catch((e) => { if (!stale()) body.innerHTML = `<div class="empty">${esc(e.message)}</div>`; });
+  }
+}
+$$("#cd-modal .tabbtn").forEach((b) => { b.onclick = () => setCourseTab(b.dataset.tab); });
+$("#cd-close").onclick = () => $("#cd-modal").classList.add("hidden");
+$("#cd-open-mb").onclick = () => {
+  if (cdState.cid) {
+    call("open_external", `https://shph.managebac.cn/student/classes/${cdState.cid}`)
+      .catch((e) => toast(e.message));
+  }
+};
+
+/* ---------------- 作业/考试详情弹卡 ---------------- */
+function openTaskModal(t) {
+  $("#td-title").textContent = t.title || "作业";
+  $("#td-course").textContent = t.class_name || "";
+  $("#td-due").textContent = `${(t.due_at || "").slice(0, 16).replace("T", " ")}${t.past_due ? " (已截止)" : ""}`;
+  $("#td-status").textContent = t.status || "—";
+  $("#td-status").style.display = t.status ? "" : "none";
+  $("#td-category").textContent = ""; $("#td-category").style.display = "none";
+  $("#td-kind").textContent = ""; $("#td-kind").style.display = "none";
+  $("#td-score-row").classList.add("hidden");
+  $("#td-dropbox-row").classList.add("hidden");
+  $("#td-desc").textContent = "加载详情中…";
+  $("#td-modal").classList.remove("hidden");
+  $("#td-open-mb").onclick = () => {
+    call("open_external",
+      `https://shph.managebac.cn/student/classes/${t.class_id}/core_tasks/${t.task_id}`)
+      .catch((e) => toast(e.message));
+  };
+  call("task_detail", t.class_id, t.task_id).then((d) => {
+    if (d.title) $("#td-title").textContent = d.title;
+    $("#td-category").textContent = d.category || "";
+    $("#td-category").style.display = d.category ? "" : "none";
+    $("#td-kind").textContent = d.kind || "";
+    $("#td-kind").style.display = d.kind ? "" : "none";
+    $("#td-status").textContent = d.status || t.status || "—";
+    if (d.due_text) $("#td-due").textContent = `${d.due_text}${d.past_due ? " (已截止)" : ""}`;
+    if (d.score) {
+      $("#td-score").textContent = d.score;
+      $("#td-score-row").classList.remove("hidden");
+    }
+    if (d.dropbox) {
+      $("#td-dropbox").textContent = d.dropbox;
+      $("#td-dropbox-row").classList.remove("hidden");
+    }
+    $("#td-desc").textContent = d.description || "(这个作业没有详细说明)";
+  }).catch((e) => { $("#td-desc").textContent = `详情加载失败: ${e.message}`; });
+}
+$("#td-close").onclick = () => $("#td-modal").classList.add("hidden");
+$("#td-close2").onclick = () => $("#td-modal").classList.add("hidden");
+
+/* ---------------- CAS / EE 弹卡 ---------------- */
+async function openCoreModal(kind) {
+  const conf = CORE_ENTRIES.find((c) => c.key === kind) || { name: "IB Core" };
+  $("#core-title").textContent = conf.name;
+  const body = $("#core-body");
+  body.innerHTML = `<div class="empty">加载中…</div>`;
+  $("#core-modal").classList.remove("hidden");
+  $("#core-open-mb").onclick = () => {
+    call("open_external", CORE_URLS[kind]).catch((e) => toast(e.message));
+  };
+  try {
+    const d = await call(kind === "cas" ? "cas_overview" : "ee_overview");
+    body.innerHTML = "";
+    const secs = d.sections || [];
+    if (!secs.length) {
+      body.innerHTML = `<div class="empty">ManageBac 上还没有内容, 点下方按钮去网页查看</div>`;
+      return;
+    }
+    secs.forEach((s) => {
+      const el = document.createElement("div");
+      el.className = "item";
+      el.innerHTML = `<span class="grow"><b>${esc(s.h)}</b>
+        <span class="td-desc" style="margin-top:6px">${esc(s.text)}</span></span>`;
+      body.appendChild(el);
+    });
+  } catch (e) {
+    body.innerHTML = `<div class="empty">${esc(e.message)}</div>`;
+  }
+}
+$("#core-close").onclick = () => $("#core-modal").classList.add("hidden");
+$("#core-close2").onclick = () => $("#core-modal").classList.add("hidden");
+/* 点遮罩 / Escape 关闭新弹卡 */
+["cd-modal", "td-modal", "core-modal"].forEach((id) => {
+  $("#" + id).addEventListener("click", (e) => {
+    if (e.target.id === id) $("#" + id).classList.add("hidden");
+  });
+});
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") {
+    ["cd-modal", "td-modal", "core-modal"].forEach((id) => $("#" + id).classList.add("hidden"));
+  }
+});
 
 /* ================= 邮箱 ================= */
 async function loadMail() { await fetchMail(); }

@@ -20,9 +20,13 @@ from .parse import (
     Deadline,
     NO_CLASSES_MARKER,
     extract_classes,
+    extract_core_digest,
     extract_deadlines,
+    extract_files,
     extract_overall_grade,
     extract_task_cards,
+    extract_task_detail,
+    extract_units_tab,
 )
 
 USER_AGENT = (
@@ -206,6 +210,58 @@ class ManageBacClient:
             _time.sleep(sleep_seconds)
         tasks.sort(key=lambda t: t.due_at or datetime(1970, 1, 1))
         return tasks
+
+    # ------------------------------------------------------------ 课程详情页
+    def get_class_files(self, class_id: str) -> list[dict]:
+        """课程 Files 页文件列表(download_url 为 S3 预签名, 短时效)."""
+        resp = self._get(f"/student/classes/{class_id}/files")
+        return extract_files(resp.text)
+
+    def get_class_events(self, class_id: str) -> list:
+        """课程 Calendar 的 JSON 事件源(/student/classes/<id>/events.json)."""
+        resp = self.session.get(
+            self._url(f"/student/classes/{class_id}/events.json"),
+            timeout=self.timeout,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        if isinstance(data, dict):
+            data = data.get("events") or data.get("items") or []
+        return data if isinstance(data, list) else []
+
+    def get_class_units(self, class_id: str) -> dict:
+        """课程 Units 页(weekly planner, 不少课为空)."""
+        resp = self._get(f"/student/classes/{class_id}/units")
+        return extract_units_tab(resp.text)
+
+    def get_task_detail(self, class_id: str, task_id: str) -> dict:
+        """单个任务的详情页(标题/类别/状态/截止/分数/正文/Dropbox)."""
+        resp = self._get(f"/student/classes/{class_id}/core_tasks/{task_id}")
+        out = extract_task_detail(resp.text)
+        out["task_id"] = str(task_id)
+        out["class_id"] = str(class_id)
+        return out
+
+    def get_cas_overview(self) -> dict:
+        """CAS worksheet 概览(/student/ib/activity/cas)."""
+        resp = self._get("/student/ib/activity/cas")
+        out = extract_core_digest(resp.text, focus=[
+            (".aims-and-goals", "Aims & Goals 目标"),
+            (".statuses-legend", "进度状态图例"),
+            (".card-body", "官方指南"),
+        ])
+        out["url"] = "/student/ib/activity/cas"
+        return out
+
+    def get_ee_overview(self) -> dict:
+        """EE 项目页(本校挂在 /student/ib/pbl/778, 页面标题 Extended Essay)."""
+        resp = self._get("/student/ib/pbl/778")
+        out = extract_core_digest(resp.text, focus=[
+            (".pbl-worksheet", "EE 工作表"),
+            (".js-core-project-documents", "EE 文档"),
+        ])
+        out["url"] = "/student/ib/pbl/778"
+        return out
 
 
 def _soup(html: str):
