@@ -14,6 +14,7 @@ try:
 except Exception:
     pass
 
+from .. import paths
 from .bridge import Api
 
 # UI 目录: 尝试多个位置
@@ -35,7 +36,7 @@ _UI_DIR = next(
 _WV2_BOOTSTRAP = Path(getattr(sys, "_MEIPASS", "")) / "MicrosoftEdgeWebview2Setup.exe"
 
 # 崩溃日志
-_LOG_DIR = Path.home() / ".hellopinghe" / "logs"
+_LOG_DIR = paths.data_dir() / "logs"
 
 
 def _log_error(stage: str, exc: BaseException) -> None:

@@ -22,7 +22,8 @@ from .exceptions import LoginError, PingheError
 from .managebac.client import ManageBacClient
 from .storage import connect, save_classes, save_deadlines, upcoming_deadlines
 
-SESSION_DIR = Path.home() / ".hellopinghe"
+from . import paths as _paths
+SESSION_DIR = _paths.data_dir()
 
 
 def _session_path(client: ManageBacClient) -> Path:

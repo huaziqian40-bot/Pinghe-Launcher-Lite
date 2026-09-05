@@ -118,17 +118,13 @@ class Api:
     def wizard_mail_save(self, email: str, password: str, authcode: str,
                          imap_host: str, smtp_host: str) -> dict:
         def job():
-            # 网页登录密码存入 keyring（作为记录）
-            secret_set(f"mail:{email.strip()}", password.strip())
-            # 客户端授权码用于 IMAP/SMTP 登录（网易企业邮的核心要求）
-            if authcode.strip():
-                secret_set(f"mail_authcode:{email.strip()}", authcode.strip())
-                # 确保 MailService 内部也记录该授权码
-                self.svc.mail.set_authcode(email.strip(), authcode.strip())
-            self.svc.mail.configure(
-                email.strip(), authcode.strip() or password.strip(),
-                imap_host.strip(), smtp_host.strip()
-            )
+            email = email.strip()
+            # 网页登录密码存入密钥存储(作为备份; 空值不覆盖已有密码)
+            if password.strip():
+                secret_set(f"mail:{email}", password.strip())
+            # 客户端授权码用于 IMAP/SMTP 登录(网易企业邮的核心要求)
+            self.svc.mail.set_authcode(email, authcode)
+            self.svc.mail.configure(email, imap_host.strip(), smtp_host.strip())
             self._save_cfg()
             self.svc.mail._unread_cache = None
             _snap_drop("home")
@@ -923,7 +919,7 @@ class Api:
             if payload.get("edupage_subdomain"):
                 self.cfg.edupage_subdomain = payload["edupage_subdomain"]
             if payload.get("mail_email"):
-                self.cfg.mail_email = payload["mail_email"]
+                self.cfg.mail_email = payload["mail_email"].strip()
             if payload.get("mail_imap_host"):
                 self.cfg.mail_imap_host = payload["mail_imap_host"]
             if payload.get("mail_smtp_host"):
@@ -940,20 +936,15 @@ class Api:
                 if self.cfg.mail_email:
                     secret_set(f"mail:{self.cfg.mail_email}", payload["mail_password"])
             if payload.get("mail_authcode") and self.cfg.mail_email:
-                # 客户端授权码用于 IMAP/SMTP 登录
-                secret_set(f"mail_authcode:{self.cfg.mail_email}", payload["mail_authcode"])
-                # 确保 MailService 内部也记录该授权码
+                # 客户端授权码用于 IMAP/SMTP 登录(set_authcode 会去空白)
                 self.svc.mail.set_authcode(self.cfg.mail_email, payload["mail_authcode"])
-                # 使用授权码重新配置邮件连接
                 self.svc.mail.configure(
-                    self.cfg.mail_email, payload["mail_authcode"],
-                    self.cfg.mail_imap_host, self.cfg.mail_smtp_host,
+                    self.cfg.mail_email, self.cfg.mail_imap_host, self.cfg.mail_smtp_host,
                 )
             elif payload.get("mail_password") and self.cfg.mail_email:
                 # 仅修改密码时，如果没有授权码，尝试用密码重新配置
                 self.svc.mail.configure(
-                    self.cfg.mail_email, payload["mail_password"],
-                    self.cfg.mail_imap_host, self.cfg.mail_smtp_host,
+                    self.cfg.mail_email, self.cfg.mail_imap_host, self.cfg.mail_smtp_host,
                 )
             if "send_grades_to_llm" in payload:
                 self.cfg.send_grades_to_llm = bool(payload["send_grades_to_llm"])

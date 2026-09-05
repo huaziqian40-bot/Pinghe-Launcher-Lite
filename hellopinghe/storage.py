@@ -8,7 +8,9 @@ from typing import Iterable
 
 from .managebac.parse import Deadline
 
-DB_DIR = Path.home() / ".hellopinghe"
+from . import paths as _paths
+
+DB_DIR = _paths.data_dir()
 DB_PATH = DB_DIR / "hellopinghe.db"
 
 _SCHEMA = """

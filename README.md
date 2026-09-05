@@ -19,8 +19,8 @@
 
 | 平台 | 状态 | 打包方式 |
 |---|---|---|
-| Windows 10/11 | ✅ 主力 | PyInstaller + WiX(MSI) |
-| macOS 14+ (Intel) | ✅ 可构建 | PyInstaller(.app)+ hdiutil(DMG), 见 `scripts/macos/` |
+| Windows 10/11 | ✅ 主力 | PyInstaller + 自研安装器 HPHLSetup.exe |
+| macOS 14+ (Apple Silicon) | ✅ 可构建 | PyInstaller(.app)+ hdiutil(DMG), 见 `scripts/macos/` |
 
 ## 快速开始(开发)
 
@@ -48,13 +48,13 @@ hellopinghe timetable --subdomain 你的学校子域名 --days 7
 
 ## 配置
 
-`~/.hellopinghe/config.json`(首次运行自动生成),Agent 部分支持预设:
-deepseek / kimi / glm / qwen / ollama(本地) / custom,协议 openai|anthropic 二选一,用户自填 API key 与 base_url。
-密码/授权码存系统凭据管理器(Windows 凭据管理器 / macOS 钥匙串),不落盘。
+数据目录:安装版在**安装目录的 data 文件夹**(便携式);源码运行在 `~/.hellopinghe/`(首次运行自动生成)。
+Agent 部分支持预设: deepseek / kimi / glm / qwen / ollama(本地) / custom,协议 openai|anthropic 二选一,用户自填 API key 与 base_url。
+密码/授权码:Windows 下 DPAPI 加密存数据目录,macOS 存钥匙串——均无明文。
 
 ## 安全边界
 
-- 密码只在登录瞬间使用,存系统凭据管理器;登录态只存 cookie
+- 密码只在登录瞬间使用,加密存储在本机;登录态只存 cookie
 - 所有数据只进本机 SQLite
 - Agent 写操作默认需人工确认;工作区写入/完全访问模式需双重确认并自担风险
 
@@ -63,9 +63,12 @@ deepseek / kimi / glm / qwen / ollama(本地) / custom,协议 openai|anthropic �
 ### Windows
 
 ```bash
-python -m PyInstaller --noconfirm --clean HelloPingheLauncher.spec
-cd installer && ../tools/wix314/candle.exe HelloPingheLauncher.wxs && ../tools/wix314/light.exe HelloPingheLauncher.wixobj -out HelloPingheLauncher.msi
+python -m PyInstaller --noconfirm --clean HelloPingheLauncher.spec   # 应用 exe
+python -m PyInstaller --noconfirm --clean installer/installer.spec   # 安装程序 HPHLSetup.exe
 ```
+
+> WiX/MSI 已弃用,改用自研安装器(自定义安装目录/桌面与任务栏快捷方式/注册卸载/数据目录随安装)。
+> 需要先把 WiX 换掉前的旧版 MSI 卸载干净再装新版。
 
 ### macOS(在 Mac 上执行)
 

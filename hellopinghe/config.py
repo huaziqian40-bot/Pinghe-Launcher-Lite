@@ -3,7 +3,7 @@
 设计要求(用户约定):
 - 用户自选协议(openai 兼容 / anthropic 兼容)、自填 base_url 与 api_key
 - 内置知名预设: DeepSeek / Kimi(Moonshot) / GLM(智谱) / 通义千问(阿里) / Ollama(本地小模型) / custom
-- 所有配置存本地 ~/.hellopinghe/config.json,密钥永不外传
+- 所有配置存数据目录(便携安装时在安装文件夹内),密钥永不外传
 """
 from __future__ import annotations
 
@@ -12,28 +12,36 @@ from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
 from typing import Any
 
-CONFIG_DIR = Path.home() / ".hellopinghe"
+from . import paths, secrets
+
+# 数据目录(便携安装 → <安装目录>\data; 普通运行 → ~/.hellopinghe)
+CONFIG_DIR = paths.data_dir()
 CONFIG_PATH = CONFIG_DIR / "config.json"
 
-# 旧版产品(SchoolHub)的本地数据目录与钥匙串服务名; 仅用于一次性迁移。
-_LEGACY_DIR = Path.home() / ".schoolhub"
+# 旧版产品(SchoolHub)的钥匙串服务名; 仅用于一次性密钥迁移。
 _LEGACY_SERVICE = "schoolhub"
 
 
 def _migrate_legacy() -> None:
-    """把旧版 SchoolHub 的本地数据迁移到新目录(幂等, 静默失败不阻塞启动).
+    """旧数据一次性迁移(幂等, 静默失败不阻塞启动).
 
-    - ~/.schoolhub 整个目录(config.json / SQLite / 缓存 / Agent 会话) → ~/.hellopinghe
-    - Windows 钥匙串: 按迁移后 config 里的账号推导旧密钥名, 复制到新服务名下
-      (密码本身不经过磁盘, keyring 之间直接搬运)
+    - 便携模式: 把 ~/.hellopinghe(及更旧的 ~/.schoolhub)整个目录
+      (config.json / SQLite / 缓存 / Agent 会话 / 通讯录 / 会话 cookie)
+      搬进安装目录的 data 文件夹
+    - 旧钥匙串条目(schoolhub / hellopinghe 服务) → 新密钥存储(secrets.json)
+      (密码本身不经过聊天/日志, 直接搬运)
     """
     import shutil
 
-    if _LEGACY_DIR.exists():
+    for legacy in paths.legacy_candidates():
+        if not legacy.exists():
+            continue
         try:
             CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-            for item in _LEGACY_DIR.iterdir():
+            for item in legacy.iterdir():
                 dest = CONFIG_DIR / item.name
+                if item.name == _KEYFILE:      # 新密钥存储不被旧目录覆盖
+                    continue
                 if item.is_dir():
                     if not dest.exists():
                         shutil.copytree(item, dest)
@@ -41,30 +49,33 @@ def _migrate_legacy() -> None:
                     shutil.copy2(item, dest)
         except Exception:  # noqa: BLE001
             pass
-        try:  # noqa: SIM105
-            import keyring
 
-            cfg: dict = {}
-            try:
-                cfg = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
-            except Exception:  # noqa: BLE001
-                pass
-            pairs = []
-            if cfg.get("managebac_base_url"):
-                pairs.append(f"managebac:{cfg['managebac_base_url']}")
-            if cfg.get("mail_email"):
-                pairs += [f"mail:{cfg['mail_email']}", f"mail_authcode:{cfg['mail_email']}"]
-            if cfg.get("edupage_username") and cfg.get("edupage_subdomain"):
-                pairs.append(f"edupage:{cfg['edupage_subdomain']}:{cfg['edupage_username']}")
-            for key in pairs:
-                try:
-                    val = keyring.get_password(_LEGACY_SERVICE, key)
-                    if val and not keyring.get_password("hellopinghe", key):
-                        keyring.set_password("hellopinghe", key, val)
-                except Exception:  # noqa: BLE001
-                    continue
+    # 旧 keyring 条目 → 新密钥存储(按迁移后的 config 推导旧密钥名)
+    try:
+        import keyring
+
+        cfg: dict = {}
+        try:
+            cfg = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
         except Exception:  # noqa: BLE001
             pass
+        pairs = []
+        if cfg.get("managebac_base_url"):
+            pairs.append(f"managebac:{cfg['managebac_base_url']}")
+        if cfg.get("mail_email"):
+            pairs += [f"mail:{cfg['mail_email']}", f"mail_authcode:{cfg['mail_email']}"]
+        if cfg.get("edupage_username") and cfg.get("edupage_subdomain"):
+            pairs.append(f"edupage:{cfg['edupage_subdomain']}:{cfg['edupage_username']}")
+        for service in (_LEGACY_SERVICE, "hellopinghe"):
+            for key in pairs:
+                try:
+                    val = keyring.get_password(service, key)
+                    if val and not secrets.get(key):
+                        secrets.set(key, val)
+                except Exception:  # noqa: BLE001
+                    continue
+    except Exception:  # noqa: BLE001
+        pass
 
 
 _migrate_legacy()

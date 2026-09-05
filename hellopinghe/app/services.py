@@ -16,7 +16,7 @@ from pathlib import Path
 from ..config import CONFIG_DIR, Config
 from ..exceptions import LoginRequiredError, PingheError
 from ..managebac.client import ManageBacClient
-from .. import storage
+from .. import paths, storage
 
 KEYRING_SERVICE = "hellopinghe"
 
@@ -34,33 +34,14 @@ def subject_family(name: str) -> str:
     return _LEVEL_RE.sub(r"\1", n).strip()
 
 
-# ---------------------------------------------------------------- keyring
-def secret_set(key: str, secret: str) -> bool:
-    try:
-        import keyring
-
-        keyring.set_password(KEYRING_SERVICE, key, secret)
-        return True
-    except Exception:  # noqa: BLE001
-        return False
-
-
-def secret_get(key: str) -> str | None:
-    try:
-        import keyring
-
-        return keyring.get_password(KEYRING_SERVICE, key)
-    except Exception:  # noqa: BLE001
-        return None
-
-
-def secret_del(key: str) -> None:
-    try:
-        import keyring
-
-        keyring.delete_password(KEYRING_SERVICE, key)
-    except Exception:  # noqa: BLE001
-        pass
+# ---------------------------------------------------------------- 密钥存储
+# Windows: DPAPI 加密 JSON 存数据目录(便携要求); 其他平台: keyring。
+# 统一从 secrets 模块走, 本文件保留旧名字供 bridge 等处引用。
+from ..secrets import (  # noqa: E402
+    delete as secret_del,
+    get as secret_get,
+    set as secret_set,
+)
 
 
 # ================================================================ Edupage
@@ -169,7 +150,7 @@ class EdupageService:
         if key in self._week_cache:
             return self._week_cache[key]
 
-        cache_file = Path.home() / ".hellopinghe" / f"edupage_week_v3_{key}.json"
+        cache_file = paths.data_dir() / f"edupage_week_v3_{key}.json"
         if cache_file.exists():
             age = _time.time() - cache_file.stat().st_mtime
             if age < 6 * 3600:
@@ -409,7 +390,7 @@ class EdupageService:
         sel_key = hashlib.sha1(
             json.dumps(selected, sort_keys=True).encode("utf-8")
         ).hexdigest()[:8]
-        cache_dir = Path.home() / ".hellopinghe"
+        cache_dir = paths.data_dir()
         cache_file = cache_dir / f"edupage_personal_v5_{day.isoformat()}_{sel_key}.json"
         if cache_file.exists():
             age = _time.time() - cache_file.stat().st_mtime
@@ -528,18 +509,23 @@ class MailService:
         网易企业邮的 IMAP/SMTP 服务需要使用客户端授权码登录，
         而不是网页登录密码。优先获取授权码，若无则回退到网页登录密码。
         """
-        authcode = secret_get(f"mail_authcode:{self.cfg.mail_email}")
+        email = (self.cfg.mail_email or "").strip()
+        authcode = secret_get(f"mail_authcode:{email}")
         if authcode:
-            return authcode
-        pw = secret_get(f"mail:{self.cfg.mail_email}")
-        if not pw or not self.cfg.mail_email:
+            return authcode.strip()
+        pw = secret_get(f"mail:{email}")
+        if not pw or not email:
             raise LoginRequiredError("mail")
-        return pw
+        return pw.strip()
 
     def set_authcode(self, email: str, authcode: str) -> None:
-        """保存客户端授权码并确保后续连接使用该授权码。"""
-        if authcode.strip():
-            secret_set(f"mail_authcode:{email.strip()}", authcode.strip())
+        """保存客户端授权码并确保后续连接使用该授权码。
+
+        授权码统一去掉全部空白(网页上复制时可能带空格/换行)。
+        """
+        code = "".join((authcode or "").split())
+        if code:
+            secret_set(f"mail_authcode:{email.strip()}", code)
 
     def _imap_error(self, exc: Exception) -> PingheError:
         extra = ""
@@ -561,24 +547,37 @@ class MailService:
     def _conn(self):
         import imaplib
 
+        email = (self.cfg.mail_email or "").strip()
         try:
             M = imaplib.IMAP4_SSL(self.cfg.mail_imap_host, 993)
-            M.login(self.cfg.mail_email, self._password())
+            pw = self._password()
+            try:
+                M.login(email, pw)
+            except Exception as auth_exc:
+                # 授权码登录失败 → 尝试存的网页密码(两者都有时互为备份)
+                webpw = secret_get(f"mail:{email}")
+                if not webpw or webpw.strip() == pw:
+                    raise self._imap_error(auth_exc) from auth_exc
+                try:
+                    M.login(email, webpw.strip())
+                except Exception as exc2:  # noqa: BLE001
+                    raise self._imap_error(auth_exc) from exc2
             M.select("INBOX")
             return M
         except LoginRequiredError:
             raise
+        except PingheError:
+            raise
         except Exception as exc:  # noqa: BLE001
             raise self._imap_error(exc) from exc
 
-    def configure(self, email: str, password: str,
-                  imap_host: str = "", smtp_host: str = "") -> None:
+    def configure(self, email: str, imap_host: str = "", smtp_host: str = "") -> None:
+        """只更新邮箱连接配置; 密码/授权码由调用方经 set_authcode/secret_set 存储."""
         if imap_host:
             self.cfg.mail_imap_host = imap_host
         if smtp_host:
             self.cfg.mail_smtp_host = smtp_host
         self.cfg.mail_email = email.strip()
-        secret_set(f"mail:{email.strip()}", password.strip())
 
     @staticmethod
     def _decode(value) -> str:
@@ -1040,13 +1039,14 @@ class MailService:
         from email.header import Header
         from email.mime.text import MIMEText
 
+        email = (self.cfg.mail_email or "").strip()
         msg = MIMEText(body, "plain", "utf-8")
         msg["Subject"] = Header(subject, "utf-8")
-        msg["From"] = self.cfg.mail_email
+        msg["From"] = email
         msg["To"] = to
         with smtplib.SMTP_SSL(self.cfg.mail_smtp_host, 994, timeout=30) as smtp:
-            smtp.login(self.cfg.mail_email, self._smtp_password())
-            smtp.sendmail(self.cfg.mail_email, [to], msg.as_string())
+            smtp.login(email, self._smtp_password())
+            smtp.sendmail(email, [to], msg.as_string())
 
 
 # ================================================================ 日程
@@ -1097,7 +1097,7 @@ class CoursesService:
         if self._client is None:
             client = ManageBacClient(self.cfg.managebac_base_url)
             host = self.cfg.managebac_base_url.split("//")[-1]
-            session_file = Path.home() / ".hellopinghe" / f"session_{host}.json"
+            session_file = paths.data_dir() / f"session_{host}.json"
             if session_file.exists():
                 import json
 
@@ -1123,7 +1123,7 @@ class CoursesService:
         client = ManageBacClient(url)
         client.login(email, password)
         host = url.split("//")[-1]
-        session_file = Path.home() / ".hellopinghe" / f"session_{host}.json"
+        session_file = paths.data_dir() / f"session_{host}.json"
         import json
 
         session_file.parent.mkdir(parents=True, exist_ok=True)

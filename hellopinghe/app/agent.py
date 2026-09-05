@@ -18,7 +18,9 @@ from ..exceptions import PingheError
 
 MAX_ROUNDS = 8
 PROPOSAL_TTL = 600  # 10 分钟
-SESSIONS_DIR = Path.home() / ".hellopinghe" / "agent_sessions"
+from .. import paths as _paths
+
+SESSIONS_DIR = _paths.data_dir() / "agent_sessions"
 
 # ---------------------------------------------------------------- 权限模式
 # readonly        只读: 写工具全部禁用
