@@ -777,12 +777,15 @@ const AP_TOKENS = ["--green-800", "--green-900", "--green-950", "--green-700",
   "--white", "--ink", "--ink-2", "--ink-3", "--border"];
 function apApply(ap) {
   const r = document.documentElement.style;
-  const scale = Number(ap.scale) || 100;
-  document.body.style.zoom = scale === 100 ? "" : String(scale / 100);
-  const isDefault = ap.accent === AP_DEFAULT.accent && ap.bg === AP_DEFAULT.bg &&
-    ap.panel === AP_DEFAULT.panel && ap.ink === AP_DEFAULT.ink;
-  if (isDefault) {
-    /* 默认外观: 清掉全部行内覆写, 回到样式表的设计值(含半透明 border) */
+  const scale = Number(ap.scale) || 120;
+  const z = scale / 100;
+  /* zoom 系数暴露给 CSS: 所有视口相对尺寸(卡片/布局)都要除回它,
+     否则 body zoom 会把 94vw/88vh 放大出窗口(实测 88vh→1.23 倍窗高) */
+  r.setProperty("--ap-zoom", String(z));
+  document.body.style.zoom = scale === 100 ? "" : String(z);
+  if (ap.accent === AP_DEFAULT.accent && ap.bg === AP_DEFAULT.bg &&
+      ap.panel === AP_DEFAULT.panel && ap.ink === AP_DEFAULT.ink) {
+    /* 默认外观: 清掉全部颜色 token 覆写, 回到样式表的设计值 */
     AP_TOKENS.forEach((t) => r.removeProperty(t));
     return;
   }

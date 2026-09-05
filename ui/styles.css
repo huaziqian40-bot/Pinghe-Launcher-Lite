@@ -31,7 +31,7 @@ a{color:var(--green-700)}
 .chk{display:flex;align-items:center;gap:6px;color:var(--ink-2)}
 
 /* ---------- 布局 ---------- */
-#app{display:flex;height:100vh}
+#app{display:flex;height:100%}
 .sidebar{width:var(--side-w);background:linear-gradient(180deg,var(--green-900),var(--green-950));
   color:var(--ivory-50);display:flex;flex-direction:column;padding:18px 12px}
 .logo{display:flex;gap:10px;align-items:center;padding:4px 8px 16px;cursor:pointer;border-radius:10px}
@@ -122,7 +122,7 @@ a{color:var(--green-700)}
 .tabbtn{background:transparent;color:var(--ink-2);padding:5px 12px;border-radius:99px}
 .tabbtn.on{background:var(--green-800);color:var(--white)}
 .tabbtn:hover{transform:none}
-.cd-card{width:min(760px,94vw);height:86vh}
+.cd-card{width:min(760px, calc(94vw / var(--ap-zoom,1)));height:calc(86vh / var(--ap-zoom,1))}
 .cd-head-right{display:flex;gap:8px;align-items:center}
 .cd-body{flex:1;min-height:0;overflow:auto}
 .cd-body .item{cursor:default}
@@ -225,7 +225,7 @@ a{color:var(--green-700)}
   animation:pop .18s cubic-bezier(.2,.7,.3,1)}
 
 /* ---------- 邮件 ---------- */
-.mail-split{display:grid;grid-template-columns:380px 1fr;gap:16px;height:calc(100vh - 220px)}
+.mail-split{display:grid;grid-template-columns:380px 1fr;gap:16px;height:calc((100vh - 220px) / var(--ap-zoom,1))}
 .mail-list{overflow:auto;margin:0;padding:8px}
 .mail-item{padding:9px 10px;border-radius:var(--radius-sm);cursor:pointer}
 .mail-item:hover{background:var(--ivory-100)}
@@ -243,7 +243,7 @@ a{color:var(--green-700)}
 textarea{width:100%;resize:vertical}
 
 /* ---------- 写邮件弹卡(覆盖邮件页绝大部分) ---------- */
-.mail-card{width:min(1000px,94vw);height:88vh;display:flex;flex-direction:column;
+.mail-card{width:min(1000px, calc(94vw / var(--ap-zoom,1)));height:calc(88vh / var(--ap-zoom,1));display:flex;flex-direction:column;
   background:var(--ivory-50);border-radius:var(--radius-lg);padding:18px 20px;
   box-shadow:var(--shadow-md);animation:pop .18s cubic-bezier(.2,.7,.3,1)}
 .mail-card textarea{flex:1;min-height:200px;font-size:13.5px;line-height:1.6}
@@ -269,7 +269,7 @@ textarea{width:100%;resize:vertical}
 .ct-item:hover{border-color:var(--gold-500)}
 
 /* ---------- Agent ---------- */
-.chat{height:calc(100vh - 300px);overflow:auto;display:flex;flex-direction:column;gap:10px}
+.chat{height:calc((100vh - 300px) / var(--ap-zoom,1));overflow:auto;display:flex;flex-direction:column;gap:10px}
 .bubble{max-width:78%;padding:10px 14px;border-radius:var(--radius);white-space:pre-wrap;word-break:break-word}
 .bubble.user{align-self:flex-end;background:var(--green-800);color:var(--white)}
 .bubble.bot{align-self:flex-start;background:var(--ivory-100)}
@@ -363,7 +363,7 @@ input[type="range"]{accent-color:var(--green-800);flex:1;min-width:160px;max-wid
 /* ---------- 向导 ---------- */
 .overlay{position:fixed;inset:0;background:rgba(16,45,37,.55);backdrop-filter:blur(4px);
   display:flex;align-items:center;justify-content:center;z-index:50}
-.wizard{width:680px;max-height:84vh;overflow:auto;background:var(--ivory-50)}
+.wizard{width:min(680px, calc(94vw / var(--ap-zoom,1)));max-height:calc(84vh / var(--ap-zoom,1));overflow:auto;background:var(--ivory-50)}
 .wizard-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:12px}
 .wizard-head b{font-size:17px}
 .wizard-foot{display:flex;justify-content:space-between;margin-top:14px}
@@ -453,7 +453,7 @@ button,.chip,.item,.mail-item,.session-item,.file-item,.tt-lesson,.gt-lesson{
 .subject-row input:disabled{cursor:default}
 
 /* ---------- 课表课卡弹卡 + 右键菜单 ---------- */
-.tt-card{width:min(440px,94vw);height:auto;max-height:86vh}
+.tt-card{width:min(440px, calc(94vw / var(--ap-zoom,1)));height:auto;max-height:calc(86vh / var(--ap-zoom,1))}
 .ttm-meta{display:flex;align-items:center;gap:8px;margin:8px 0}
 .tt-menu{position:fixed;z-index:60;background:var(--white);border:1px solid var(--border);
   border-radius:10px;box-shadow:0 10px 30px rgba(26,50,40,.18);padding:5px;display:flex;
