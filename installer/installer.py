@@ -48,14 +48,6 @@ def is_admin() -> bool:
         return False
 
 
-def ps(script: str) -> None:
-    """跑一段 PowerShell(创建/删除快捷方式用), 失败抛异常."""
-    r = subprocess.run(["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass",
-                        "-Command", script], capture_output=True, text=True, timeout=60)
-    if r.returncode != 0:
-        raise RuntimeError(r.stderr.strip() or "PowerShell 执行失败")
-
-
 def _desktop_path() -> str:
     """当前用户桌面路径(从注册表读, 处理 OneDrive 重定向)."""
     import winreg
@@ -75,26 +67,30 @@ def _desktop_path() -> str:
     return os.path.join(os.path.expanduser("~"), "Desktop")
 
 
-def _ps_quote(s: str) -> str:
-    """转义 PowerShell 单引号字符串里的单引号."""
-    return s.replace("'", "''")
-
-
 def _make_lnk(lnk_path: str, target_exe: str, workdir: str) -> None:
-    """用 PowerShell WScript.Shell 创建 .lnk 快捷方式.
+    """用 VBScript 临时文件创建 .lnk 快捷方式.
 
-    所有路径在 Python 里解析为字面值再传入, 不用 PowerShell 表达式,
-    彻底避免嵌套引号/特殊字符问题。
+    写到文件再由 cscript 执行, 完全绕过命令行引号/特殊字符问题。
     """
-    lnk = _ps_quote(lnk_path)
-    tgt = _ps_quote(target_exe)
-    wd = _ps_quote(workdir)
-    ps(f"$ws = New-Object -ComObject WScript.Shell; "
-       f"$s = $ws.CreateShortcut('{lnk}'); "
-       f"$s.TargetPath = '{tgt}'; "
-       f"$s.WorkingDirectory = '{wd}'; "
-       f"$s.IconLocation = '{tgt},0'; "
-       f"$s.Save()")
+    import tempfile
+
+    script = (
+        'Set ws = WScript.CreateObject("WScript.Shell")\r\n'
+        f'Set lnk = ws.CreateShortcut("{lnk_path}")\r\n'
+        f'lnk.TargetPath = "{target_exe}"\r\n'
+        f'lnk.WorkingDirectory = "{workdir}"\r\n'
+        f'lnk.IconLocation = "{target_exe}, 0"\r\n'
+        'lnk.Save\r\n'
+    )
+    vbs = Path(tempfile.mktemp(suffix=".vbs"))
+    vbs.write_text(script, encoding="gbk")
+    try:
+        r = subprocess.run(["cscript", "//NoLogo", str(vbs)],
+                           capture_output=True, text=True, timeout=30)
+        if r.returncode != 0:
+            raise RuntimeError(r.stderr.strip() or "cscript failed")
+    finally:
+        vbs.unlink(missing_ok=True)
 
 
 def make_shortcuts(target: str, desktop: bool, startmenu: bool, taskbar: bool) -> list[str]:
