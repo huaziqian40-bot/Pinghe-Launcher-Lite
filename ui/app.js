@@ -1226,7 +1226,83 @@ function setCourseTab(tab) {
         body.appendChild(el);
       });
     }).catch((e) => { if (!stale()) body.innerHTML = `<div class="empty">${esc(e.message)}</div>`; });
+  } else if (tab === "disc") {
+    call("course_discussions", cid).then((r) => {
+      if (stale()) return;
+      const list = r.discussions || [];
+      if (!list.length) { body.innerHTML = `<div class="empty">这门课还没有讨论</div>`; return; }
+      body.innerHTML = "";
+      list.forEach((d) => {
+        const el = document.createElement("div");
+        el.className = "item clickable";
+        el.innerHTML = `<span class="grow">${esc(d.title)}
+            <span class="dim">${esc(d.author || "")}${d.category ? " · " + esc(d.category) : ""}</span></span>
+          ${d.preview ? `<span class="dim small">${esc(d.preview.slice(0, 60))}…</span>` : ""}`;
+        el.onclick = () => openDiscussion(cid, d.id, d.title);
+        body.appendChild(el);
+      });
+    }).catch((e) => { if (!stale()) body.innerHTML = `<div class="empty">${esc(e.message)}</div>`; });
   }
+}
+function escHtmlBody(html) {
+  /* ManageBac 帖子正文是服务端渲染的 HTML(Redactor), 基本可信;
+     但仍去掉 script/iframe/事件属性以防万一 */
+  const div = document.createElement("div");
+  div.innerHTML = html || "";
+  div.querySelectorAll("script,iframe,object,embed").forEach((n) => n.remove());
+  div.querySelectorAll("*").forEach((n) => {
+    [...n.attributes].forEach((a) => { if (a.name.startsWith("on")) n.removeAttribute(a.name); });
+  });
+  return div.innerHTML;
+}
+function openDiscussion(cid, did, title) {
+  const body = $("#cd-body");
+  const stale = () => cdState.cid !== cid || cdState.tab !== "disc";
+  body.innerHTML = `<div class="empty">⏳ 正在加载讨论…</div>`;
+  call("discussion_detail", cid, did).then((r) => {
+    if (stale()) return;
+    const d = r.discussion || {};
+    const main = d.main || {};
+    const comments = d.comments || [];
+    const attList = (atts) => (atts || []).map((a) => `<span class="rc-item">📎 ${esc(a)}</span>`).join("");
+    body.innerHTML = `
+      <div class="disc-thread">
+        <h3 style="margin:4px 0 10px">${esc(title || d.title || "讨论")}</h3>
+        <div class="disc-post">
+          <div class="muted small">${esc(main.author || "")}${main.category ? " · " + esc(main.category) : ""}${main.date ? " · " + esc(main.date) : ""}</div>
+          <div class="disc-body">${escHtmlBody(main.body_html)}</div>
+          ${main.attachments && main.attachments.length ? `<div class="att-bar">${attList(main.attachments)}</div>` : ""}
+        </div>
+        <div class="disc-comments">
+          <b class="small">💬 评论 (${comments.length})</b>
+          ${comments.map((c) => `
+            <div class="disc-post${c.private ? " disc-private" : ""}">
+              <div class="muted small">${esc(c.author || "")}${c.private ? " · 🔒 私密" : ""}${c.date ? " · " + esc(c.date) : ""}</div>
+              <div class="disc-body">${escHtmlBody(c.body_html)}</div>
+            </div>`).join("") || `<div class="empty">还没有评论</div>`}
+        </div>
+        <div class="disc-reply">
+          <textarea id="disc-reply-text" rows="4" placeholder="写回复… (Ctrl+Enter 发送)"></textarea>
+          <label class="small muted"><input type="checkbox" id="disc-reply-private"> 私密评论(仅老师可见)</label>
+          <button class="primary" id="disc-reply-send">发送回复</button>
+        </div>
+      </div>`;
+    const send = $("#disc-reply-send");
+    send.onclick = async () => {
+      const txt = $("#disc-reply-text").value.trim();
+      if (!txt) { toast("回复内容不能为空"); return; }
+      const priv = $("#disc-reply-private").checked;
+      send.disabled = true; send.textContent = "发送中…";
+      try {
+        await call("discussion_reply", cid, did, esc(txt).replace(/\n/g, "<br>"), priv);
+        toast("回复已发布 ✅");
+        openDiscussion(cid, did, title);
+      } catch (e) { toast(e.message); send.disabled = false; send.textContent = "发送回复"; }
+    };
+    $("#disc-reply-text").addEventListener("keydown", (e) => {
+      if ((e.ctrlKey || e.metaKey) && e.key === "Enter") send.click();
+    });
+  }).catch((e) => { if (!stale()) body.innerHTML = `<div class="empty">${esc(e.message)}</div>`; });
 }
 $$("#cd-modal .tabbtn").forEach((b) => { b.onclick = () => setCourseTab(b.dataset.tab); });
 $("#cd-close").onclick = () => $("#cd-modal").classList.add("hidden");

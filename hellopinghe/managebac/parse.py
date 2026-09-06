@@ -362,6 +362,114 @@ def extract_task_detail(task_html: str) -> dict:
     return out
 
 
+def extract_discussions(list_html: str) -> list[dict]:
+    """课程 Discussions 列表页: div.discussion[id^=discussion_] 块.
+    (已在 shph.managebac.cn 真实页面验证: 每个线程一个块, 标题在
+    .h4.title a, 作者/分类在 .author, 预览正文在 .fr-view)"""
+    soup = BeautifulSoup(list_html, "html.parser")
+    out = []
+    for d in soup.select("div.discussion[id^=discussion_]"):
+        did = (d.get("id") or "").replace("discussion_", "")
+        if not did.isdigit():
+            continue
+        title_el = d.select_one(".h4.title a") or d.select_one(".h4.title")
+        author, category = _parse_author(d.select_one(".author"))
+        body_el = d.select_one(".fr-view")
+        atts = [a.get_text(strip=True) for a in d.select(".attachment a, .files a, a[href*='/attachments/']")]
+        out.append({
+            "id": did,
+            "title": title_el.get_text(" ", strip=True) if title_el else "(无标题)",
+            "author": author,
+            "category": category,
+            "preview": (body_el.get_text(" ", strip=True)[:200] if body_el else ""),
+            "attachments": atts[:5],
+        })
+    return out
+
+
+def _parse_author(author_el) -> tuple[str, str]:
+    """author 块 → (作者, 分类). 结构: <a>作者</a> in <a>分类</a> 或纯文本."""
+    if author_el is None:
+        return "", ""
+    links = [s.get_text(strip=True) for s in author_el.find_all("a")]
+    if len(links) >= 2:
+        return links[0], links[-1]
+    if len(links) == 1:
+        author = links[0]
+        m = re.search(r"\bin\s+(.+)$", author_el.get_text(" ", strip=True))
+        return author, (m.group(1).strip() if m else "")
+    m = re.match(r"(.+?)\s+in\s+(.+)$", author_el.get_text(" ", strip=True))
+    if m:
+        return m.group(1).strip(), m.group(2).strip()
+    return author_el.get_text(" ", strip=True)[:80], ""
+
+
+def _parse_discussion_block(d) -> dict:
+    """单个 .discussion 块 → {author, category, date, body_html, attachments}."""
+    author, category = _parse_author(d.select_one(".author"))
+    date_txt = ""
+    block_txt = d.get_text(" ", strip=True)
+    m = re.search(r"Posted on\s+(.+? (?:AM|PM))", block_txt)
+    if m:
+        date_txt = m.group(1)[:60]
+    body_el = d.select_one(".fr-view") or d.select_one(".discussion-body")
+    atts = [a.get_text(strip=True) for a in d.select("a[href*='/attachments/'], .attachment a")]
+    return {
+        "author": author,
+        "category": category,
+        "date": date_txt,
+        "body_html": str(body_el) if body_el is not None else "",
+        "body_text": _txt(body_el, 4000) if body_el is not None else "",
+        "attachments": atts[:8],
+    }
+
+
+def _parse_reply_block(r) -> dict:
+    """解析 div.reply[id^=reply_] 评论块. header 文本形如
+    'ziqian hua | oscar Posted on Sunday, Sep 6, 2026 at 5:13 PM Reply Edit Delete'
+    (作者名是纯文本, 链接都是 Reply/Edit 按钮)."""
+    header = r.select_one(".header")
+    author, date_txt = "", ""
+    if header is not None:
+        txt = header.get_text(" ", strip=True)
+        pre, _, rest = txt.partition("Posted on")
+        author = pre.split("|")[0].strip()[:60]
+        m = re.search(r"(.+?) (?:Reply|Edit|Delete)\b", rest)
+        date_txt = (m.group(1) if m else rest).strip()[:60]
+    body_el = r.select_one(".fr-view") or r.select_one(".body")
+    atts = [a.get_text(strip=True) for a in r.select("a[href*='/attachments/'], .attachment a")]
+    return {
+        "id": (r.get("id") or "").replace("reply_", ""),
+        "author": author,
+        "category": "",
+        "date": date_txt,
+        "body_html": str(body_el) if body_el is not None else "",
+        "body_text": _txt(body_el, 4000) if body_el is not None else "",
+        "attachments": atts[:8],
+        "private": "private" in " ".join((r.get("class") or [])).lower(),
+    }
+
+
+def extract_discussion_detail(thread_html: str) -> dict:
+    """讨论线程页: 主帖 = div.discussion[id^=discussion_],
+    评论 = div.reply[id^=reply_] 块(ManageBac 回复渲染)。
+    (已在 shph.managebac.cn 真实页面验证)"""
+    soup = BeautifulSoup(thread_html, "html.parser")
+    blocks = soup.select("div.discussion[id^=discussion_]")
+    out: dict = {"title": "", "main": None, "comments": []}
+    if not blocks:
+        return out
+    main = blocks[0]
+    out["main"] = _parse_discussion_block(main)
+    title_el = main.select_one(".h4.title") or main.select_one(".h4")
+    out["title"] = title_el.get_text(" ", strip=True) if title_el is not None else ""
+    for rep in soup.select("div.reply[id^=reply_]"):
+        c = _parse_reply_block(rep)
+        if c["body_text"] or c["body_html"]:
+            out["comments"].append(c)
+    return out
+
+
 def extract_units_tab(units_html: str) -> dict:
     """Units 页的 Weekly Planner 列表(不少课是空的)."""
     soup = BeautifulSoup(units_html, "html.parser")

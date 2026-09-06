@@ -22,6 +22,8 @@ from .parse import (
     extract_classes,
     extract_core_digest,
     extract_deadlines,
+    extract_discussion_detail,
+    extract_discussions,
     extract_files,
     extract_overall_grade,
     extract_task_cards,
@@ -241,6 +243,48 @@ class ManageBacClient:
         out["task_id"] = str(task_id)
         out["class_id"] = str(class_id)
         return out
+
+    def get_class_discussions(self, class_id: str) -> list[dict]:
+        """课程 Discussions 列表(线程块: id/标题/作者/分类/预览)."""
+        resp = self._get(f"/student/classes/{class_id}/discussions")
+        return extract_discussions(resp.text)
+
+    def get_discussion_detail(self, class_id: str, discussion_id: str) -> dict:
+        """单个讨论线程(主帖全文 + 评论列表)."""
+        resp = self._get(f"/student/classes/{class_id}/discussions/{discussion_id}")
+        out = extract_discussion_detail(resp.text)
+        out["discussion_id"] = str(discussion_id)
+        out["class_id"] = str(class_id)
+        return out
+
+    def post_discussion_reply(self, class_id: str, discussion_id: str,
+                              body_html: str, private: bool = False,
+                              notify_email: bool = False) -> None:
+        """回复讨论: POST /discussions/<did>/replies.
+
+        表单是 Rails UJS(data-remote), 必须 X-CSRF-Token + X-Requested-With
+        头, 否则 404。(已在 shph.managebac.cn 真实发布验证)
+        """
+        page = self._get(f"/student/classes/{class_id}/discussions/{discussion_id}")
+        soup = _soup(page.text)
+        meta = soup.find("meta", attrs={"name": "csrf-token"})
+        headers = {
+            "X-CSRF-Token": meta["content"] if meta else "",
+            "X-Requested-With": "XMLHttpRequest",
+            "Accept": "text/javascript, application/javascript, */*; q=0.01",
+        }
+        resp = self.session.post(
+            self._url(f"/student/classes/{class_id}/discussions/{discussion_id}/replies"),
+            data={
+                "reply[body]": body_html,
+                "reply[notify_via_email]": "1" if notify_email else "0",
+                "reply[private]": "1" if private else "0",
+                "commit": "Comment",
+            },
+            headers=headers, timeout=self.timeout, allow_redirects=True)
+        resp.raise_for_status()
+        if "/login" in str(resp.url):
+            raise RuntimeError("ManageBac 会话过期, 请重新登录")
 
     def get_cas_overview(self) -> dict:
         """CAS worksheet 概览(/student/ib/activity/cas)."""

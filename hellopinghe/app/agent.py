@@ -36,6 +36,7 @@ _TOOL_LEVEL = {
     "add_schedule_event": "external",
     "send_email": "external",
     "submit_managebac_task": "external",
+    "reply_discussion": "external",
 }
 
 
@@ -64,16 +65,17 @@ def _system_prompt(cfg: Config, workspace: str | None) -> str:
     if mode == "readonly":
         lines.append(
             "3. 当前为只读模式: 一切写工具(create_docx/append_to_docx/"
-            "add_schedule_event/send_email/submit_managebac_task)都被禁用, "
-            "不要尝试调用; 用户需要写操作时应提示他到 Agent 助手页切换权限模式.")
+            "add_schedule_event/send_email/submit_managebac_task/reply_discussion)"
+            "都被禁用, 不要尝试调用; 用户需要写操作时应提示他到 Agent 助手页切换权限模式.")
     elif mode == "confirm":
         lines.append(
             "3. 所有写操作(create_docx/append_to_docx/add_schedule_event/send_email/"
-            "submit_managebac_task)都只是提案, 由用户确认后执行, 请在提案前说明你要做什么.")
+            "submit_managebac_task/reply_discussion)都只是提案, 由用户确认后执行, "
+            "请在提案前说明你要做什么.")
     elif mode == "workspace_write":
         lines.append(
             "3. 当前为工作区写入模式: create_docx/append_to_docx 会直接执行不必确认;"
-            " add_schedule_event/send_email/submit_managebac_task 仍走提案, "
+            " add_schedule_event/send_email/submit_managebac_task/reply_discussion 仍走提案, "
             "请在提案前说明你要做什么.")
     else:
         lines.append(
@@ -145,6 +147,16 @@ def build_tools() -> list[dict]:
               {"class_id": {"type": "string"}, "task_id": {"type": "string"},
                "file_path": {"type": "string"}},
               ["class_id", "task_id", "file_path"]),
+        _tool("list_discussions", "列出某门课的 ManageBac 讨论(Discussion)主题列表",
+              {"class_name": {"type": "string", "maxLength": 80}}, ["class_name"]),
+        _tool("read_discussion", "读取一篇讨论的完整内容(主帖 + 全部评论)",
+              {"class_id": {"type": "string"}, "discussion_id": {"type": "string"}},
+              ["class_id", "discussion_id"]),
+        _tool("reply_discussion", "提案: 以学生身份回复一篇 ManageBac 讨论",
+              {"class_id": {"type": "string"}, "discussion_id": {"type": "string"},
+               "body": {"type": "string", "maxLength": 4000},
+               "private": {"type": "boolean"}},
+              ["class_id", "discussion_id", "body"]),
     ]
 
 
@@ -452,6 +464,45 @@ class AgentEngine:
             return self._propose(
                 f"提交作业 {args['task_id']}",
                 f"课程 {args['class_id']} ← {args['file_path']}", fn
+            )
+
+        if name == "list_discussions":
+            wanted = (args.get("class_name") or "").strip().lower()
+            classes = self.svc.courses.classes()   # {id: name}
+            hits = [(cid, name) for cid, name in classes.items()
+                    if not wanted or wanted in (name or "").lower()]
+            if not hits:
+                return {"count": 0, "note": f"没有匹配到包含 {wanted!r} 的课程"}
+            out = []
+            for cid, name in hits[:4]:
+                try:
+                    for d in self.svc.courses.class_discussions(cid):
+                        d["class_id"] = cid
+                        d["class_name"] = name
+                        out.append(d)
+                except Exception:  # noqa: BLE001
+                    continue
+            return {"count": len(out), "discussions": out[:40]}
+
+        if name == "read_discussion":
+            return self.svc.courses.discussion_detail(
+                str(args["class_id"]), str(args["discussion_id"]))
+
+        if name == "reply_discussion":
+            body = (args.get("body") or "").strip()
+            if not body:
+                raise PingheError("回复内容不能为空")
+
+            def fn():
+                self.svc.courses.post_discussion_reply(
+                    args["class_id"], args["discussion_id"],
+                    body.replace("\n", "<br>"),
+                    private=bool(args.get("private")))
+                return "回复已发布"
+
+            return self._propose(
+                f"回复讨论 {args['discussion_id']}",
+                f"---\n{body[:500]}", fn
             )
 
         raise PingheError(f"未知工具: {name}")

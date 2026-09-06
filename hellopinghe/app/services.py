@@ -1232,6 +1232,20 @@ class CoursesService:
         self.ensure_login()
         return self._client_ready().get_class_files(class_id)
 
+    def class_discussions(self, class_id: str) -> list[dict]:
+        self.ensure_login()
+        return self._client_ready().get_class_discussions(class_id)
+
+    def discussion_detail(self, class_id: str, discussion_id: str) -> dict:
+        self.ensure_login()
+        return self._client_ready().get_discussion_detail(class_id, discussion_id)
+
+    def post_discussion_reply(self, class_id: str, discussion_id: str,
+                              body_html: str, private: bool = False) -> None:
+        self.ensure_login()
+        self._client_ready().post_discussion_reply(
+            class_id, discussion_id, body_html, private=private)
+
     def class_events(self, class_id: str) -> list:
         self.ensure_login()
         return self._client_ready().get_class_events(class_id)

@@ -612,6 +612,35 @@ class Api:
             return out
         return _wrap(job)
 
+    def course_discussions(self, class_id: str) -> dict:
+        def job():
+            key = f"cdisc|{class_id}"
+            cached = _snap_get(key, 180)
+            if cached is not None:
+                return cached
+            out = {"discussions": self.svc.courses.class_discussions(class_id)}
+            _snap_put(key, out)
+            return out
+        return _wrap(job)
+
+    def discussion_detail(self, class_id: str, discussion_id: str) -> dict:
+        def job():
+            out = self.svc.courses.discussion_detail(class_id, discussion_id)
+            return {"discussion": out}
+        return _wrap(job)
+
+    def discussion_reply(self, class_id: str, discussion_id: str,
+                         body_html: str, private: bool = False) -> dict:
+        def job():
+            body = (body_html or "").strip()
+            if not body:
+                raise PingheError("回复内容不能为空")
+            self.svc.courses.post_discussion_reply(
+                class_id, discussion_id, body, private=private)
+            _snap_drop_prefix("cdisc|")
+            return {"posted": True}
+        return _wrap(job)
+
     def task_detail(self, class_id: str, task_id: str) -> dict:
         def job():
             key = f"tdetail|{class_id}|{task_id}"

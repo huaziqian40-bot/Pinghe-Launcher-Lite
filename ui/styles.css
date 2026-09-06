@@ -245,6 +245,20 @@ a{color:var(--green-700)}
 .att-bar{margin:6px 0;display:flex;flex-wrap:wrap;gap:6px;align-items:center}
 .att-dl{font-size:12px;padding:3px 8px}
 .mail-read h3{margin:4px 0 10px}
+
+/* ---------- 讨论(Discussion) ---------- */
+.disc-thread{display:flex;flex-direction:column;gap:10px}
+.disc-post{background:var(--ivory-100,#f7f4ec);border:1px solid var(--border);
+  border-radius:10px;padding:10px 14px}
+.disc-private{border-left:3px solid #c8a415}
+.disc-body{font-size:13.5px;line-height:1.65;overflow-wrap:anywhere}
+.disc-body img{max-width:100%;height:auto;border-radius:6px}
+.disc-body pre{white-space:pre-wrap;font-family:inherit}
+.disc-comments{display:flex;flex-direction:column;gap:8px;margin-top:4px}
+.disc-reply{display:flex;flex-direction:column;gap:6px;margin-top:8px}
+.disc-reply textarea{width:100%;box-sizing:border-box;font-family:inherit;font-size:13.5px;
+  line-height:1.6;padding:8px 10px;border:1px solid var(--border);border-radius:8px;resize:vertical}
+.disc-reply .primary{align-self:flex-end}
 .mail-body{white-space:pre-wrap;word-break:break-word;font-size:13.5px}
 .mail-body pre.mail-plain{white-space:pre-wrap;word-break:break-word;font-family:inherit;margin:0}
 .mail-body img{max-width:100%;height:auto}
