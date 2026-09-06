@@ -10,8 +10,10 @@ import threading
 import time as _time
 import uuid
 
+from .. import paths
 from ..config import Config
 from ..exceptions import LoginRequiredError, PingheError
+from ..logutil import log as _log, error as _log_error
 from .agent import AgentEngine, detect_ai_environment
 from .services import Services, secret_set, secret_get
 
@@ -55,8 +57,10 @@ def _wrap(fn, *args, **kwargs) -> dict:
             return data
         return {"ok": True, "data": data}
     except LoginRequiredError as exc:
+        _log.warn(f"LoginRequired: {exc}")
         return {"ok": False, "login_required": str(exc), "error": f"需要重新登录 {exc}"}
     except PingheError as exc:
+        _log.error(f"PingheError: {exc}")
         return {"ok": False, "error": str(exc)}
     except Exception as exc:  # noqa: BLE001
         # 特殊处理 edupage-api 的 BadCredentialsException
@@ -67,6 +71,7 @@ def _wrap(fn, *args, **kwargs) -> dict:
         elif not err_msg or err_msg == exc_name:
             # 某些异常 str() 为空，用类型名作为后备
             err_msg = f"未知错误({exc_name})"
+        _log_error(f"bridge error: {exc_name}: {err_msg}")
         return {"ok": False, "error": f"{exc_name}: {err_msg}"}
 
 

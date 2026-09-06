@@ -17,6 +17,7 @@ from ..config import CONFIG_DIR, Config
 from ..exceptions import LoginRequiredError, PingheError
 from ..managebac.client import ManageBacClient
 from .. import paths, storage
+from ..logutil import log as _log
 
 KEYRING_SERVICE = "hellopinghe"
 
@@ -113,6 +114,7 @@ class EdupageService:
     def login(self, username: str, password: str, subdomain: str) -> None:
         from edupage_api import Edupage
 
+        _log(f"Edupage login: {username} @ {subdomain}")
         ed = Edupage()
         self._patch(ed)
         ed.login(username, password, subdomain)

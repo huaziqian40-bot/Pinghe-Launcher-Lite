@@ -138,6 +138,10 @@ a{color:var(--green-700)}
 .core-sec b{display:block;margin-bottom:6px;color:var(--ink-2)}
 .core-sec .td-desc{margin-top:0;background:transparent;padding:0;max-height:none}
 
+.pw-toggle{background:none;border:none;cursor:pointer;padding:0 4px;font-size:14px;
+  opacity:.45;flex-shrink:0;user-select:none}
+.pw-toggle:hover{opacity:1}
+
 /* ---------- Agent 权限模式 ---------- */
 .modebar{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:6px}
 .modebtn{background:var(--ivory-100);border:1px solid var(--border);color:var(--ink-2);

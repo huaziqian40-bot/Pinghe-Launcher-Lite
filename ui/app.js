@@ -2357,3 +2357,19 @@ function runSplash() {
 window.addEventListener("pywebviewready", () => {
   boot().catch((e) => toast(e.message, 5000));
 });
+
+/* 密码输入框: 自动加显示/隐藏切换按钮 */
+document.querySelectorAll('input[type="password"]').forEach((inp) => {
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "pw-toggle";
+  btn.textContent = "👁";
+  btn.tabIndex = -1;
+  btn.title = "显示/隐藏密码";
+  btn.onclick = (e) => {
+    e.preventDefault();
+    inp.type = inp.type === "password" ? "text" : "password";
+    btn.style.opacity = inp.type === "text" ? "1" : ".45";
+  };
+  inp.after(btn);
+});
