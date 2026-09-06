@@ -122,7 +122,7 @@ a{color:var(--green-700)}
 .tabbtn{background:transparent;color:var(--ink-2);padding:5px 12px;border-radius:99px}
 .tabbtn.on{background:var(--green-800);color:var(--white)}
 .tabbtn:hover{transform:none}
-.cd-card{width:min(760px, calc(94vw / var(--ap-zoom,1)));height:calc(86vh / var(--ap-zoom,1))}
+.cd-card{width:calc(94vw / var(--ap-zoom,1));height:calc(86vh / var(--ap-zoom,1))}
 .cd-head-right{display:flex;gap:8px;align-items:center}
 .cd-body{flex:1;min-height:0;overflow:auto}
 .cd-body .item{cursor:default}
@@ -237,6 +237,10 @@ a{color:var(--green-700)}
 .mail-item .subj{font-size:13.5px}
 .mail-item .meta{font-size:12px;color:var(--ink-3)}
 .mail-read{overflow:auto;margin:0}
+.rc-bar{font-size:12px;color:var(--ink-3);margin:4px 0;line-height:1.8}
+.rc-item{display:inline-block;background:var(--ivory-100);border-radius:4px;padding:1px 6px;margin:1px 2px}
+.att-bar{margin:6px 0;display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+.att-dl{font-size:12px;padding:3px 8px}
 .mail-read h3{margin:4px 0 10px}
 .mail-body{white-space:pre-wrap;word-break:break-word;font-size:13.5px}
 .mail-body pre.mail-plain{white-space:pre-wrap;word-break:break-word;font-family:inherit;margin:0}

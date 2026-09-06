@@ -5,12 +5,12 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import threading
 import time as _time
 import uuid
 
-from .. import paths
 from ..config import Config
 from ..exceptions import LoginRequiredError, PingheError
 from ..logutil import log as _log, error as _log_error
@@ -694,6 +694,22 @@ class Api:
 
     def mail_read(self, uid: str) -> dict:
         return _wrap(lambda: self.svc.mail.read(uid))
+
+    def mail_download_attachment(self, uid: str, part_index: int, filename: str) -> dict:
+        def job():
+            import platform
+            import subprocess
+
+            path = self.svc.mail.read_attachment(uid, int(part_index), filename)
+            system = platform.system()
+            if system == "Windows":
+                os.startfile(path)
+            elif system == "Darwin":
+                subprocess.Popen(["open", path])
+            else:
+                subprocess.Popen(["xdg-open", path])
+            return {"path": path}
+        return _wrap(job)
 
     def mail_unread(self) -> dict:
         return _wrap(lambda: {"count": self.svc.mail.unread_count()})

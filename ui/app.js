@@ -1352,11 +1352,51 @@ function renderMail(d) {
         $("#ml-read").innerHTML = `<div class="empty">⏳ 正在读取邮件…</div>`;
         const m = await call("mail_read", el.dataset.uid);
         const bodyHtml = m.is_html ? m.body : `<pre class="mail-plain">${esc(m.body)}</pre>`;
+        /* 收件人折叠: 超过 5 个时显示前 5 个 + 展开按钮 */
+        const tos = (m.to || "").split(/[,;]\s*/).filter(Boolean);
+        const ccs = (m.cc || "").split(/[,;]\s*/).filter(Boolean);
+        const allRc = [...tos.map(x => `To: ${x}`), ...ccs.map(x => `Cc: ${x}`)];
+        let rcHtml = allRc.map(x => `<span class="rc-item">${esc(x)}</span>`).join("");
+        if (allRc.length > 5) {
+          rcHtml = allRc.slice(0, 5).map(x => `<span class="rc-item">${esc(x)}</span>`).join("")
+            + ` <button class="ghost rc-more" style="font-size:11px">…展开(${allRc.length})</button>`
+            + `<span class="rc-rest hidden">${allRc.slice(5).map(x => `<span class="rc-item">${esc(x)}</span>`).join("")}</span>`;
+        }
+        const rcSection = allRc.length > 0
+          ? `<div class="rc-bar">${rcHtml}</div>` : "";
+        /* 附件 */
+        let attHtml = "";
+        if ((m.attachments || []).length) {
+          attHtml = `<div class="att-bar"><b>📎 附件 (${m.attachments.length})</b>` +
+            m.attachments.map((a, i) =>
+              `<button class="ghost att-dl" data-uid="${esc(m.uid)}" data-idx="${i}" data-name="${esc(a.filename)}">` +
+              `📄 ${esc(a.filename)} (${Math.max(1, Math.round(a.size / 1024))}KB)</button>`).join("") +
+            `</div>`;
+        }
         $("#ml-read").innerHTML = `
           <h3>${esc(m.subject)}</h3>
-          <div class="muted small">${esc(m.from)} → ${esc(m.to)} · ${esc(m.date)}</div>
+          <div class="muted small">${esc(m.from)} · ${esc(m.date)}</div>
+          ${rcSection}
+          ${attHtml}
           <hr><div class="mail-body">${bodyHtml}</div>`;
         el.classList.remove("unread");
+        /* 收件人展开 */
+        const moreBtn = $("#ml-read .rc-more");
+        if (moreBtn) moreBtn.onclick = () => {
+          $("#ml-read .rc-rest").classList.remove("hidden");
+          moreBtn.classList.add("hidden");
+        };
+        /* 附件下载 */
+        $$("#ml-read .att-dl").forEach((btn) => {
+          btn.onclick = async () => {
+            btn.disabled = true; btn.textContent = "下载中…";
+            try {
+              const r = await call("mail_download_attachment", btn.dataset.uid, btn.dataset.idx, btn.dataset.name);
+              toast(`已保存: ${r.path}`);
+            } catch (e) { toast(e.message); }
+            btn.disabled = false;
+          };
+        });
       } catch (e) { toast(e.message); }
     };
   });

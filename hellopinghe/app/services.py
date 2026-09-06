@@ -691,15 +691,66 @@ class MailService:
                 M.uid("STORE", uid, "+FLAGS", "(\\Seen)")
             except Exception:  # noqa: BLE001
                 pass
+            # 提取附件列表
+            attachments = []
+            for part in msg.walk():
+                cd = str(part.get("Content-Disposition") or "")
+                if "attachment" not in cd and not part.get_filename():
+                    continue
+                fname = part.get_filename() or "unnamed"
+                if fname.startswith("=?"):
+                    fname = self._decode(fname)
+                attachments.append({
+                    "index": len(attachments),
+                    "filename": fname[:200],
+                    "size": len(part.get_payload(decode=True) or b""),
+                })
+
             return {
                 "uid": uid,
                 "subject": self._decode(msg["Subject"]) or "(无主题)",
                 "from": self._decode(msg["From"]),
                 "date": (msg["Date"] or "")[:24],
                 "to": self._decode(msg["To"]),
+                "cc": self._decode(msg.get("Cc") or ""),
                 "body": body[:20000],
                 "is_html": body_is_html,
+                "attachments": attachments,
             }
+        finally:
+            try:
+                M.logout()
+            except Exception:  # noqa: BLE001
+                pass
+
+    def read_attachment(self, uid: str, part_index: int, filename: str) -> str:
+        """提取邮件附件内容, 保存到临时文件, 返回文件路径."""
+        import email as _email
+        import imaplib
+        import tempfile
+
+        M = self._conn()
+        try:
+            typ, md = M.uid("FETCH", uid, "(BODY.PEEK[])")
+            raw = b""
+            for part in md:
+                if isinstance(part, tuple):
+                    raw = part[1] or b""
+                    break
+            if not raw:
+                raise PingheError(f"邮件 {uid} 不存在")
+            msg = _email.message_from_bytes(raw)
+            atts = [p for p in msg.walk()
+                    if "attachment" in str(p.get("Content-Disposition") or "")
+                    or p.get_filename()]
+            if part_index >= len(atts):
+                raise PingheError("附件不存在")
+            payload = atts[part_index].get_payload(decode=True) or b""
+            safe_name = re.sub(r'[<>:"/\\|?*]', "_", filename)
+            out = Path(os.path.expanduser("~")) / "Downloads" / safe_name
+            out.parent.mkdir(parents=True, exist_ok=True)
+            out.write_bytes(payload)
+            return str(out)
         finally:
             try:
                 M.logout()
