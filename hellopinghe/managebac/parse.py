@@ -426,7 +426,7 @@ def _parse_discussion_block(d) -> dict:
 
 def _parse_reply_block(r) -> dict:
     """解析 div.reply[id^=reply_] 评论块. header 文本形如
-    'ziqian hua | oscar Posted on Sunday, Sep 6, 2026 at 5:13 PM Reply Edit Delete'
+    '<student> | oscar Posted on Sunday, Sep 6, 2026 at 5:13 PM Reply Edit Delete'
     (作者名是纯文本, 链接都是 Reply/Edit 按钮)."""
     header = r.select_one(".header")
     author, date_txt = "", ""

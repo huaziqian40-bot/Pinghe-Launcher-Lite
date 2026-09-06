@@ -283,7 +283,7 @@ class EdupageService:
 
     # ---- 课程来源: 只取本班的课 ----
     def my_class_id(self) -> int | None:
-        """当前账号的班级 dbi id(负数, 如 -359 = IB grade 11 class 9).
+        """当前账号的班级 dbi id(负数, 如 -123 = 某个班级).
 
         学校的 Edupage 服务端不做按班/按人过滤(gcall 只按登录人的可见班级
         出课卡, 班级课表接口对学生返回权限错误), 过滤只能客户端做。
