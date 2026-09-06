@@ -1,135 +1,107 @@
 """密钥存储: 账号密码/授权码等敏感值.
 
-- Windows: 用 DPAPI(当前用户绑定)加密后存数据目录的 secrets.json
-  —— 满足"所有数据都在安装文件夹"的便携要求, 且退出登录用户即不可解密
-- macOS/Linux: keyring(Keychain 等)
+全平台统一方案: 加密后存数据目录 secrets.json, 文件权限 0600。
+- 加密: XOR 流密码(SHA-256 计数器模式) + 随机密钥(.secret_key)
+- 不依赖 keyring/钥匙串 → macOS 不会弹安全确认框
+- 数据随安装目录走(便携)
+- .secret_key 和 secrets.json 都 chmod 600(仅所有者可读写)
 
-统一 API: get(key) / set(key, value) / delete(key)。key 形如
-"mail_authcode:user@host"。
+威胁模型: 防止局域网/同机其他普通用户读取; 不防 root/物理接触。
 """
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
-import sys
+import os
+from pathlib import Path
 
 from . import paths
 
 _KEYFILE = "secrets.json"
+_KEYFILE_KEY = ".secret_key"
 
 
 def _keyfile() -> Path:
     return paths.data_dir() / _KEYFILE
 
 
-# ---------------------------------------------------------------- DPAPI(Windows)
-def _dpapi_protect(data: bytes) -> bytes:
-    import ctypes
-    from ctypes import wintypes
-
-    class DATA_BLOB(ctypes.Structure):
-        _fields_ = [("cbData", wintypes.DWORD),
-                    ("pbData", ctypes.POINTER(ctypes.c_char))]
-
-    buf = ctypes.create_string_buffer(data, len(data))
-    blob_in = DATA_BLOB(len(data), ctypes.cast(buf, ctypes.POINTER(ctypes.c_char)))
-    blob_out = DATA_BLOB()
-    ok = ctypes.windll.crypt32.CryptProtectData(
-        ctypes.byref(blob_in), None, None, None, None, 0, ctypes.byref(blob_out))
-    if not ok:
-        raise OSError("CryptProtectData 失败")
+def _secret_key() -> bytes:
+    """首次运行生成 32 字节随机密钥, 之后复用."""
+    kf = paths.data_dir() / _KEYFILE_KEY
+    if kf.exists():
+        return kf.read_bytes()
+    key = os.urandom(32)
+    kf.parent.mkdir(parents=True, exist_ok=True)
+    kf.write_bytes(key)
     try:
-        return ctypes.string_at(blob_out.pbData, blob_out.cbData)
-    finally:
-        ctypes.windll.kernel32.LocalFree(blob_out.pbData)
+        os.chmod(kf, 0o600)
+    except Exception:  # noqa: BLE001
+        pass
+    return key
 
 
-def _dpapi_unprotect(data: bytes) -> bytes:
-    import ctypes
-    from ctypes import wintypes
-
-    class DATA_BLOB(ctypes.Structure):
-        _fields_ = [("cbData", wintypes.DWORD),
-                    ("pbData", ctypes.POINTER(ctypes.c_char))]
-
-    buf = ctypes.create_string_buffer(data, len(data))
-    blob_in = DATA_BLOB(len(data), ctypes.cast(buf, ctypes.POINTER(ctypes.c_char)))
-    blob_out = DATA_BLOB()
-    ok = ctypes.windll.crypt32.CryptUnprotectData(
-        ctypes.byref(blob_in), None, None, None, None, 0, ctypes.byref(blob_out))
-    if not ok:
-        raise OSError("CryptUnprotectData 失败(数据属于其他用户/机器?)")
-    try:
-        return ctypes.string_at(blob_out.pbData, blob_out.cbData)
-    finally:
-        ctypes.windll.kernel32.LocalFree(blob_out.pbData)
+def _xor_stream(data: bytes, key: bytes) -> bytes:
+    """SHA-256 计数器模式 XOR 流."""
+    out = bytearray()
+    counter = 0
+    while len(out) < len(data):
+        block = hashlib.sha256(key + counter.to_bytes(4, "big")).digest()
+        chunk = data[counter * 32:(counter + 1) * 32]
+        out.extend(bytes(a ^ b for a, b in zip(chunk, block)))
+        counter += 1
+    return bytes(out[:len(data)])
 
 
-# ---------------------------------------------------------------- 文件读写
 def _load() -> dict:
     f = _keyfile()
     if not f.exists():
         return {}
     try:
         raw = json.loads(f.read_text(encoding="utf-8"))
+        key = _secret_key()
+        out: dict[str, str] = {}
+        for k, v in raw.items():
+            try:
+                blob = base64.b64decode(v)
+                out[k] = _xor_stream(blob, key).decode("utf-8")
+            except Exception:  # noqa: BLE001
+                continue
+        return out
     except Exception:  # noqa: BLE001
         return {}
-    out: dict[str, str] = {}
-    for k, v in raw.items():
-        try:
-            out[k] = _dpapi_unprotect(base64.b64decode(v)).decode("utf-8")
-        except Exception:  # noqa: BLE001
-            continue   # 解不开(换机器/换用户)的条目按不存在处理
-    return out
 
 
 def _save(store: dict) -> None:
     f = _keyfile()
     f.parent.mkdir(parents=True, exist_ok=True)
-    raw = {k: base64.b64encode(_dpapi_protect(v.encode("utf-8"))).decode("ascii")
-           for k, v in store.items()}
+    key = _secret_key()
+    raw = {}
+    for k, v in store.items():
+        encrypted = _xor_stream(v.encode("utf-8"), key)
+        raw[k] = base64.b64encode(encrypted).decode("ascii")
     f.write_text(json.dumps(raw, indent=2), encoding="utf-8")
-
-
-# ---------------------------------------------------------------- 统一 API
-def get(key: str) -> str | None:
-    if sys.platform == "win32":
-        return _load().get(key)
-    import keyring
-
     try:
-        return keyring.get_password("hellopinghe", key)
+        os.chmod(f, 0o600)
     except Exception:  # noqa: BLE001
-        return None
+        pass
+
+
+def get(key: str) -> str | None:
+    return _load().get(key)
 
 
 def set(key: str, value: str) -> bool:
     if not value:
-        return delete(key)
-    if sys.platform == "win32":
-        store = _load()
-        store[key] = value
-        _save(store)
+        delete(key)
         return True
-    import keyring
-
-    try:
-        keyring.set_password("hellopinghe", key, value)
-        return True
-    except Exception:  # noqa: BLE001
-        return False
+    store = _load()
+    store[key] = value
+    _save(store)
+    return True
 
 
 def delete(key: str) -> None:
-    if sys.platform == "win32":
-        store = _load()
-        if key in store:
-            store.pop(key)
-            _save(store)
-        return
-    import keyring
-
-    try:
-        keyring.delete_password("hellopinghe", key)
-    except Exception:  # noqa: BLE001
-        pass
+    store = _load()
+    store.pop(key, None)
+    _save(store)

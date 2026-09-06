@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import json
+import sys
 from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
 from typing import Any
@@ -51,31 +52,40 @@ def _migrate_legacy() -> None:
             pass
 
     # 旧 keyring 条目 → 新密钥存储(按迁移后的 config 推导旧密钥名)
-    try:
-        import keyring
-
-        cfg: dict = {}
+    # 只在 Windows 上执行(凭据管理器不弹窗); macOS Keychain 每次读取都会
+    # 弹安全确认, 且 macOS 从未有 keyring 旧数据, 直接跳过。
+    # 全平台只尝试一次(标记文件), 避免每次启动都碰 keyring。
+    marker = CONFIG_DIR / ".keyring_migrated"
+    if sys.platform == "win32" and not marker.exists():
         try:
-            cfg = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
+            marker.write_text("", encoding="utf-8")
         except Exception:  # noqa: BLE001
             pass
-        pairs = []
-        if cfg.get("managebac_base_url"):
-            pairs.append(f"managebac:{cfg['managebac_base_url']}")
-        if cfg.get("mail_email"):
-            pairs += [f"mail:{cfg['mail_email']}", f"mail_authcode:{cfg['mail_email']}"]
-        if cfg.get("edupage_username") and cfg.get("edupage_subdomain"):
-            pairs.append(f"edupage:{cfg['edupage_subdomain']}:{cfg['edupage_username']}")
-        for service in (_LEGACY_SERVICE, "hellopinghe"):
-            for key in pairs:
-                try:
-                    val = keyring.get_password(service, key)
-                    if val and not secrets.get(key):
-                        secrets.set(key, val)
-                except Exception:  # noqa: BLE001
-                    continue
-    except Exception:  # noqa: BLE001
-        pass
+        try:
+            import keyring
+
+            cfg: dict = {}
+            try:
+                cfg = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
+            except Exception:  # noqa: BLE001
+                pass
+            pairs = []
+            if cfg.get("managebac_base_url"):
+                pairs.append(f"managebac:{cfg['managebac_base_url']}")
+            if cfg.get("mail_email"):
+                pairs += [f"mail:{cfg['mail_email']}", f"mail_authcode:{cfg['mail_email']}"]
+            if cfg.get("edupage_username") and cfg.get("edupage_subdomain"):
+                pairs.append(f"edupage:{cfg['edupage_subdomain']}:{cfg['edupage_username']}")
+            for service in (_LEGACY_SERVICE, "hellopinghe"):
+                for key in pairs:
+                    try:
+                        val = keyring.get_password(service, key)
+                        if val and not secrets.get(key):
+                            secrets.set(key, val)
+                    except Exception:  # noqa: BLE001
+                        continue
+        except Exception:  # noqa: BLE001
+            pass
 
 
 _migrate_legacy()
