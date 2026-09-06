@@ -16,8 +16,6 @@ import tarfile
 import time
 
 HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # 仓库根
-REMOTE_DIR = os.path.expanduser("~/hellopinghe-build")
-VENV = os.path.expanduser("~/hellopinghe-venv")
 
 
 def sh(ssh, cmd, timeout=1800, show=True):
@@ -59,6 +57,13 @@ def main():
                 timeout=8, look_for_keys=False, allow_agent=False)
     print("OK")
 
+    # 获取 Mac 的 HOME 和构建路径(必须在 Windows 侧解析, 传给 Mac 时用绝对路径)
+    _, home_out, _ = ssh.exec_command("echo $HOME")
+    mac_home = home_out.read().decode().strip()
+    REMOTE_DIR = f"{mac_home}/hellopinghe-build"
+    VENV = f"{mac_home}/hellopinghe-venv"
+    print(f"  Mac home: {mac_home}")
+
     print("[2/8] 打包源码 …")
     skip = ("/.git", "/build", "/dist", "/__pycache__", "/deliver",
             "/installer", "/tools", "logo.ico", "HelloPingheLauncher.exe",
@@ -75,29 +80,35 @@ def main():
     data = buf.getvalue()
     print(f"  源码包 {len(data) // 1024} KB")
 
+    # 创建远端目录并获取绝对路径(SFTP 不认识 ~)
+    sh(ssh, f"mkdir -p {REMOTE_DIR}")
+    _, out, _ = ssh.exec_command("echo $HOME/hellopinghe-build")
+    remote_abs = out.read().decode().strip()
+    print(f"  远端绝对路径: {remote_abs}")
+
     sftp = ssh.open_sftp()
     print("[3/8] 上传 …")
-    sftp.putfo(io.BytesIO(data), f"{REMOTE_DIR}/src.tar.gz")
-    sh(ssh, f"mkdir -p {REMOTE_DIR} && cd {REMOTE_DIR} && rm -rf src && mkdir src && "
+    sftp.putfo(io.BytesIO(data), f"{remote_abs}/src.tar.gz")
+    sh(ssh, f"cd {remote_abs} && rm -rf src && mkdir src && "
             f"tar xzf src.tar.gz -C src && ls src | head -20", show=False)
 
     print("[4/8] venv + 依赖(需要 Mac 有网络, 首次数分钟) …")
-    code, _ = sh(ssh, f"cd {REMOTE_DIR}/src && "
-                      f"test -d {VENV} || python3 -m venv {VENV}; "
+    code, _ = sh(ssh, f"cd {remote_abs}/src && "
+                      f"test -d {VENV} || /Library/Frameworks/Python.framework/Versions/3.12/bin/python3 -m venv {VENV}; "
                       f"{VENV}/bin/python -m pip install -U pip -q && "
                       f"{VENV}/bin/python -m pip install -e '.[ui,agent]' pyinstaller -q", show=True)
     if code != 0:
         sys.exit(f"依赖安装失败(检查 Mac 网络), exit {code}")
 
     print("[5/8] 生成 .icns 图标 …")
-    sh(ssh, f"cd {REMOTE_DIR}/src && mkdir -p logo.iconset && "
+    sh(ssh, f"cd {remote_abs}/src && mkdir -p logo.iconset && "
             f"for s in 16 32 64 128 256 512; do "
             f"  sips -z $s $s ui/logo.png --out logo.iconset/icon_${{s}}x${{s}}.png >/dev/null; "
             f"  d=$((s*2)); sips -z $d $d ui/logo.png --out logo.iconset/icon_${{s}}x${{s}}@2x.png >/dev/null; "
             f"done; iconutil -c icns logo.iconset -o logo.icns && ls -la logo.icns")
 
     print("[6/8] PyInstaller(.app) …")
-    code, _ = sh(ssh, f"cd {REMOTE_DIR}/src && "
+    code, _ = sh(ssh, f"cd {remote_abs}/src && "
                       f"{VENV}/bin/python -m PyInstaller --noconfirm --clean "
                       f"HelloPingheLauncher-mac.spec")
     if code != 0:
@@ -106,7 +117,7 @@ def main():
     print("[7/8] 打 DMG …")
     stamp = time.strftime("%Y%m%d")
     dmg = f"HelloPingheLauncher-mac-{stamp}.dmg"
-    sh(ssh, f"cd {REMOTE_DIR}/src/dist && rm -f {dmg} && "
+    sh(ssh, f"cd {remote_abs}/src/dist && rm -f {dmg} && "
             f"hdiutil create -volname 'Hello Pinghe! Launcher' -srcfolder "
             f"'Hello Pinghe! Launcher.app' -ov -format UDZO {dmg} | tail -2")
 
@@ -114,7 +125,7 @@ def main():
     deliver = os.path.join(HERE, "deliver")
     os.makedirs(deliver, exist_ok=True)
     local = os.path.join(deliver, dmg)
-    sftp.get(f"{REMOTE_DIR}/src/dist/{dmg}", local)
+    sftp.get(f"{remote_abs}/src/dist/{dmg}", local)
     print(f"✅ 完成: {local} ({os.path.getsize(local) // 1048576} MB)")
     sftp.close()
     ssh.close()
