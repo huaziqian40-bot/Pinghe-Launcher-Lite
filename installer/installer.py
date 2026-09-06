@@ -125,48 +125,71 @@ class InstallerUI:
         self.uninstall = uninstall
         self.target = os.environ.get("HPHL_TARGET", "") or default_install_dir()
         root.title(f"{APP_NAME} 安装程序")
-        root.geometry("560x430")
-        root.resizable(False, False)
-        pad = {"padx": 14, "pady": 6, "sticky": "we"}
+        root.geometry("640x480")
+        root.minsize(520, 400)
+
+        # 让列/行可伸缩, 元素跟随窗口大小
+        root.columnconfigure(0, weight=0)   # 标签列
+        root.columnconfigure(1, weight=1)   # 内容列(伸缩)
+        root.columnconfigure(2, weight=0)   # 按钮列
+        root.rowconfigure(7, weight=1)      # 日志区(伸缩)
+
+        pad = {"padx": 14, "pady": 6, "sticky": "ew"}
+
         if uninstall:
             tk.Label(root, text=f"卸载 {APP_NAME}",
-                     font=("Segoe UI", 15, "bold")).grid(row=0, column=0, **pad)
+                     font=("Segoe UI", 15, "bold")).grid(row=0, column=0,
+                     columnspan=3, **pad)
             self.keep_data = tk.BooleanVar(value=False)
             tk.Checkbutton(root, text="保留用户数据(配置/缓存/数据库)",
-                           variable=self.keep_data).grid(row=1, column=0, **pad)
+                           variable=self.keep_data).grid(row=1, column=0,
+                           columnspan=3, **pad)
             tk.Label(root, text=f"安装位置: {self.target}",
-                     wraplength=520, justify="left").grid(row=2, column=0, **pad)
+                     wraplength=500, justify="left").grid(row=2, column=0,
+                     columnspan=3, **pad)
             self.go = tk.Button(root, text="卸载", bg="#8b3445", fg="white",
                                 command=self.do_uninstall)
-            self.go.grid(row=3, column=0, **pad)
+            self.go.grid(row=3, column=0, columnspan=3, **pad)
         else:
             tk.Label(root, text=f"安装 {APP_NAME}",
-                     font=("Segoe UI", 15, "bold")).grid(row=0, column=0, **pad)
+                     font=("Segoe UI", 15, "bold")).grid(row=0, column=0,
+                     columnspan=3, **pad)
             tk.Label(root, text="安装目录:").grid(row=1, column=0, sticky="e", pady=6)
             self.dir_var = tk.StringVar(value=self.target)
-            tk.Entry(root, textvariable=self.dir_var, width=46).grid(row=1, column=1, pady=6)
-            tk.Button(root, text="浏览…", command=self.browse).grid(row=1, column=2, padx=6)
+            dir_entry = tk.Entry(root, textvariable=self.dir_var)
+            dir_entry.grid(row=1, column=1, pady=6, sticky="ew")
+            tk.Button(root, text="浏览…", command=self.browse)\
+                .grid(row=1, column=2, padx=(0, 14), pady=6)
+
             self.desktop = tk.BooleanVar(value=True)
             self.taskbar = tk.BooleanVar(value=False)
             self.launch = tk.BooleanVar(value=True)
             tk.Checkbutton(root, text="创建桌面快捷方式", variable=self.desktop)\
-                .grid(row=2, column=1, sticky="w")
+                .grid(row=2, column=0, columnspan=3, sticky="w", padx=14)
             tk.Checkbutton(root, text="固定到任务栏(Windows 10; Win11 可能需手动固定)",
-                           variable=self.taskbar).grid(row=3, column=1, sticky="w")
+                           variable=self.taskbar)\
+                .grid(row=3, column=0, columnspan=3, sticky="w", padx=14)
             tk.Checkbutton(root, text="安装完成后启动应用", variable=self.launch)\
-                .grid(row=4, column=1, sticky="w")
-            tk.Label(root, text="应用的所有数据(配置/数据库/缓存/密钥)都会保存在"
-                     "安装目录的 data 文件夹里, 卸载时可选保留或删除。",
-                     wraplength=520, justify="left", fg="#4d5d55")\
-                .grid(row=5, column=0, columnspan=3, **pad)
-            self.go = tk.Button(root, text="安装", bg="#1f5a46", fg="white",
+                .grid(row=4, column=0, columnspan=3, sticky="w", padx=14)
+
+            info = tk.Label(root, text="应用的所有数据(配置/数据库/缓存/密钥)都会保存在"
+                            "安装目录的 data 文件夹里, 卸载时可选保留或删除。",
+                            wraplength=500, justify="left", fg="#4d5d55")
+            info.grid(row=5, column=0, columnspan=3, **pad)
+
+            btn_frame = tk.Frame(root)
+            btn_frame.grid(row=6, column=0, columnspan=3, **pad)
+            self.go = tk.Button(btn_frame, text="安装", bg="#1f5a46", fg="white",
                                 width=18, command=self.do_install)
-            self.go.grid(row=6, column=1, sticky="w", pady=6)
-        self.log = tk.Text(root, height=11, state="disabled", bg="#f5f2e9",
-                           font=("Consolas", 9))
-        self.log.grid(row=7, column=0, columnspan=3, **pad)
-        self.close = tk.Button(root, text="退出", command=root.destroy)
-        self.close.grid(row=8, column=2, sticky="e", padx=14)
+            self.go.pack(side="left", padx=(0, 10))
+
+        self.log = tk.Text(root, height=10, state="disabled", bg="#f5f2e9",
+                           font=("Consolas", 9), wrap="word")
+        self.log.grid(row=7, column=0, columnspan=3, padx=14, pady=6, sticky="nesw")
+
+        btn_bar = tk.Frame(root)
+        btn_bar.grid(row=8, column=0, columnspan=3, padx=14, pady=(0, 10), sticky="ew")
+        tk.Button(btn_bar, text="退出", command=root.destroy).pack(side="right")
 
     def browse(self) -> None:
         d = filedialog.askdirectory(initialdir=self.dir_var.get() or "D:\\",
@@ -269,14 +292,19 @@ class InstallerUI:
 
 
 def main() -> None:
+    # DPI 感知: 高 DPI 屏幕上 tkinter 元素不再模糊/截断
+    try:
+        from ctypes import windll
+
+        windll.shcore.SetProcessDpiAwareness(1)
+    except Exception:  # noqa: BLE001
+        pass
+
     uninstall = "/uninstall" in sys.argv or \
         Path(sys.executable).stem.lower() == "uninstall"
     root = tk.Tk()
     try:
         InstallerUI(root, uninstall)
-        if not is_admin():
-            # 提权由 PyInstaller manifest 完成(--uac-admin); 走到这里说明已是管理员
-            pass
         root.mainloop()
     except Exception:  # noqa: BLE001
         traceback.print_exc()
