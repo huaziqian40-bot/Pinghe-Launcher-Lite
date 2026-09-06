@@ -376,13 +376,12 @@ function updateNowLine(nowMins) {
   if (pi < 0) return;
   const p = PERIODS[pi];
   const f = Math.min(1, Math.max(0, (t - toMin(p.start)) / (toMin(p.end) - toMin(p.start))));
-  /* 行号 = 时段下标 + 2(第 1 行是星期表头); 用该行时段标签格测量像素位置 */
+  /* 行号 = 时段下标 + 2(第 1 行是星期表头); 用 offsetTop(布局坐标,
+     不受 zoom/viewport 缩放影响)而不是 getBoundingClientRect */
   const cell = [...wk.querySelectorAll(".tt-time")]
     .find((el) => el.style.gridRow === String(pi + 2));
   if (!cell) return;
-  const wkTop = wk.getBoundingClientRect().top;
-  const r = cell.getBoundingClientRect();
-  const y = r.top - wkTop + r.height * f;
+  const y = cell.offsetTop + cell.offsetHeight * f;
   const line = document.createElement("div");
   line.id = "tt-nowline";
   line.style.top = `${y}px`;
