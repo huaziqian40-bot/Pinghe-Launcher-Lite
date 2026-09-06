@@ -56,25 +56,62 @@ def ps(script: str) -> None:
         raise RuntimeError(r.stderr.strip() or "PowerShell 执行失败")
 
 
+def _desktop_path() -> str:
+    """当前用户桌面路径(从注册表读, 处理 OneDrive 重定向)."""
+    import winreg
+
+    for root, path in (
+        (winreg.HKEY_CURRENT_USER,
+         r"Software\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders"),
+        (winreg.HKEY_CURRENT_USER,
+         r"Software\Microsoft\Windows\CurrentVersion\Explorer\Shell Folders"),
+    ):
+        try:
+            with winreg.OpenKey(root, path) as k:
+                val, _ = winreg.QueryValueEx(k, "Desktop")
+                return os.path.expandvars(val)
+        except OSError:
+            continue
+    return os.path.join(os.path.expanduser("~"), "Desktop")
+
+
+def _ps_quote(s: str) -> str:
+    """转义 PowerShell 单引号字符串里的单引号."""
+    return s.replace("'", "''")
+
+
+def _make_lnk(lnk_path: str, target_exe: str, workdir: str) -> None:
+    """用 PowerShell WScript.Shell 创建 .lnk 快捷方式.
+
+    所有路径在 Python 里解析为字面值再传入, 不用 PowerShell 表达式,
+    彻底避免嵌套引号/特殊字符问题。
+    """
+    lnk = _ps_quote(lnk_path)
+    tgt = _ps_quote(target_exe)
+    wd = _ps_quote(workdir)
+    ps(f"$ws = New-Object -ComObject WScript.Shell; "
+       f"$s = $ws.CreateShortcut('{lnk}'); "
+       f"$s.TargetPath = '{tgt}'; "
+       f"$s.WorkingDirectory = '{wd}'; "
+       f"$s.IconLocation = '{tgt},0'; "
+       f"$s.Save()")
+
+
 def make_shortcuts(target: str, desktop: bool, startmenu: bool, taskbar: bool) -> list[str]:
     made = []
     exe = os.path.join(target, APP_EXE)
     workdir = target
-    tmpl = ("$ws = New-Object -ComObject WScript.Shell; "
-            f"$s = $ws.CreateShortcut('{{lnk}}'); "
-            f"$s.TargetPath = '{exe}'; $s.WorkingDirectory = '{workdir}'; "
-            f"$s.IconLocation = '{exe},0'; $s.Save()")
-    spots: list[tuple[str, str]] = []
+
     if desktop:
-        spots.append(("桌面", "[Environment]::GetFolderPath('Desktop')"))
-    if startmenu:
-        spots.append(("开始菜单", r"$env:APPDATA + '\Microsoft\Windows\Start Menu\Programs'"))
-    for label, expr in spots:
-        lnk = f"{{{expr}}}\\{LNK_NAME}"
-        ps(tmpl.replace("{lnk}", lnk))
+        lnk = os.path.join(_desktop_path(), LNK_NAME)
+        _make_lnk(lnk, exe, workdir)
         made.append(lnk)
-        if label == "桌面":
-            made[-1] = lnk
+    if startmenu:
+        sm = os.path.expandvars(
+            r"%APPDATA%\Microsoft\Windows\Start Menu\Programs")
+        lnk = os.path.join(sm, LNK_NAME)
+        _make_lnk(lnk, exe, workdir)
+        made.append(lnk)
     if taskbar:
         # 早期固定机制(Win10 有效; Win11 可能不生效, 失败不阻塞)
         ql = os.path.expandvars(
@@ -82,7 +119,7 @@ def make_shortcuts(target: str, desktop: bool, startmenu: bool, taskbar: bool) -
         lnk = os.path.join(ql, LNK_NAME)
         try:
             os.makedirs(ql, exist_ok=True)
-            ps(tmpl.replace("{lnk}", lnk))
+            _make_lnk(lnk, exe, workdir)
             made.append(lnk)
         except Exception:  # noqa: BLE001
             pass
@@ -257,15 +294,14 @@ class InstallerUI:
             subprocess.run(["taskkill", "/IM", APP_EXE, "/F"], capture_output=True)
             self.logline("移除快捷方式与注册表项…")
             unregister_app()
-            for base in ("[Environment]::GetFolderPath('Desktop')",
-                         r"$env:APPDATA + '\Microsoft\Windows\Start Menu\Programs'",
-                         r"$env:APPDATA + '\Microsoft\Internet Explorer\Quick Launch\User Pinned\TaskBar'"):
-                try:
-                    ps("$lnk = (" + base + ") + '\\" + LNK_NAME + "'; "
-                       "Remove-Item -LiteralPath $lnk -Force -ErrorAction SilentlyContinue")
-                except Exception:  # noqa: BLE001
-                    pass
-            remove_file(os.path.join(os.path.expanduser("~"), "Desktop", LNK_NAME))
+            desktop = _desktop_path()
+            sm = os.path.expandvars(r"%APPDATA%\Microsoft\Windows\Start Menu\Programs")
+            for lnk in (os.path.join(desktop, LNK_NAME),
+                        os.path.join(sm, LNK_NAME),
+                        os.path.expandvars(
+                            r"%APPDATA%\Microsoft\Internet Explorer\Quick Launch"
+                            r"\User Pinned\TaskBar" + "\\" + LNK_NAME)):
+                remove_file(lnk)
             keep = self.keep_data.get()
             self.logline("删除程序文件…" + ("(保留 data 用户数据)" if keep else ""))
             def _rmtree():
