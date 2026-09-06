@@ -523,11 +523,20 @@ class MailService:
 
     def _imap_error(self, exc: Exception) -> PingheError:
         extra = ""
-        if "ERR.ILLEGAL.EMAIL" in str(exc):
+        err_str = str(exc)
+        if "ERR.ILLEGAL.EMAIL" in err_str:
             extra = ("。ERR.ILLEGAL.EMAIL 通常表示该账号未开通 IMAP 客户端服务: "
                      "请登录 mail.shphschool.com → 设置 → 客户端设置 → 开启 IMAP 并生成客户端授权密码; "
                      "若已开启仍报错, 请联系学校管理员为你的账号开通客户端协议")
-        elif "INVALID" in str(exc).upper() or "AUTH" in str(exc).upper():
+        elif "ERR.LOGIN.REQCODE" in err_str:
+            extra = ("。ERR.LOGIN.REQCODE = 服务器要求客户端授权码, 但提供的凭据无效或已过期。\n"
+                     "解决方法:\n"
+                     "  1. 登录 mail.shphschool.com\n"
+                     "  2. 进入 设置 → 客户端设置\n"
+                     "  3. 确认 IMAP/SMTP 服务已开启\n"
+                     "  4. 删除旧授权码 → 新增授权码(会生成一个新的授权码字符串)\n"
+                     "  5. 把新授权码填到本应用的设置页里")
+        elif "INVALID" in err_str.upper() or "AUTH" in err_str.upper():
             extra = ("。认证失败: 网易企业邮 IMAP/SMTP 服务需要使用「客户端授权码」登录, "
                      "而不是网页登录密码。请登录 mail.shphschool.com → 设置 → 客户端设置 → "
                      "开启 IMAP/SMTP 服务并生成客户端授权码, 然后在设置页面填写客户端授权码")
