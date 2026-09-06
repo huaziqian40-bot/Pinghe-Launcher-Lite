@@ -58,6 +58,9 @@ a{color:var(--green-700)}
 /* ---------- 卡片 ---------- */
 .card{background:var(--white);border:1px solid var(--border);border-radius:var(--radius);
   box-shadow:var(--shadow-sm);padding:16px 18px;margin-bottom:16px}
+.go-card{cursor:pointer;transition:border-color .15s,box-shadow .15s,transform .15s}
+.go-card:hover{border-color:var(--green-500,#1f5a46);box-shadow:0 2px 10px rgba(31,90,70,.10)}
+.go-card:hover .card-title{color:var(--green-500,#1f5a46)}
 .card-title{font-weight:700;font-size:13.5px;color:var(--ink-2);
   text-transform:uppercase;letter-spacing:.4px;margin-bottom:10px}
 .grid-2{display:grid;grid-template-columns:1fr 1fr;gap:16px}

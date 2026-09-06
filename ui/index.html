@@ -34,26 +34,26 @@
           <div id="home-date" class="muted">加载中…</div>
         </div>
         <div class="hero-duo">
-          <div class="card current-card">
+          <div class="card current-card go-card" data-go="timetable" title="查看我的课表">
             <div class="card-title">正在上的课</div>
             <div id="home-current" class="current-lesson">—</div>
           </div>
-          <div class="card next-card">
+          <div class="card next-card go-card" data-go="timetable" title="查看我的课表">
             <div class="card-title">下一节课</div>
             <div id="home-next" class="current-lesson">—</div>
           </div>
         </div>
-        <div class="card stat-card">
+        <div class="card stat-card go-card" data-go="mail" title="打开平和邮箱">
           <div class="card-title">未读邮件</div>
           <div id="home-unread" class="big-num">–</div>
           <div class="muted small">平和邮箱</div>
         </div>
       </div>
       <div class="grid-2">
-        <div class="card"><div class="card-title">今天的课</div><div id="home-lessons" class="list"></div></div>
-        <div class="card"><div class="card-title">今天的日程</div><div id="home-events" class="list"></div></div>
+        <div class="card go-card" data-go="timetable" title="查看我的课表"><div class="card-title">今天的课</div><div id="home-lessons" class="list"></div></div>
+        <div class="card go-card" data-go="schedule" title="查看我的日程"><div class="card-title">今天的日程</div><div id="home-events" class="list"></div></div>
       </div>
-      <div class="card"><div class="card-title">ManageBac · 未来 14 天 DDL</div><div id="home-ddl" class="list"></div></div>
+      <div class="card go-card" data-go="courses" title="打开我的课程"><div class="card-title">ManageBac · 未来 14 天 DDL</div><div id="home-ddl" class="list"></div></div>
     </section>
 
     <!-- ================= 我的课表 ================= -->

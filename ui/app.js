@@ -128,6 +128,11 @@ $("#nav").addEventListener("click", (e) => {
   const btn = e.target.closest("button[data-go]");
   if (btn) show(btn.dataset.go);
 });
+/* 首页卡片快捷跳转: 点卡片直接进对应页面 */
+document.addEventListener("click", (e) => {
+  const card = e.target.closest(".go-card[data-go]");
+  if (card && currentView === "home") show(card.dataset.go);
+});
 $("#btn-refresh").addEventListener("click", () => show(currentView));
 /* 点左上角软件名/logo 回首页 */
 $("#logo").addEventListener("click", () => show("home"));
