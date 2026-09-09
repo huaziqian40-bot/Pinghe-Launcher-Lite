@@ -15,8 +15,8 @@ _probe_*.py
 *.log
 msi_extract
 
-# ³ÉÆ·¶þ½øÖÆ×ß GitHub Releases, ²»½ø²Ö¿â
-HelloPingheLauncher.exe
+# ï¿½ï¿½Æ·ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ GitHub Releases, ï¿½ï¿½ï¿½ï¿½ï¿½Ö¿ï¿½
+PingheLauncherLite.exe
 /deliver/
 tools/wix314-binaries.zip
 /tools/

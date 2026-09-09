@@ -4,7 +4,7 @@
 # 用法: bash scripts/publish_github.sh "提交说明"
 set -e
 cd "$(dirname "$0")/.."
-MSG="${1:-Update Hello Pinghe! Launcher}"
+MSG="${1:-Update Pinghe Launcher Lite}"
 
 git checkout --orphan public-tmp
 git add -A

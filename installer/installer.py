@@ -1,4 +1,4 @@
-r"""Hello Pinghe! Launcher 安装程序(替代 WiX MSI).
+r"""Pinghe Launcher Lite 安装程序(替代 WiX MSI).
 
 - 默认安装目录: D:\Program Files\HPHL(D 盘不存在则 C:\Program Files\HPHL), 可浏览修改
 - 写入 portable.flag → 应用的所有数据(配置/数据库/缓存/密钥)都存在安装目录\data
@@ -21,11 +21,11 @@ from pathlib import Path
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
-APP_EXE = "HelloPingheLauncher.exe"
+APP_EXE = "PingheLauncherLite.exe"
 UNINSTALL_EXE = "Uninstall.exe"
-APP_NAME = "Hello Pinghe! Launcher"
-REG_KEY = r"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\HelloPingheLauncher"
-LNK_NAME = "Hello Pinghe! Launcher.lnk"
+APP_NAME = "Pinghe Launcher Lite"
+REG_KEY = r"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\PingheLauncherLite"
+LNK_NAME = "Pinghe Launcher Lite.lnk"
 VERSION = "1.0.0"
 
 BUNDLED_APP = Path(getattr(sys, "_MEIPASS", ".")) / APP_EXE
@@ -127,7 +127,7 @@ def register_app(target: str) -> None:
     with winreg.CreateKeyEx(winreg.HKEY_LOCAL_MACHINE, REG_KEY, 0, winreg.KEY_SET_VALUE) as k:
         winreg.SetValueEx(k, "DisplayName", 0, winreg.REG_SZ, APP_NAME)
         winreg.SetValueEx(k, "DisplayVersion", 0, winreg.REG_SZ, VERSION)
-        winreg.SetValueEx(k, "Publisher", 0, winreg.REG_SZ, "Hello Pinghe")
+        winreg.SetValueEx(k, "Publisher", 0, winreg.REG_SZ, "Pinghe Launcher Lite")
         winreg.SetValueEx(k, "InstallLocation", 0, winreg.REG_SZ, target)
         winreg.SetValueEx(k, "DisplayIcon", 0, winreg.REG_SZ, exe)
         winreg.SetValueEx(k, "UninstallString", 0, winreg.REG_SZ,

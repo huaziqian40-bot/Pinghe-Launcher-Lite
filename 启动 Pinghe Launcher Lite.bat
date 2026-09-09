@@ -1,7 +1,7 @@
 @echo off
 chcp 65001 >nul
 cd /d "%~dp0"
-echo Starting Hello Pinghe! Launcher...
+echo Starting Pinghe Launcher Lite...
 python run_hellopinghe.py
 echo.
 echo === Program exited ===

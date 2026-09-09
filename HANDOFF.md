@@ -1,4 +1,4 @@
-# Hello Pinghe! Launcher — 项目交接文档
+# Pinghe Launcher Lite — 项目交接文档
 
 > 写给接手的新 agent。这里包含项目的全部背景、架构、踩过的坑和当前状态。
 > 读完后你应该能独立继续开发和维护这个项目。
@@ -7,7 +7,7 @@
 
 ## 一、项目是什么
 
-**Hello Pinghe! Launcher**(原名 SchoolHub)是给上海平和学校学生用的本地学习助手:
+**Pinghe Launcher Lite**(原名 SchoolHub)是给上海平和学校学生用的本地学习助手:
 
 - **数据源**:Edupage(课表/考勤)、ManageBac(IB 课程作业/成绩/DDL)、网易企业邮箱(邮件/通讯录)
 - **核心卖点**:本地运行、数据不出机器;AI 助手可以查课表/DDL/邮件/联系人、起草 Word 作业、代发邮件、代交作业(全部要用户确认)
@@ -21,11 +21,11 @@
 - **`D:\HPHL-dev\`** — 唯一的开发仓库(git repo,分支 master)
   - `hellopinghe/` — Python 包(核心代码)
   - `ui/` — 前端(app.js / index.html / styles.css / logo.png)
-  - `installer/` — WiX 定义 + 产物 HelloPingheLauncher.msi
+  - `installer/` — WiX 定义 + 产物 PingheLauncherLite.msi
   - `tools/wix314/` — WiX 3.14.1 便携版(candle.exe / light.exe)
-  - `HelloPingheLauncher.spec` — PyInstaller 打包配置(内嵌 `icon='logo.ico'` + `--add-data "ui;ui"`)
+  - `PingheLauncherLite.spec` — PyInstaller 打包配置(内嵌 `icon='logo.ico'` + `--add-data "ui;ui"`)
   - `run_hellopinghe.py` — 源码启动入口
-  - `HelloPingheLauncher.exe` — 绿色版(仓库根,已跟踪进 git)
+  - `PingheLauncherLite.exe` — 绿色版(仓库根,已跟踪进 git)
   - `logo.ico` / `logo.png` — 图标(源图在 `D:\HPHL\logo.png`)
   - `_ui_test.py` / `_ui_dbg_week.py` — UI 测试脚本(gitignored)
 
@@ -45,16 +45,16 @@
 ### 构建命令
 
 ```bash
-# exe(产出 dist/HelloPingheLauncher.exe,记得 cp 到仓库根)
+# exe(产出 dist/PingheLauncherLite.exe,记得 cp 到仓库根)
 cd D:\HPHL-dev
-python -m PyInstaller --noconfirm --clean HelloPingheLauncher.spec
-cp -f dist/HelloPingheLauncher.exe ./HelloPingheLauncher.exe
+python -m PyInstaller --noconfirm --clean PingheLauncherLite.spec
+cp -f dist/PingheLauncherLite.exe ./PingheLauncherLite.exe
 
 # MSI(⚠ 不要加 -ext WixUIExtension,会把数据库代码页压回 1252 导致中文 LGHT0311)
 cd installer
-..\tools\wix314\candle.exe HelloPingheLauncher.wxs -nologo
-..\tools\wix314\light.exe HelloPingheLauncher.wixobj -out HelloPingheLauncher.msi -nologo
-rm -f HelloPingheLauncher.wixobj HelloPingheLauncher.wixpdb   # 清理中间产物
+..\tools\wix314\candle.exe PingheLauncherLite.wxs -nologo
+..\tools\wix314\light.exe PingheLauncherLite.wixobj -out PingheLauncherLite.msi -nologo
+rm -f PingheLauncherLite.wixobj PingheLauncherLite.wixpdb   # 清理中间产物
 
 # 打包前隐私扫描(必须零命中): 模式为 用户账号名/各密码/授权码/AI密钥的
 # 关键片段 —— 2026-09-05 用户已要求清除全部测试凭据, 字面模式不再入库;
@@ -185,7 +185,7 @@ Edupage / ManageBac / 网易IMAP·SMTP / SQLite / keyring / 文件系统
 - **WiX light 千万不要加 `-ext WixUIExtension`** — 它内嵌的 en-US .wxl 会把数据库代码页强制回 1252,中文内容直接 LGHT0311 失败(即使 Product/@Codepage="936")
 - WiX 中间产物 .wixobj/.wixpdb/.msi 用完要清理,不要提交进 git
 - PyInstaller onefile 的 exe 是压缩的,**对 exe 做二进制字符串扫描找不到任何东西**(包括敏感信息),隐私扫描要在源码层做
-- exe 构建后必须 `cp dist/HelloPingheLauncher.exe .` 同步到仓库根(用户会看根目录那个)
+- exe 构建后必须 `cp dist/PingheLauncherLite.exe .` 同步到仓库根(用户会看根目录那个)
 
 ### 测试基础设施
 
@@ -280,7 +280,7 @@ da19fe2 邮箱通讯录: IMAP 收割联系人 + 写邮件自动补全 + AI 按�
 973e2cf 修复: 我的课程页 NameError — courses_data 缺少 storage 局部导入
 a2f52a5 更新根目录 exe 至最新构建, 清理旧 SchoolHub MSI 解包残留
 4f45c58 UI 改进: 删首页空闲教室、写邮件弹卡、workspace 文件夹选择、课程左滑删 DDL+拖拽排序
-2b04793 改名: SchoolHub → Hello! Pinghe launcher
+2b04793 改名: SchoolHub → Pinghe Launcher Lite
 2d209bd 基线: 性能优化+缓存+日程三视图+课表节次对齐 (SchoolHub 原名)
 ```
 

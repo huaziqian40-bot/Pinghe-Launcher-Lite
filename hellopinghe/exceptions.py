@@ -1,4 +1,4 @@
-"""Hello Pinghe! Launcher 全局异常."""
+"""Pinghe Launcher Lite 全局异常."""
 from __future__ import annotations
 
 

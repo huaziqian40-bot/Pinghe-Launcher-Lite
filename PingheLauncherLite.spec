@@ -25,7 +25,7 @@ exe = EXE(
     a.binaries,
     a.datas,
     [],
-    name='HelloPingheLauncher',
+    name='PingheLauncherLite',
     icon='logo.ico',
     debug=False,
     bootloader_ignore_signals=False,

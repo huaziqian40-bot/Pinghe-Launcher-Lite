@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
-"""Hello Pinghe! Launcher 启动器: 双击运行或命令行 python run_hellopinghe.py
+"""Pinghe Launcher Lite 启动器: 双击运行或命令行 python run_hellopinghe.py
 
-如果窗口闪退，请双击 '启动 Hello Pinghe.bat' 查看错误信息。
+如果窗口闪退，请双击 '启动 Pinghe Launcher Lite.bat' 查看错误信息。
 """
 import sys
 import os

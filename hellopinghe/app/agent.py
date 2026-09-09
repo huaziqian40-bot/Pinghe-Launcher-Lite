@@ -53,7 +53,7 @@ def _system_prompt(cfg: Config, workspace: str | None) -> str:
     subjects = "、".join(s["subject"] for s in (cfg.selected_lessons or [])) or "(未选课)"
     mode = _mode_of(cfg)
     lines = [
-        "你是 Hello Pinghe! 学习助手, 运行在学生自己的电脑上.",
+        "你是 Pinghe Launcher Lite! 学习助手, 运行在学生自己的电脑上.",
         f"当前时间: {_now_str()}.",
         f"学生已选科目: {subjects}.",
         f"工作目录(workspace): {workspace or '(未设置)'}",
@@ -250,7 +250,7 @@ class AgentEngine:
 
     def new_workspace(self, name: str) -> dict:
         name = re.sub(r'[\\/:*?"<>|]', "_", name or "workspace").strip() or "workspace"
-        base = Path.home() / "Documents" / "Hello Pinghe"
+        base = Path.home() / "Documents" / "Pinghe Launcher Lite"
         p = base / name
         p.mkdir(parents=True, exist_ok=True)
         self.cfg.agent_workspace = str(p)

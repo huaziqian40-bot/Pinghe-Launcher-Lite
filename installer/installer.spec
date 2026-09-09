@@ -1,5 +1,5 @@
 # -*- mode: python ; coding: utf-8 -*-
-# 安装程序打包: 需要先构建好 dist/HelloPingheLauncher.exe(作为要安装的应用)
+# 安装程序打包: 需要先构建好 dist/PingheLauncherLite.exe(作为要安装的应用)
 # 用法: python -m PyInstaller --noconfirm --clean installer/installer.spec
 # 产物: dist/HPHLSetup.exe(双击运行, 自动请求管理员权限)
 
@@ -7,7 +7,7 @@ a = Analysis(
     ['installer.py'],
     pathex=[],
     binaries=[],
-    datas=[('../dist/HelloPingheLauncher.exe', '.')],
+    datas=[('../dist/PingheLauncherLite.exe', '.')],
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},

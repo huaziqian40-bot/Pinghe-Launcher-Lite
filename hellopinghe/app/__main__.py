@@ -1,4 +1,4 @@
-"""Hello Pinghe! Launcher 桌面应用入口: python -m hellopinghe.app [--smoke]"""
+"""Pinghe Launcher Lite 桌面应用入口: python -m hellopinghe.app [--smoke]"""
 from __future__ import annotations
 
 import sys
@@ -56,7 +56,7 @@ def _log_error(stage: str, exc: BaseException) -> None:
             import ctypes
 
             msg = (f"{stage}\n\n{exc}\n\n详情见日志:\n{_LOG_DIR / 'error.log'}")
-            ctypes.windll.user32.MessageBoxW(0, msg, "Hello Pinghe! Launcher 启动失败", 0x10)
+            ctypes.windll.user32.MessageBoxW(0, msg, "Pinghe Launcher Lite 启动失败", 0x10)
     except Exception:  # noqa: BLE001
         pass
 
@@ -105,7 +105,7 @@ def main() -> None:
 
         api = Api()
         window = webview.create_window(
-            "Hello Pinghe! Launcher",
+            "Pinghe Launcher Lite",
             str(_UI_DIR / "index.html"),
             js_api=api,
             width=1340,

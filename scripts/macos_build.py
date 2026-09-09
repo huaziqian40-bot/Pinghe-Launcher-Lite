@@ -66,7 +66,7 @@ def main():
 
     print("[2/8] 打包源码 …")
     skip = ("/.git", "/build", "/dist", "/__pycache__", "/deliver",
-            "/installer", "/tools", "logo.ico", "HelloPingheLauncher.exe",
+            "/installer", "/tools", "logo.ico", "PingheLauncherLite.exe",
             "/.tokenicode", "/_probe_", "/_ui_", "/.claude")
     buf = io.BytesIO()
     with tarfile.open(fileobj=buf, mode="w:gz") as tar:
@@ -110,16 +110,16 @@ def main():
     print("[6/8] PyInstaller(.app) …")
     code, _ = sh(ssh, f"cd {remote_abs}/src && "
                       f"{VENV}/bin/python -m PyInstaller --noconfirm --clean "
-                      f"HelloPingheLauncher-mac.spec")
+                      f"PingheLauncherLite-mac.spec")
     if code != 0:
         sys.exit(f"PyInstaller 失败, exit {code}")
 
     print("[7/8] 打 DMG …")
     stamp = time.strftime("%Y%m%d")
-    dmg = f"HelloPingheLauncher-mac-{stamp}.dmg"
+    dmg = f"PingheLauncherLite-mac-{stamp}.dmg"
     sh(ssh, f"cd {remote_abs}/src/dist && rm -f {dmg} && "
-            f"hdiutil create -volname 'Hello Pinghe! Launcher' -srcfolder "
-            f"'Hello Pinghe! Launcher.app' -ov -format UDZO {dmg} | tail -2")
+            f"hdiutil create -volname 'Pinghe Launcher Lite' -srcfolder "
+            f"'Pinghe Launcher Lite.app' -ov -format UDZO {dmg} | tail -2")
 
     print("[8/8] 拉回 DMG …")
     deliver = os.path.join(HERE, "deliver")

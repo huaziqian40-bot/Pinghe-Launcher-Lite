@@ -1,6 +1,6 @@
 # -*- mode: python ; coding: utf-8 -*-
-# macOS 构建: 产物为 dist/Hello Pinghe! Launcher.app
-# 用法(在 Mac 上): python -m PyInstaller --noconfirm --clean HelloPingheLauncher-mac.spec
+# macOS 构建: 产物为 dist/Pinghe Launcher Lite.app
+# 用法(在 Mac 上): python -m PyInstaller --noconfirm --clean PingheLauncherLite-mac.spec
 
 a = Analysis(
     ['run_hellopinghe.py'],
@@ -22,7 +22,7 @@ exe = EXE(
     a.scripts,
     [],
     exclude_binaries=True,
-    name='HelloPingheLauncher',
+    name='PingheLauncherLite',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
@@ -40,15 +40,15 @@ coll = COLLECT(
     a.datas,
     strip=False,
     upx=False,
-    name='HelloPingheLauncher',
+    name='PingheLauncherLite',
 )
 app = BUNDLE(
     coll,
-    name='Hello Pinghe! Launcher.app',
+    name='Pinghe Launcher Lite.app',
     icon='logo.icns',   # 由 scripts/macos_build.py 在 Mac 上用 sips+iconutil 生成
     info_plist={
-        'CFBundleName': 'Hello Pinghe! Launcher',
-        'CFBundleDisplayName': 'Hello Pinghe! Launcher',
+        'CFBundleName': 'Pinghe Launcher Lite',
+        'CFBundleDisplayName': 'Pinghe Launcher Lite',
         'CFBundleShortVersionString': '1.0.0',
         'NSHighResolutionCapable': True,
         'LSMinimumSystemVersion': '11.0',

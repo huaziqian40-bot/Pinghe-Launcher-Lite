@@ -1,4 +1,4 @@
-# Hello Pinghe! Launcher
+# Pinghe Launcher Lite
 
 本地运行的 ManageBac + Edupage 学习助手。无服务器、无云端:数据抓取、缓存、提醒、AI 全在本机。
 基于 [PH-Launcher](https://github.com/XKRyan/PH-Launcher)(MIT)的设计理念的 Python 本地化重实现。
@@ -63,7 +63,7 @@ Agent 部分支持预设: deepseek / kimi / glm / qwen / ollama(本地) / custom
 ### Windows
 
 ```bash
-python -m PyInstaller --noconfirm --clean HelloPingheLauncher.spec   # 应用 exe
+python -m PyInstaller --noconfirm --clean PingheLauncherLite.spec   # 应用 exe
 python -m PyInstaller --noconfirm --clean installer/installer.spec   # 安装程序 HPHLSetup.exe
 ```
 
@@ -75,8 +75,8 @@ python -m PyInstaller --noconfirm --clean installer/installer.spec   # 安装程
 ```bash
 python3 -m venv venv && source venv/bin/activate
 pip install -e . pyinstaller
-python -m PyInstaller --noconfirm --clean HelloPingheLauncher-mac.spec
-hdiutil create -volname "Hello Pinghe! Launcher" -srcfolder dist -ov -format UDZO HelloPingheLauncher.dmg
+python -m PyInstaller --noconfirm --clean PingheLauncherLite-mac.spec
+hdiutil create -volname "Pinghe Launcher Lite" -srcfolder dist -ov -format UDZO PingheLauncherLite.dmg
 ```
 
 ## License

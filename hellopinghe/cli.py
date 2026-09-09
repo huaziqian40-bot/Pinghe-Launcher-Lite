@@ -1,4 +1,4 @@
-"""Hello Pinghe! Launcher CLI —— M1 核心验证入口.
+"""Pinghe Launcher Lite CLI —— M1 核心验证入口.
 
 用法示例:
     python -m hellopinghe.cli probe --url https://shph.managebac.cn

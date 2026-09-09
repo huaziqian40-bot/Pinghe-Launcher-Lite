@@ -1,1 +1,1 @@
-"""Hello Pinghe! Launcher 桌面应用层."""
+"""Pinghe Launcher Lite 桌面应用层."""
