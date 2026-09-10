@@ -63,7 +63,8 @@ a{color:var(--green-700)}
 .go-card:hover .card-title{color:var(--green-500,#1f5a46)}
 .card-title{font-weight:700;font-size:13.5px;color:var(--ink-2);
   text-transform:uppercase;letter-spacing:.4px;margin-bottom:10px}
-.grid-2{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+.grid-2{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px;align-items:start}
+.grid-2>.card{min-width:0}
 .footnote{color:var(--ink-3);font-size:12.5px;margin-top:10px}
 
 .hero{display:grid;grid-template-columns:1.1fr 1.5fr .8fr;gap:16px;margin-bottom:16px}
@@ -498,7 +499,7 @@ button,.chip,.item,.mail-item,.session-item,.file-item,.tt-lesson,.gt-lesson{
 .xl-mood:hover{transform:translateY(-2px)}
 .xl-mood.on{border-color:var(--mc);background:color-mix(in srgb,var(--mc) 18%,var(--ivory-50))}
 .xl-mood.on span{color:var(--ink);font-weight:600}
-.xl-cal{display:grid;grid-template-columns:repeat(7,1fr);gap:4px}
+#xl-cal{display:grid;grid-template-columns:repeat(7,1fr);gap:4px}
 .xl-cal-head{text-align:center;font-size:12px;color:var(--ink-3);padding:4px 0}
 .xl-cal-cell{min-height:52px;border:1px solid var(--border);border-radius:var(--radius-sm);
   background:var(--ivory-50);padding:4px;font-size:12px;text-align:left;position:relative}
@@ -531,3 +532,15 @@ button,.chip,.item,.mail-item,.session-item,.file-item,.tt-lesson,.gt-lesson{
 .xl-tip{padding:8px 0;border-bottom:1px dashed var(--border)}
 .xl-tip:last-child{border-bottom:none}
 .xl-tip p{margin:4px 0;color:var(--ink-2);white-space:pre-wrap}
+/* ---------- 心履动画 ---------- */
+@keyframes xl-in{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}
+@keyframes xl-pop{0%{transform:scale(.92)}60%{transform:scale(1.06)}100%{transform:scale(1)}}
+.xl-mood{animation:xl-in .25s ease both}
+.xl-mood.on{animation:xl-in .25s ease both,xl-pop .22s ease}
+.xl-cal-cell{animation:xl-in .2s ease both}
+.xl-entry{animation:xl-in .25s ease both}
+#xl-rec-result .card{animation:xl-in .3s ease both}
+#xl-rec-result .card:nth-child(2){animation-delay:.06s}
+#xl-rec-result .card:nth-child(3){animation-delay:.12s}
+#xl-rec-result .card:nth-child(4){animation-delay:.18s}
+#xl-rec-result .card:nth-child(5){animation-delay:.24s}

@@ -1460,6 +1460,16 @@ function renderMail(d) {
           ${attHtml}
           <hr><div class="mail-body">${bodyHtml}</div>`;
         el.classList.remove("unread");
+        /* 标题左侧的未读蓝点也要去掉 */
+        const subjEl = el.querySelector(".subj");
+        if (subjEl) subjEl.textContent = subjEl.textContent.replace(/^🔵\s*/, "");
+        /* 同步修本地缓存: 刷新列表后蓝点不再出现 */
+        const ck = `mail|${mailMode}|40`;
+        const cached = Store.get(ck);
+        if (cached && cached.v) {
+          const it = (cached.v.mails || []).find((x) => x.uid === el.dataset.uid);
+          if (it) { it.seen = true; Store.set(ck, cached.v); }
+        }
         /* 收件人展开 */
         const moreBtn = $("#ml-read .rc-more");
         if (moreBtn) moreBtn.onclick = () => {
@@ -2530,8 +2540,18 @@ function xlSetTab(tab) {
   ["checkin", "rec", "me"].forEach((t) =>
     $(`#xl-tab-${t}`).classList.toggle("hidden", t !== tab));
   if (tab === "me") xlLoadProfile();
-  if (tab === "rec") $("#xl-rec-moods").innerHTML =
-    Object.keys(XL_MOODS).map((k) => xlMoodBtn(k, k === xlMood)).join("");
+  if (tab === "rec") {
+    $("#xl-rec-moods").innerHTML =
+      Object.keys(XL_MOODS).map((k) => xlMoodBtn(k, k === xlMood)).join("");
+    xlLoadRecommend(xlMood || "happy");   // 进推荐页立即出推荐, 默认开心
+  }
+}
+
+/* 心情时间/日期默认 = 系统当前时间 */
+function xlNowInputs() {
+  const now = new Date();
+  $("#xl-date").value = isoOf(now);
+  $("#xl-time").value = `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`;
 }
 
 async function loadXinlv() {
@@ -2539,6 +2559,7 @@ async function loadXinlv() {
   $("#xl-login-card").classList.toggle("hidden", !!st.logged_in);
   $("#xl-main").classList.toggle("hidden", !st.logged_in);
   if (!st.logged_in) return;
+  xlNowInputs();
   xlSetTab("checkin");
   await xlRefresh();
   xlSyncQuiet();   // 后台尽力同步, 完了自动刷新
@@ -2685,7 +2706,10 @@ $("#xl-save").onclick = async () => {
       ? `已保存本地(${s.error}), 联网后自动同步`
       : "已记录 ✓";
     $("#xl-note").value = "";
+    xlMood = r.entry.mood;
+    xlNowInputs();          // 时间/日期回到当前时刻, 方便连记
     await xlRefresh();
+    xlSetTab("rec");        // 自动跳到这份心情的推荐页
     setTimeout(() => { msg.textContent = ""; }, 2600);
   } catch (e) { msg.textContent = e.message; }
 };
@@ -2751,10 +2775,10 @@ $("#xl-logout").onclick = async () => {
   } catch (e) { $("#xl-me-msg").textContent = e.message; }
 };
 
-/* 推荐页: 选心情 → 拉推荐 */
-xlBindMoodGrid($("#xl-rec-moods"), async (mood) => {
+/* 推荐页: 选心情 → 立即出推荐(进 tab 时默认开心) */
+async function xlLoadRecommend(mood) {
   const box = $("#xl-rec-result");
-  const m = XL_MOODS[mood];
+  const m = XL_MOODS[mood] || XL_MOODS.happy;
   box.innerHTML = `<div class="card"><div class="empty">正在为你准备「${m.label}」的推荐…</div></div>`;
   try {
     const r = await call("xinlv_recommend", mood);
@@ -2784,4 +2808,5 @@ xlBindMoodGrid($("#xl-rec-moods"), async (mood) => {
   } catch (e) {
     box.innerHTML = `<div class="card"><div class="empty">${esc(e.message)}</div></div>`;
   }
-});
+}
+xlBindMoodGrid($("#xl-rec-moods"), (mood) => xlLoadRecommend(mood));
