@@ -104,7 +104,7 @@ const badge = (text, cls = "") =>
 const TITLES = {
   home: "首页", timetable: "我的课表", schedule: "我的日程",
   gradett: "班级课表", courses: "我的课程", mail: "平和邮箱",
-  agent: "Agent 助手", settings: "设置",
+  xinlv: "心履 · 心情", agent: "Agent 助手", settings: "设置",
 };
 let currentView = "home";
 let ttOffset = 0;
@@ -119,7 +119,7 @@ function show(view) {
   const loaders = {
     home: loadHome, timetable: loadTimetable, schedule: loadSchedule,
     gradett: loadGradett, courses: loadCourses, mail: loadMail,
-    agent: loadAgent, settings: loadSettings,
+    xinlv: loadXinlv, agent: loadAgent, settings: loadSettings,
   };
   (loaders[view] || (() => {}))().catch((e) => toast(e.message));
 }
@@ -2492,4 +2492,296 @@ document.querySelectorAll('input[type="password"]').forEach((inp) => {
     btn.style.opacity = inp.type === "text" ? "1" : ".45";
   };
   inp.after(btn);
+});
+
+/* ================= 心履(xin-lv.com 心情记录) =================
+ * 记录 / 月历 / 推荐 / 个人主页; 同步协议: uuid upsert + LWW + 墓碑,
+ * 同步失败(离线)静默保留脏记录, 界面提示"待同步"。 */
+const XL_MOODS = {
+  happy:    { label: "开心", emoji: "😄", color: "#FFD56B" },
+  calm:     { label: "平静", emoji: "🙂", color: "#9BD1C6" },
+  excited:  { label: "兴奋", emoji: "🤩", color: "#FF9F68" },
+  grateful: { label: "感恩", emoji: "🥰", color: "#F7A6C4" },
+  tired:    { label: "疲惫", emoji: "😪", color: "#A6A6C9" },
+  anxious:  { label: "焦虑", emoji: "😟", color: "#7FA6E8" },
+  sad:      { label: "难过", emoji: "😢", color: "#6D8FB8" },
+  angry:    { label: "愤怒", emoji: "😠", color: "#E8736B" },
+  lonely:   { label: "孤独", emoji: "🌧️", color: "#8E94B8" },
+  numb:     { label: "麻木", emoji: "😶", color: "#B0B0B0" },
+};
+const XL_LEVELS = { 1: "略微", 2: "有点", 3: "相当", 4: "十分" };
+let xlMonth = (() => { const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`; })();
+let xlMood = "";
+let xlEntries = [];      // 当前月 + recent
+let xlRegistering = false;
+
+function xlMoodBtn(key, active) {
+  const m = XL_MOODS[key];
+  return `<button class="xl-mood ${active ? "on" : ""}" data-mood="${key}"
+    style="--mc:${m.color}" title="${m.label}">
+    <img src="xinlv/mood_${key}.png" alt="${m.label}" draggable="false">
+    <span>${m.label}</span></button>`;
+}
+
+function xlSetTab(tab) {
+  $$("#view-xinlv [data-xtab]").forEach((b) =>
+    b.classList.toggle("on", b.dataset.xtab === tab));
+  ["checkin", "rec", "me"].forEach((t) =>
+    $(`#xl-tab-${t}`).classList.toggle("hidden", t !== tab));
+  if (tab === "me") xlLoadProfile();
+  if (tab === "rec") $("#xl-rec-moods").innerHTML =
+    Object.keys(XL_MOODS).map((k) => xlMoodBtn(k, k === xlMood)).join("");
+}
+
+async function loadXinlv() {
+  const st = await call("xinlv_status");   // 不依赖登录, 一定成功
+  $("#xl-login-card").classList.toggle("hidden", !!st.logged_in);
+  $("#xl-main").classList.toggle("hidden", !st.logged_in);
+  if (!st.logged_in) return;
+  xlSetTab("checkin");
+  await xlRefresh();
+  xlSyncQuiet();   // 后台尽力同步, 完了自动刷新
+}
+
+async function xlRefresh() {
+  const d = await call("xinlv_month", xlMonth);
+  xlEntries = d.entries || [];
+  xlRenderCalendar(d.entries || []);
+  xlRenderRecent(d.recent || []);
+  $("#xl-pending").textContent = d.pending > 0 ? `· ${d.pending} 条待同步` : "";
+  $("#xl-sync-state").textContent = d.server_time ? `上次同步 ${d.server_time.slice(0, 16).replace("T", " ")}` : "";
+}
+
+async function xlSyncQuiet() {
+  try {
+    const r = await call("xinlv_sync");
+    if (r.error) { $("#xl-sync-state").textContent = `同步失败: ${r.error}`; return; }
+    await xlRefresh();
+  } catch (e) { $("#xl-sync-state").textContent = `同步失败: ${e.message}`; }
+}
+
+function xlRenderCalendar(entries) {
+  $("#xl-cal-month").textContent = xlMonth;
+  const [y, mo] = xlMonth.split("-").map(Number);
+  const first = new Date(y, mo - 1, 1);
+  const days = new Date(y, mo, 0).getDate();
+  const lead = (first.getDay() + 6) % 7;   // 周一开头
+  // 每天 → 该天最后一条记录(按 date+at 排序后取末尾)
+  const byDay = {};
+  entries.forEach((e) => { (byDay[e.date] = byDay[e.date] || []).push(e); });
+  let html = ["一", "二", "三", "四", "五", "六", "日"]
+    .map((w) => `<span class="xl-cal-head">${w}</span>`).join("");
+  for (let i = 0; i < lead; i++) html += `<span class="xl-cal-cell dim"></span>`;
+  const today = new Date();
+  const todayIso = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
+  for (let d = 1; d <= days; d++) {
+    const iso = `${xlMonth}-${String(d).padStart(2, "0")}`;
+    const list = byDay[iso] || [];
+    const last = list[list.length - 1];
+    const m = last ? XL_MOODS[last.mood] : null;
+    html += `<button class="xl-cal-cell ${iso === todayIso ? "today" : ""}"
+      data-day="${iso}" title="${iso}${last ? " " + m.label : ""}"
+      style="${m ? `background:${m.color}33;border-color:${m.color}` : ""}">
+      <b>${d}</b>${m ? `<i>${m.emoji}</i>` : ""}${list.length > 1 ? `<u>+${list.length - 1}</u>` : ""}</button>`;
+  }
+  $("#xl-cal").innerHTML = html;
+  $$("#xl-cal .xl-cal-cell[data-day]").forEach((c) => {
+    c.onclick = () => xlRenderDayList(c.dataset.day);
+  });
+}
+
+function xlRenderRecent(recent) {
+  const box = $("#xl-recent");
+  box.innerHTML = recent.map((e) => {
+    const m = XL_MOODS[e.mood] || XL_MOODS.numb;
+    return `<div class="item xl-entry" data-uuid="${esc(e.uuid)}">
+      <span class="dim">${esc((e.date || "").slice(5))}${e.at ? " " + esc(e.at.slice(0, 5)) : ""}</span>
+      <span class="xl-mood-dot" style="background:${m.color}"></span>
+      <span class="grow">${m.emoji} ${m.label}
+        <span class="dim">· 强度 ${e.intensity_percent}%(${XL_LEVELS[e.intensity_level] || ""})</span>
+        ${e.note ? `<span class="dim">· ${esc(e.note.slice(0, 40))}</span>` : ""}</span>
+      <button class="danger" data-del="${esc(e.uuid)}">删</button>
+    </div>`;
+  }).join("") || `<div class="empty">还没有记录, 从上面挑一个心情开始吧</div>`;
+  $$("#xl-recent [data-del]").forEach((b) => {
+    b.onclick = async (ev) => {
+      ev.stopPropagation();
+      try {
+        await call("xinlv_delete", b.dataset.del);
+        toast("已删除(同步到所有设备)");
+        await xlRefresh();
+      } catch (e) { toast(e.message); }
+    };
+  });
+}
+
+function xlRenderDayList(dayIso) {
+  const d = call("xinlv_month", xlMonth).then((data) => {
+    const list = (data.entries || []).filter((e) => e.date === dayIso);
+    xlRenderRecent(list.length ? list : data.recent || []);
+  });
+}
+
+async function xlLoadProfile() {
+  try {
+    const p = await call("xinlv_profile");
+    $("#xl-profile").innerHTML = `
+      <div class="xl-profile-head">
+        ${p.avatar_url
+          ? `<img class="xl-avatar" src="${esc(p.avatar_url)}" alt="">`
+          : `<div class="xl-avatar xl-avatar-ph">🌿</div>`}
+        <div><b>${esc(p.username)}</b>
+          <div class="muted small">${esc(p.bio || "这个人还没有写简介")}</div>
+          <div class="muted small">加入于 ${esc((p.date_joined || "").slice(0, 10))}</div></div>
+      </div>
+      <div class="xl-stats">
+        <span>🔥 连续 <b>${p.streak ?? 0}</b> 天</span>
+        <span>📓 累计 <b>${p.total_entries ?? 0}</b> 条</span>
+      </div>`;
+    const badges = p.badges || [];
+    $("#xl-badges").innerHTML = badges.map((b) => `
+      <div class="xl-badge" title="${esc(b.desc || "")}">
+        <img src="xinlv/badge_${b.days}.png" alt="${esc(b.name)}">
+        <b>${esc(b.emoji)} ${esc(b.name)}</b>
+        <span class="muted small">${esc(b.desc || "")}</span>
+      </div>`).join("") || `<div class="empty">连续记录 5 天点亮第一枚 🌱</div>`;
+  } catch (e) {
+    $("#xl-profile").innerHTML = `<div class="empty">${esc(e.message)}</div>`;
+  }
+}
+
+/* ---- 事件绑定(元素常驻, 只绑一次) ---- */
+function xlBindMoodGrid(container, onPick) {
+  container.addEventListener("click", (e) => {
+    const btn = e.target.closest("[data-mood]");
+    if (!btn) return;
+    xlMood = btn.dataset.mood;
+    container.querySelectorAll("[data-mood]").forEach((b) =>
+      b.classList.toggle("on", b.dataset.mood === xlMood));
+    if (onPick) onPick(xlMood);
+  });
+}
+xlBindMoodGrid($("#xl-mood-grid"));
+$("#xl-mood-grid").innerHTML =
+  Object.keys(XL_MOODS).map((k) => xlMoodBtn(k, false)).join("");
+
+$("#xl-intensity").addEventListener("input", (e) => {
+  $("#xl-intensity-pct").textContent = `${e.target.value}%`;
+});
+
+$("#xl-save").onclick = async () => {
+  const msg = $("#xl-save-msg");
+  if (!xlMood) { msg.textContent = "先选一个心情"; return; }
+  const date = $("#xl-date").value;
+  if (!date) { msg.textContent = "选个日期"; return; }
+  msg.textContent = "保存中…";
+  try {
+    const r = await call("xinlv_add", date, $("#xl-time").value,
+      xlMood, $("#xl-note").value,
+      Number($("#xl-level").value), Number($("#xl-intensity").value));
+    const s = r.sync || {};
+    msg.textContent = s.error
+      ? `已保存本地(${s.error}), 联网后自动同步`
+      : "已记录 ✓";
+    $("#xl-note").value = "";
+    await xlRefresh();
+    setTimeout(() => { msg.textContent = ""; }, 2600);
+  } catch (e) { msg.textContent = e.message; }
+};
+
+$("#xl-sync-now").onclick = () => xlSyncQuiet();
+$("#xl-cal-prev").onclick = () => { xlShiftMonth(-1); };
+$("#xl-cal-next").onclick = () => { xlShiftMonth(1); };
+function xlShiftMonth(delta) {
+  const [y, m] = xlMonth.split("-").map(Number);
+  const d = new Date(y, m - 1 + delta, 1);
+  xlMonth = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+  xlRefresh().catch((e) => toast(e.message));
+}
+
+$("#view-xinlv").addEventListener("click", (e) => {
+  const tab = e.target.closest("[data-xtab]");
+  if (tab) xlSetTab(tab.dataset.xtab);
+});
+
+$("#xl-disclaimer").onclick = (e) => {
+  e.preventDefault();
+  call("open_external", "https://xin-lv.com/disclaimer/").catch(() => toast("请用浏览器打开 xin-lv.com/disclaimer/"));
+};
+
+$("#xl-login").onclick = async () => {
+  const msg = $("#xl-msg");
+  const u = $("#xl-user").value.trim(), p = $("#xl-pass").value;
+  if (!u || !p) { msg.textContent = "填用户名和密码"; return; }
+  msg.textContent = "登录中…";
+  try {
+    const r = await call("xinlv_login", u, p);
+    msg.textContent = "";
+    toast(`欢迎回来, ${r.username} 🔥连续 ${r.streak} 天`);
+    loadXinlv().catch(() => {});
+  } catch (e) { msg.textContent = e.message; }
+};
+
+$("#xl-register").onclick = async () => {
+  const msg = $("#xl-msg");
+  const u = $("#xl-user").value.trim(), p = $("#xl-pass").value;
+  if (!u || !p) { msg.textContent = "填用户名和密码"; return; }
+  if (!$("#xl-agree").checked) { msg.textContent = "请先阅读并勾选同意免责声明"; return; }
+  msg.textContent = "注册中…";
+  try {
+    const r = await call("xinlv_register", u, p, true);
+    msg.textContent = "";
+    toast(`注册成功, 欢迎 ${r.username} 🌱`);
+    loadXinlv().catch(() => {});
+  } catch (e) { msg.textContent = e.message; }
+};
+/* 密码框获得焦点时切换到注册模式才显示注册按钮/勾选框 */
+$("#xl-pass").addEventListener("focus", () => {
+  $("#xl-register").classList.remove("hidden");
+  $("#xl-agree-row").classList.remove("hidden");
+}, { once: false });
+
+$("#xl-logout").onclick = async () => {
+  try {
+    await call("xinlv_logout");
+    toast("已退出(本设备令牌已注销, 记录保留在服务器)");
+    xlMood = "";
+    loadXinlv().catch(() => {});
+  } catch (e) { $("#xl-me-msg").textContent = e.message; }
+};
+
+/* 推荐页: 选心情 → 拉推荐 */
+xlBindMoodGrid($("#xl-rec-moods"), async (mood) => {
+  const box = $("#xl-rec-result");
+  const m = XL_MOODS[mood];
+  box.innerHTML = `<div class="card"><div class="empty">正在为你准备「${m.label}」的推荐…</div></div>`;
+  try {
+    const r = await call("xinlv_recommend", mood);
+    box.innerHTML = `
+      <div class="card xl-rec-head" style="border-color:${m.color}">
+        <h3>${m.emoji} ${esc(r.info?.label || m.label)}</h3>
+        ${r.practice ? `<p class="xl-practice">${esc(r.practice)}</p>` : ""}
+      </div>
+      ${(r.songs || []).length ? `<div class="card"><div class="card-title">🎵 听点什么</div>
+        ${r.songs.map((s) => `<div class="xl-song"><b>${esc(s.title)}</b>
+          <span class="muted"> ${esc(s.artist || "")}</span>
+          <audio controls preload="none" src="${esc(s.url)}"></audio></div>`).join("")}
+      </div>` : ""}
+      ${(r.activities || []).length ? `<div class="card"><div class="card-title">🌿 试试这些</div>
+        ${r.activities.map((a) => `<div class="item"><span>${esc(a)}</span></div>`).join("")}
+      </div>` : ""}
+      ${(r.tips || []).length ? `<div class="card"><div class="card-title">💡 小知识</div>
+        ${r.tips.map((t) => `<div class="xl-tip"><b>${esc(t.title)}</b>
+          <p>${esc(t.content)}</p>${t.source ? `<span class="muted small">—— ${esc(t.source)}</span>` : ""}</div>`).join("")}
+      </div>` : ""}
+      ${r.video ? `<div class="card"><div class="card-title">📺 看点什么</div>
+        <div class="form-row">${esc(r.video.title)}
+          <button class="ghost" id="xl-open-video">打开视频 ↗</button></div></div>` : ""}`;
+    const v = $("#xl-open-video");
+    if (v) v.onclick = () =>
+      call("open_external", r.video.url || r.video.embed_url).catch(() => {});
+  } catch (e) {
+    box.innerHTML = `<div class="card"><div class="empty">${esc(e.message)}</div></div>`;
+  }
 });

@@ -17,6 +17,7 @@
       <button data-go="gradett">📊 班级课表</button>
       <button data-go="courses">📚 我的课程</button>
       <button data-go="mail">✉️ 平和邮箱</button>
+      <button data-go="xinlv">🌿 心履</button>
       <button data-go="agent">🤖 Agent 助手</button>
       <button data-go="settings">⚙️ 设置</button>
     </nav>
@@ -144,6 +145,106 @@
       <div class="mail-split">
         <div id="ml-list" class="mail-list card"></div>
         <div id="ml-read" class="mail-read card"><div class="muted">选择一封邮件查看</div></div>
+      </div>
+    </section>
+
+    <!-- ================= 心履(心情记录) ================= -->
+    <section class="view" id="view-xinlv">
+      <!-- 未登录 -->
+      <div class="card" id="xl-login-card" style="max-width:560px;margin:24px auto">
+        <div class="card-title">🌿 登录心履 (xin-lv.com)</div>
+        <div class="form-row"><input type="text" id="xl-user" placeholder="用户名" class="flex1"></div>
+        <div class="form-row"><input type="password" id="xl-pass" placeholder="密码(≥6 位)" class="flex1"></div>
+        <div class="form-row" id="xl-agree-row">
+          <label class="chk"><input type="checkbox" id="xl-agree">
+            我已阅读并同意 <a href="#" id="xl-disclaimer">心履免责声明</a></label>
+        </div>
+        <div class="form-row">
+          <button class="primary" id="xl-login">登录</button>
+          <button class="ghost hidden" id="xl-register">注册新账号</button>
+          <span id="xl-msg" class="muted"></span>
+        </div>
+        <div class="muted small">没有账号? 填好用户名密码并勾选同意后点「注册新账号」。多设备可同时登录互不影响。</div>
+      </div>
+
+      <!-- 已登录 -->
+      <div id="xl-main" class="hidden">
+        <div class="row-tools">
+          <button class="chip" data-xtab="checkin">📝 记录</button>
+          <button class="chip" data-xtab="rec">💡 推荐</button>
+          <button class="chip" data-xtab="me">👤 我的</button>
+          <span class="flex1"></span>
+          <span id="xl-sync-state" class="muted small"></span>
+          <button class="ghost" id="xl-sync-now">↻ 同步</button>
+        </div>
+
+        <!-- 记录 -->
+        <div id="xl-tab-checkin">
+          <div class="card">
+            <div class="card-title">此刻的心情</div>
+            <div id="xl-mood-grid"></div>
+            <div class="form-row" style="margin-top:10px">
+              <label style="width:64px">强度</label>
+              <input type="range" id="xl-intensity" min="0" max="100" value="50" class="flex1">
+              <span id="xl-intensity-pct" style="width:44px">50%</span>
+              <select id="xl-level">
+                <option value="1">略微</option><option value="2" selected>有点</option>
+                <option value="3">相当</option><option value="4">十分</option>
+              </select>
+            </div>
+            <div class="form-row">
+              <input type="date" id="xl-date" class="flex1">
+              <input type="time" id="xl-time" class="flex1">
+            </div>
+            <div class="form-row">
+              <textarea id="xl-note" rows="2" class="flex1" maxlength="2000"
+                placeholder="写点什么…(可选, ≤2000 字)"></textarea>
+            </div>
+            <div class="form-row">
+              <button class="primary" id="xl-save">记录这份心情</button>
+              <span id="xl-save-msg" class="muted"></span>
+            </div>
+          </div>
+          <div class="grid-2">
+            <div class="card">
+              <div class="card-title">
+                <button class="ghost" id="xl-cal-prev">‹</button>
+                <span id="xl-cal-month"></span>
+                <button class="ghost" id="xl-cal-next">›</button>
+              </div>
+              <div id="xl-cal"></div>
+            </div>
+            <div class="card">
+              <div class="card-title">最近记录 <span id="xl-pending" class="muted small"></span></div>
+              <div id="xl-recent" class="list"></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 推荐 -->
+        <div id="xl-tab-rec" class="hidden">
+          <div class="card">
+            <div class="card-title">你现在感觉如何?</div>
+            <div id="xl-rec-moods"></div>
+          </div>
+          <div id="xl-rec-result"></div>
+        </div>
+
+        <!-- 我的 -->
+        <div id="xl-tab-me" class="hidden">
+          <div class="grid-2">
+            <div class="card" id="xl-profile"><div class="empty">加载中…</div></div>
+            <div class="card">
+              <div class="card-title">徽章墙</div>
+              <div id="xl-badges"></div>
+              <div class="muted small">连续记录达标即点亮(当前或历史最高连续天数)。</div>
+            </div>
+          </div>
+          <div class="form-row">
+            <button class="danger" id="xl-logout">退出登录(仅本设备)</button>
+            <span id="xl-me-msg" class="muted"></span>
+          </div>
+        </div>
       </div>
     </section>
 

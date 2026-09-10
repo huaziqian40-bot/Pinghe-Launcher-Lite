@@ -16,6 +16,7 @@ from pathlib import Path
 from ..config import CONFIG_DIR, Config
 from ..exceptions import LoginRequiredError, PingheError
 from ..managebac.client import ManageBacClient
+from ..xinlv import MOODS, XinlvAuthError, XinlvClient, validate_entry
 from .. import paths, storage
 from ..logutil import log as _log
 
@@ -1418,6 +1419,235 @@ class CoursesService:
         return "已提交(请到 ManageBac 网页确认)"
 
 
+# ================================================================ 心履
+class XinlvService:
+    """心履 (xin-lv.com) 心情记录: 登录 + 本地镜像 SQLite + 增量同步.
+
+    同步协议(官方 v1): 先推后拉; uuid 去重 upsert; updated_at 最新者赢;
+    墓碑软删(deleted=true); pull 的 since 用 server_time 增量且必须 URL 编码.
+    """
+
+    TOKEN_KEY = "xinlv:token"
+    _PULL_PAGE = 2000     # 服务端单次拉取上限
+    _PUSH_BATCH = 500     # 服务端单次推送上限
+
+    def __init__(self, cfg: Config, conn_factory):
+        self.cfg = cfg
+        self._conn_factory = conn_factory
+        self.client = XinlvClient()
+
+    # ---- 令牌 ----
+    def _token(self) -> str:
+        tok = secret_get(self.TOKEN_KEY)
+        if not tok:
+            raise LoginRequiredError("xinlv")
+        return tok
+
+    def _conn(self):
+        return self._conn_factory()
+
+    def _clear_token(self) -> None:
+        secret_del(self.TOKEN_KEY)
+        self.cfg.xinlv_username = ""
+        self.cfg.save()
+
+    def is_logged_in(self) -> bool:
+        return bool(secret_get(self.TOKEN_KEY))
+
+    # ---- 登录 / 注册 / 退出 ----
+    def login(self, username: str, password: str) -> dict:
+        resp = self.client.login(username.strip(), password)
+        secret_set(self.TOKEN_KEY, resp["token"])
+        self.cfg.xinlv_username = resp.get("username") or username.strip()
+        self.cfg.save()
+        sync = self.sync()
+        return {"username": self.cfg.xinlv_username,
+                "streak": resp.get("streak", 0), "sync": sync}
+
+    def register(self, username: str, password: str, agree: bool) -> dict:
+        if not agree:
+            raise PingheError("需要先阅读并同意免责声明")
+        resp = self.client.register(username.strip(), password, True)
+        secret_set(self.TOKEN_KEY, resp["token"])
+        self.cfg.xinlv_username = resp.get("username") or username.strip()
+        self.cfg.save()
+        sync = self.sync()
+        return {"username": self.cfg.xinlv_username,
+                "streak": resp.get("streak", 0), "sync": sync}
+
+    def logout(self) -> None:
+        tok = secret_get(self.TOKEN_KEY)
+        if tok:
+            try:
+                self.client.logout(tok)
+            except Exception:  # noqa: BLE001
+                pass   # 服务端注销失败也不阻塞本地退出
+        self._clear_token()
+
+    # ---- 同步(先推后拉; 失败返回 error 字段而不抛异常, 便于离线静默) ----
+    def sync(self) -> dict:
+        conn = self._conn()
+        tok = self._token()
+        out: dict = {"pushed": 0, "pulled": 0, "failed": 0, "error": ""}
+        try:
+            # 推: 本地脏记录分批上送; 服务端按 uuid 报错的条目保持脏标记
+            dirty = storage.xinlv_dirty(conn)
+            for i in range(0, len(dirty), self._PUSH_BATCH):
+                chunk = dirty[i:i + self._PUSH_BATCH]
+                batch = [{
+                    "uuid": e["uuid"], "date": e["date"], "at": e["at"] or None,
+                    "mood": e["mood"], "note": e["note"],
+                    "intensity_level": e["intensity_level"],
+                    "intensity_percent": e["intensity_percent"],
+                    "updated_at": e["updated_at"],
+                    "deleted": bool(e["deleted"]),
+                } for e in chunk]
+                resp = self.client.push(tok, batch)
+                bad = {it.get("uuid") for it in resp.get("errors", [])
+                       if it.get("uuid")}
+                ok = [e["uuid"] for e in chunk if e["uuid"] not in bad]
+                storage.xinlv_mark_clean(conn, ok)
+                out["pushed"] += len(ok)
+                out["failed"] += len(bad)
+
+            # 拉: server_time 增量循环(单次 ≤2000 条)
+            since = storage.xinlv_state_get(conn, "server_time") or None
+            while True:
+                resp = self.client.pull(tok, since)
+                entries = resp.get("entries", [])
+                for e in entries:
+                    if self._absorb(conn, e):
+                        out["pulled"] += 1
+                if resp.get("server_time"):
+                    since = resp["server_time"]
+                    storage.xinlv_state_set(conn, "server_time", since)
+                if len(entries) < self._PULL_PAGE:
+                    break
+            return out
+        except XinlvAuthError:
+            self._clear_token()
+            raise PingheError("心履登录已失效, 请重新登录") from None
+        except PingheError as exc:
+            out["error"] = str(exc)
+            return out   # 离线/限流: 静默保留脏记录, 下次再推
+
+    def _absorb(self, conn, remote: dict) -> bool:
+        """服务器条目合入本地镜像; 返回是否产生了可见变化.
+
+        LWW: 远端 updated_at 更新才覆盖(覆盖后清脏标记); 远端较旧则跳过
+        (本地脏记录等下一轮推上去)。墓碑: 本地没有该 uuid 就直接忽略。
+        """
+        from datetime import datetime
+
+        def _ts(v):
+            try:
+                return datetime.fromisoformat(v)
+            except (TypeError, ValueError):
+                return datetime.min.replace(
+                    tzinfo=datetime.now().astimezone().tzinfo)
+
+        local = storage.xinlv_get(conn, remote["uuid"])
+        if remote.get("deleted"):
+            if local is None:
+                return False        # 不在本地落墓碑
+            if _ts(remote["updated_at"]) > _ts(local["updated_at"]):
+                merged = dict(local, deleted=True,
+                              updated_at=remote["updated_at"])
+                storage.xinlv_upsert(conn, merged, dirty=False)
+                return True
+            return False
+        if local is not None and _ts(remote["updated_at"]) <= _ts(local["updated_at"]):
+            return False
+        storage.xinlv_upsert(conn, remote, dirty=False)
+        return True
+
+    # ---- 记录增删 ----
+    def add_entry(self, date_str: str, at: str, mood: str, note: str,
+                  level: int, percent: int) -> dict:
+        from datetime import datetime
+        from uuid import uuid4
+
+        validate_entry(date_str, mood, level, percent)
+        now = datetime.now().astimezone().isoformat(timespec="seconds")
+        entry = {
+            "uuid": str(uuid4()), "date": date_str, "at": at or None,
+            "mood": mood, "note": (note or "")[:2000],
+            "intensity_level": int(level), "intensity_percent": int(percent),
+            "deleted": False, "created_at": now, "updated_at": now,
+        }
+        storage.xinlv_upsert(self._conn(), entry, dirty=True)
+        sync = self.sync()   # 尽力同步; 离线则保留脏标记下次再推
+        return {"entry": entry, "sync": sync}
+
+    def delete_entry(self, uuid: str) -> dict:
+        from datetime import datetime
+
+        conn = self._conn()
+        local = storage.xinlv_get(conn, uuid)
+        if local is None:
+            raise PingheError("记录不存在")
+        merged = dict(local, deleted=True,
+                      updated_at=datetime.now().astimezone().isoformat(
+                          timespec="seconds"))
+        storage.xinlv_upsert(conn, merged, dirty=True)
+        sync = self.sync()
+        return {"sync": sync}
+
+    # ---- 展示数据 ----
+    def month(self, month: str) -> dict:
+        if not re.fullmatch(r"\d{4}-\d{2}", month or ""):
+            raise PingheError("月份格式应为 YYYY-MM")
+        conn = self._conn()
+        return {
+            "month": month,
+            "entries": storage.xinlv_month(conn, month),
+            "recent": storage.xinlv_recent(conn, 60),
+            "pending": storage.xinlv_pending_count(conn),
+            "server_time": storage.xinlv_state_get(conn, "server_time"),
+        }
+
+    def status(self) -> dict:
+        conn = self._conn()
+        today = date.today().isoformat()
+        row = conn.execute(
+            "SELECT COUNT(*) FROM xinlv_entries WHERE deleted=0 AND date=?",
+            (today,),
+        ).fetchone()
+        return {
+            "logged_in": self.is_logged_in(),
+            "username": self.cfg.xinlv_username,
+            "today_count": int(row[0]),
+            "pending": storage.xinlv_pending_count(conn),
+            "server_time": storage.xinlv_state_get(conn, "server_time"),
+        }
+
+    # ---- 推荐 / 资料 / 目录 ----
+    def recommend(self, mood: str) -> dict:
+        if mood not in MOODS:
+            raise PingheError("未知的心情类型")
+        return self.client.recommend(self._token(), mood)
+
+    def profile(self) -> dict:
+        return self.client.profile(self._token())
+
+    def catalog(self, force: bool = False) -> dict:
+        conn = self._conn()
+        if not force:
+            raw = storage.xinlv_state_get(conn, "catalog_json")
+            ts = storage.xinlv_state_get(conn, "catalog_ts")
+            if raw and ts:
+                try:
+                    if _time.time() - float(ts) < 86400:
+                        return json.loads(raw)
+                except Exception:  # noqa: BLE001
+                    pass
+        data = self.client.catalog(self._token())
+        storage.xinlv_state_set(conn, "catalog_json",
+                                json.dumps(data, ensure_ascii=False))
+        storage.xinlv_state_set(conn, "catalog_ts", str(_time.time()))
+        return data
+
+
 # ================================================================ 汇总
 class Services:
     """所有服务的一次性组装(bridge 持有)."""
@@ -1431,6 +1661,7 @@ class Services:
         self.mail = MailService(cfg)
         self.schedule = ScheduleService(self._conn)
         self.courses = CoursesService(cfg, self._conn)
+        self.xinlv = XinlvService(cfg, self._conn)
 
     def _conn(self):
         """每次调用返回全新连接 —— pywebview 的 js_api 调用来自不同线程,

@@ -451,6 +451,45 @@ class Api:
             return {"restored": key}
         return _wrap(job)
 
+    # ================================================================ 心履
+    def xinlv_status(self) -> dict:
+        return _wrap(lambda: self.svc.xinlv.status())
+
+    def xinlv_login(self, username: str, password: str) -> dict:
+        return _wrap(lambda: self.svc.xinlv.login(username, password))
+
+    def xinlv_register(self, username: str, password: str, agree: bool) -> dict:
+        return _wrap(lambda: self.svc.xinlv.register(username, password, bool(agree)))
+
+    def xinlv_logout(self) -> dict:
+        def job():
+            self.svc.xinlv.logout()
+            return {"logged_out": True}
+        return _wrap(job)
+
+    def xinlv_sync(self) -> dict:
+        return _wrap(lambda: self.svc.xinlv.sync())
+
+    def xinlv_add(self, date: str, at: str, mood: str, note: str,
+                  level: int, percent: int) -> dict:
+        return _wrap(lambda: self.svc.xinlv.add_entry(
+            date, at, mood, note, int(level or 2), int(percent or 50)))
+
+    def xinlv_delete(self, uuid: str) -> dict:
+        return _wrap(lambda: self.svc.xinlv.delete_entry(uuid))
+
+    def xinlv_month(self, month: str) -> dict:
+        return _wrap(lambda: self.svc.xinlv.month(month))
+
+    def xinlv_recommend(self, mood: str) -> dict:
+        return _wrap(lambda: self.svc.xinlv.recommend(mood))
+
+    def xinlv_profile(self) -> dict:
+        return _wrap(lambda: self.svc.xinlv.profile())
+
+    def xinlv_catalog(self, force: bool = False) -> dict:
+        return _wrap(lambda: self.svc.xinlv.catalog(bool(force)))
+
     # ================================================================ 启动连接页
     def connect_edupage(self) -> dict:
         def job():

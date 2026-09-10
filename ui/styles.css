@@ -487,3 +487,47 @@ button,.chip,.item,.mail-item,.session-item,.file-item,.tt-lesson,.gt-lesson{
 .tt-menu button{text-align:left;border:0;background:none;padding:8px 10px;border-radius:7px;
   font-size:13px;color:var(--ink);cursor:pointer}
 .tt-menu button:hover{background:var(--ivory-100)}
+
+/* ---------- 心履(心情记录) ---------- */
+#xl-mood-grid,#xl-rec-moods{display:grid;grid-template-columns:repeat(5,1fr);gap:10px}
+.xl-mood{display:flex;flex-direction:column;align-items:center;gap:4px;padding:10px 4px;
+  background:var(--ivory-100);border:2px solid transparent;border-radius:var(--radius-sm);
+  cursor:pointer;transition:transform .15s,border-color .15s}
+.xl-mood img{width:52px;height:52px;object-fit:contain;pointer-events:none}
+.xl-mood span{font-size:12.5px;color:var(--ink-2)}
+.xl-mood:hover{transform:translateY(-2px)}
+.xl-mood.on{border-color:var(--mc);background:color-mix(in srgb,var(--mc) 18%,var(--ivory-50))}
+.xl-mood.on span{color:var(--ink);font-weight:600}
+.xl-cal{display:grid;grid-template-columns:repeat(7,1fr);gap:4px}
+.xl-cal-head{text-align:center;font-size:12px;color:var(--ink-3);padding:4px 0}
+.xl-cal-cell{min-height:52px;border:1px solid var(--border);border-radius:var(--radius-sm);
+  background:var(--ivory-50);padding:4px;font-size:12px;text-align:left;position:relative}
+.xl-cal-cell b{font-size:12px;color:var(--ink-2)}
+.xl-cal-cell i{font-style:normal;font-size:16px;position:absolute;right:4px;bottom:2px}
+.xl-cal-cell u{text-decoration:none;font-size:10px;color:var(--ink-3);position:absolute;right:5px;top:3px}
+.xl-cal-cell.today{border-color:var(--green-700);box-shadow:0 0 0 1px var(--green-700)}
+.xl-cal-cell.dim{background:transparent;border-color:transparent}
+.xl-mood-dot{width:10px;height:10px;border-radius:99px;flex:none}
+.xl-entry{cursor:default}
+.xl-profile-head{display:flex;gap:14px;align-items:center;margin-bottom:10px}
+.xl-avatar{width:64px;height:64px;border-radius:99px;object-fit:cover;flex:none}
+.xl-avatar-ph{display:flex;align-items:center;justify-content:center;font-size:28px;
+  background:var(--green-100);color:var(--green-800)}
+.xl-profile-head b{font-size:16px}
+.xl-stats{display:flex;gap:18px;color:var(--ink-2);font-size:13px;
+  padding:10px 0;border-top:1px solid var(--border)}
+.xl-stats b{color:var(--green-800)}
+#xl-badges{display:grid;grid-template-columns:repeat(auto-fill,minmax(120px,1fr));gap:10px}
+.xl-badge{display:flex;flex-direction:column;align-items:center;gap:4px;padding:10px;
+  background:var(--ivory-100);border-radius:var(--radius-sm);text-align:center}
+.xl-badge img{width:84px;height:84px;object-fit:contain}
+.xl-rec-head h3{margin:0 0 6px;font-size:18px}
+.xl-practice{background:var(--green-50);border-left:3px solid var(--green-700);
+  padding:10px 12px;border-radius:0 var(--radius-sm) var(--radius-sm) 0;
+  color:var(--ink-2);white-space:pre-wrap}
+.xl-song{padding:8px 0;border-bottom:1px dashed var(--border)}
+.xl-song:last-child{border-bottom:none}
+.xl-song audio{width:100%;height:32px;margin-top:6px}
+.xl-tip{padding:8px 0;border-bottom:1px dashed var(--border)}
+.xl-tip:last-child{border-bottom:none}
+.xl-tip p{margin:4px 0;color:var(--ink-2);white-space:pre-wrap}

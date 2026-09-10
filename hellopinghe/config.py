@@ -168,6 +168,9 @@ class Config:
     mail_imap_host: str = "imap.qiye.163.com"
     mail_smtp_host: str = "smtp.qiye.163.com"
 
+    # --- 心履(xin-lv.com 心情记录; token 存密钥存储, 不入配置文件) ---
+    xinlv_username: str = ""
+
     # --- AI 供应商(多提供商: 各自 key/base_url/协议/模型目录) ---
     ai_providers: list = field(default_factory=list)
     # 元素: {"id","name","protocol","base_url","api_key","models":[...],"notes"}

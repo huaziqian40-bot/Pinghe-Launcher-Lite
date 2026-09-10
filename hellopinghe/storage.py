@@ -69,6 +69,24 @@ CREATE TABLE IF NOT EXISTS ddl_dismissed (
     created   TEXT NOT NULL,
     PRIMARY KEY (host, dkey)
 );
+CREATE TABLE IF NOT EXISTS xinlv_entries (
+    uuid              TEXT PRIMARY KEY,
+    date              TEXT NOT NULL,
+    at                TEXT,
+    mood              TEXT NOT NULL,
+    note              TEXT DEFAULT '',
+    intensity_level   INTEGER DEFAULT 2,
+    intensity_percent INTEGER DEFAULT 50,
+    deleted           INTEGER DEFAULT 0,
+    created_at        TEXT,
+    updated_at        TEXT NOT NULL,
+    dirty             INTEGER DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_xinlv_date ON xinlv_entries(date);
+CREATE TABLE IF NOT EXISTS xinlv_state (
+    key   TEXT PRIMARY KEY,
+    value TEXT
+);
 """
 
 
@@ -241,3 +259,103 @@ def ddl_restore(conn: sqlite3.Connection, host: str, dkey: str) -> None:
         "DELETE FROM ddl_dismissed WHERE host=? AND dkey=?", (host, dkey)
     )
     conn.commit()
+
+
+# ---------------------------------------------------------------- 心履(心情记录)
+_XL_COLS = ("uuid", "date", "at", "mood", "note", "intensity_level",
+            "intensity_percent", "deleted", "created_at", "updated_at", "dirty")
+
+
+def _xinlv_row(row) -> dict:
+    return dict(zip(_XL_COLS, row))
+
+
+def xinlv_state_get(conn: sqlite3.Connection, key: str, default: str = "") -> str:
+    row = conn.execute(
+        "SELECT value FROM xinlv_state WHERE key=?", (key,)
+    ).fetchone()
+    return row[0] if row else default
+
+
+def xinlv_state_set(conn: sqlite3.Connection, key: str, value: str) -> None:
+    conn.execute(
+        "INSERT OR REPLACE INTO xinlv_state(key, value) VALUES (?,?)",
+        (key, value),
+    )
+    conn.commit()
+
+
+def xinlv_upsert(conn: sqlite3.Connection, e: dict, dirty: bool) -> None:
+    """整行写入(调用方先做好 LWW 判断)."""
+    conn.execute(
+        "INSERT OR REPLACE INTO xinlv_entries"
+        "(uuid, date, at, mood, note, intensity_level, intensity_percent,"
+        " deleted, created_at, updated_at, dirty)"
+        " VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+        (
+            e["uuid"], e["date"], e.get("at"), e["mood"], e.get("note") or "",
+            int(e.get("intensity_level") or 2),
+            int(e.get("intensity_percent") or 50),
+            1 if e.get("deleted") else 0,
+            e.get("created_at"), e["updated_at"],
+            1 if dirty else 0,
+        ),
+    )
+    conn.commit()
+
+
+def xinlv_get(conn: sqlite3.Connection, uuid: str) -> dict | None:
+    row = conn.execute(
+        "SELECT " + ",".join(_XL_COLS) + " FROM xinlv_entries WHERE uuid=?",
+        (uuid,),
+    ).fetchone()
+    return _xinlv_row(row) if row else None
+
+
+def xinlv_mark_clean(conn: sqlite3.Connection, uuids: Iterable[str]) -> None:
+    ids = list(uuids)
+    if not ids:
+        return
+    q = ",".join("?" * len(ids))
+    conn.execute(
+        f"UPDATE xinlv_entries SET dirty=0 WHERE uuid IN ({q})", ids
+    )
+    conn.commit()
+
+
+def xinlv_dirty(conn: sqlite3.Connection) -> list[dict]:
+    return [
+        _xinlv_row(r) for r in conn.execute(
+            "SELECT " + ",".join(_XL_COLS) +
+            " FROM xinlv_entries WHERE dirty=1 ORDER BY updated_at"
+        ).fetchall()
+    ]
+
+
+def xinlv_month(conn: sqlite3.Connection, month: str) -> list[dict]:
+    """某月未删除的记录(日历+列表用), 按时间升序."""
+    return [
+        _xinlv_row(r) for r in conn.execute(
+            "SELECT " + ",".join(_XL_COLS) +
+            " FROM xinlv_entries WHERE deleted=0 AND date LIKE ?"
+            " ORDER BY date, at",
+            (month + "-%",),
+        ).fetchall()
+    ]
+
+
+def xinlv_recent(conn: sqlite3.Connection, limit: int = 60) -> list[dict]:
+    return [
+        _xinlv_row(r) for r in conn.execute(
+            "SELECT " + ",".join(_XL_COLS) +
+            " FROM xinlv_entries WHERE deleted=0"
+            " ORDER BY date DESC, at DESC LIMIT ?",
+            (int(limit),),
+        ).fetchall()
+    ]
+
+
+def xinlv_pending_count(conn: sqlite3.Connection) -> int:
+    return int(conn.execute(
+        "SELECT COUNT(*) FROM xinlv_entries WHERE dirty=1"
+    ).fetchone()[0])
