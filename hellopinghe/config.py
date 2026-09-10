@@ -34,6 +34,10 @@ def _migrate_legacy() -> None:
     """
     import shutil
 
+    # 测试/演示环境(fresh.flag): 与真实数据彻底隔离, 绝不迁移
+    if paths.is_fresh():
+        return
+
     for legacy in paths.legacy_candidates():
         if not legacy.exists():
             continue

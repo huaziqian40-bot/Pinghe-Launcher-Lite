@@ -11,6 +11,7 @@ import sys
 from pathlib import Path
 
 FLAG_NAME = "portable.flag"
+FRESH_FLAG = "fresh.flag"        # 测试环境: 存在则禁止旧数据迁移(数据彻底隔离)
 LEGACY_HOME_DIR = Path.home() / ".hellopinghe"      # 历史数据目录(迁移源)
 LEGACY_SCHOOLHUB_DIR = Path.home() / ".schoolhub"   # 更旧的 SchoolHub 目录
 
@@ -25,6 +26,16 @@ def exe_dir() -> Path | None:
 def is_portable() -> bool:
     d = exe_dir()
     return bool(d and (d / FLAG_NAME).exists())
+
+
+def is_fresh() -> bool:
+    """测试/演示环境标记: 有 fresh.flag 时跳过旧数据迁移.
+
+    否则便携模式首次启动会把 ~/.hellopinghe 的真实个人数据整个搬进
+    测试目录 —— 测试环境要求与真实数据完全隔离, 见 _migrate_legacy().
+    """
+    d = exe_dir()
+    return bool(d and (d / FRESH_FLAG).exists())
 
 
 def data_dir() -> Path:

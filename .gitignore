@@ -20,3 +20,6 @@ PingheLauncherLite.exe
 /deliver/
 tools/wix314-binaries.zip
 /tools/
+
+# 测试环境(便携数据 + 本地 exe, 不入库)
+testenv/
