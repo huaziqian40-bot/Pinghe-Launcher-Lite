@@ -270,11 +270,14 @@ class Api:
             def _ddl():
                 try:
                     now2 = datetime.now()
-                    lo = (now2 - timedelta(days=14)).isoformat(timespec="minutes")
+                    # 首页只看"今天及以后"的 DDL —— 过期作业归"我的课程"页
+                    # (按日期粒度比较, 今天的作业整天都算未过期)
+                    today_iso = now2.date().isoformat()
                     hi = (now2 + timedelta(days=14)).isoformat(timespec="minutes")
                     ddl = [
                         it for it in self.svc.courses.deadlines(days=14)
-                        if it["due_at"] and lo <= it["due_at"] <= hi
+                        if it["due_at"] and it["due_at"][:10] >= today_iso
+                        and it["due_at"] <= hi
                     ]
                     host = self.cfg.managebac_base_url.split("//")[-1]
                     dismissed = storage.ddl_dismissed_keys(self.svc._conn(), host)
@@ -521,21 +524,23 @@ class Api:
             classes = self.svc.courses.classes()
             tasks = self.svc.courses.all_tasks()
             grades = self.svc.courses.grades()
-            upcoming = [t for t in tasks if not t["past_due"]]
             # 过滤掉用户左滑移除过的 DDL (与首页同一套 dismissed key)
             host = self.cfg.managebac_base_url.split("//")[-1]
             dismissed = storage.ddl_dismissed_keys(self.svc._conn(), host)
-            upcoming = [
-                t for t in upcoming
+            tasks = [
+                t for t in tasks
                 if f'{t["title"]}|{t["due_at"] or ""}' not in dismissed
             ]
-            # ① 用户用箭头/手动排过序的作业按保存的顺序排前面
-            # ② 其余(含新增的)按截止时间排后面
+            # 未截止(按截止时间升序, 手动排序优先) + 已过期(最近的在前)
+            # —— 首页只显示未截止的, 过期作业在本页完整可查
+            upcoming = [t for t in tasks if not t["past_due"]]
+            past = [t for t in tasks if t["past_due"]]
             rank = {k: i for i, k in enumerate(self.cfg.task_order)}
             upcoming.sort(key=lambda t: (
                 rank.get(f'{t["title"]}|{t["due_at"] or ""}', len(rank)),
                 t["due_at"] or "",
             ))
+            past.sort(key=lambda t: t["due_at"] or "", reverse=True)
             # 按用户拖拽保存的顺序排课程, 未出现的课程追加在后;
             # 总评直接并进行里(课程列表一行 = 课程名 + 总评徽章)
             order = list(self.cfg.course_class_order)
@@ -548,7 +553,8 @@ class Api:
                 key=lambda c: (rank.get(c["id"], len(order)), c["name"]))
             out = {
                 "classes": class_list,
-                "tasks_upcoming": upcoming[:40],
+                "tasks_upcoming": upcoming[:60],
+                "tasks_past": past[:60],
                 "grades": grades,
             }
             _snap_put("courses", out)

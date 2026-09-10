@@ -1121,20 +1121,21 @@ function bindCourseList(d) {
   });
 }
 function renderCourseTasks(d) {
-  const tasks = d.tasks_upcoming || [];
+  const upcoming = d.tasks_upcoming || [];
+  const past = d.tasks_past || [];
   const box = $("#co-tasks");
   box.innerHTML = "";
-  if (!tasks.length) {
-    box.innerHTML = `<div class="empty">没有未截止的作业 (左滑可移除, ▲▼ 可调顺序, 点击看详情)</div>`;
+  if (!upcoming.length && !past.length) {
+    box.innerHTML = `<div class="empty">没有作业 (左滑可移除, ▲▼ 可调顺序, 点击看详情)</div>`;
     return;
   }
   const frag = document.createDocumentFragment();
-  tasks.forEach((t) => {
+  const bind = (t, list) => {
     const el = taskItemEl(t);
     el.querySelectorAll(".move-btn").forEach((btn) => {
       btn.onclick = (e) => {
         e.stopPropagation();
-        moveTask(d, tasks, t, btn.dataset.move === "down" ? 1 : -1);
+        moveTask(d, list, t, btn.dataset.move === "down" ? 1 : -1);
       };
     });
     el.addEventListener("click", (e) => {
@@ -1142,16 +1143,32 @@ function renderCourseTasks(d) {
       if (Date.now() - (el._swipedAt || 0) < 500) return;   /* 刚左滑完不弹卡 */
       openTaskModal(t);
     });
-    frag.appendChild(el);
-  });
+    return el;
+  };
+  if (!upcoming.length) {
+    frag.appendChild(Object.assign(document.createElement("div"),
+      { className: "empty", textContent: "没有未截止的作业" }));
+  }
+  upcoming.forEach((t) => frag.appendChild(bind(t, upcoming)));
+  if (past.length) {
+    /* 已过期(首页不显示, 这里完整可查): 分组标题下按时间倒序 */
+    const head = document.createElement("div");
+    head.className = "list-sep";
+    head.innerHTML = `<span>已过期 · ${past.length} 项</span>`;
+    frag.appendChild(head);
+    past.forEach((t) => frag.appendChild(bind(t, past)));
+  }
   box.appendChild(frag);
 }
 function taskItemEl(t) {
-  return swipeableItemEl("item ddl-item",
+  const pastBadge = t.past_due
+    ? badge(t.status && t.status !== "Pending" ? t.status : "已过期", "past")
+    : badge(t.status || "?", t.status === "Pending" ? "red" : "green");
+  return swipeableItemEl("item ddl-item" + (t.past_due ? " past-due" : ""),
     `<span class="move-btns"><button class="move-btn" data-move="up" title="上移">▲</button><button class="move-btn" data-move="down" title="下移">▼</button></span>
     <span class="dim">${esc((t.due_at || "").slice(5, 16))}</span>
     <span class="grow">${esc(t.title)}<span class="dim"> · ${esc(t.class_name)}</span></span>
-    ${badge(t.status || "?", t.status === "Pending" ? "red" : "green")}`,
+    ${pastBadge}`,
     async () => {
       await call("ddl_dismiss", `${t.title}|${t.due_at || ""}`);
       Store.drop("courses"); Store.drop("home");

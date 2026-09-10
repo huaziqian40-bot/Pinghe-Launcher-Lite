@@ -544,3 +544,22 @@ button,.chip,.item,.mail-item,.session-item,.file-item,.tt-lesson,.gt-lesson{
 #xl-rec-result .card:nth-child(3){animation-delay:.12s}
 #xl-rec-result .card:nth-child(4){animation-delay:.18s}
 #xl-rec-result .card:nth-child(5){animation-delay:.24s}
+/* ---------- Agent: 视图内固定高度, 只有消息区滚动 ----------
+   原来 .chat 用固定 vh 高度 + .agent-side/.composer 都是 position:sticky,
+   页面滚动时三块互相滑动遮挡; 现在整页不滚, 消息列表自己滚。 */
+#view-agent.active{display:flex;flex-direction:column;gap:12px;
+  height:calc((100vh - 118px) / var(--ap-zoom,1));min-height:420px}
+#view-agent .agent-split{flex:1;min-height:0;align-items:stretch}
+#view-agent .agent-side{position:static;overflow:auto;min-height:0}
+#view-agent .agent-main{display:flex;flex-direction:column;min-height:0;gap:12px}
+#view-agent #ag-proposals{flex:none}
+#view-agent #ag-proposals:empty{display:none}
+#view-agent #ag-chat{flex:1;min-height:0;height:auto;overflow:auto}
+#view-agent .composer{position:static;flex:none;margin-top:0}
+
+/* ---------- 我的课程: 已过期分组 ---------- */
+.list-sep{display:flex;align-items:center;gap:10px;margin:14px 0 6px;
+  color:var(--ink-3);font-size:12px;font-weight:650;letter-spacing:.4px}
+.list-sep::after{content:"";flex:1;height:1px;background:var(--border)}
+.badge.past{background:var(--ivory-200);color:var(--ink-3)}
+.ddl-item.past-due{opacity:.85}
