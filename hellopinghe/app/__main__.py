@@ -99,6 +99,21 @@ def _ensure_webview2() -> None:
 
 def main() -> None:
     smoke = "--smoke" in sys.argv
+
+    # ---- 单实例: 已有实例在跑就唤醒它然后退出(不重复开窗) ----
+    # smoke 测试不参与(否则会被用户正开着的实例挡掉, 拿不到 SMOKE_JS)
+    inst = None
+    if not smoke:
+        from ..tray import SingleInstance
+
+        inst = SingleInstance()
+        if not inst.acquire():
+            if inst.notify_existing():
+                print("Pinghe Launcher Lite 已在运行, 已唤起主界面", flush=True)
+            else:
+                print("Pinghe Launcher Lite 已在运行(无法唤醒, 可能正在退出)", flush=True)
+            sys.exit(0)
+
     try:
         _ensure_webview2()
         import webview   # noqa: E402  (在 WebView2 检测之后导入)
@@ -117,6 +132,47 @@ def main() -> None:
         _log_error("启动失败", exc)
         sys.exit(1)
 
+    state = {"quitting": False}
+
+    def _show_main() -> None:
+        try:
+            window.show()
+        except Exception:  # noqa: BLE001
+            pass
+
+    def _quit() -> None:
+        state["quitting"] = True
+        try:
+            if tray is not None:
+                tray.stop()
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            window.destroy()
+        except Exception:  # noqa: BLE001
+            pass
+
+    def _on_closing() -> bool:
+        """关闭窗口 = 收进托盘(应用继续跑); 从托盘"退出"才真正结束."""
+        if state["quitting"]:
+            return True
+        try:
+            window.hide()
+        except Exception:  # noqa: BLE001
+            pass
+        return False
+
+    window.events.closing += _on_closing
+
+    # ---- 托盘 + 唤醒监听(仅正常启动时) ----
+    tray = None
+    if not smoke:
+        from ..tray import create_tray
+
+        tray = create_tray(window, _quit, _show_main)
+        if inst is not None:
+            inst.listen(_show_main)
+
     if smoke:
         def close_later():
             time.sleep(5)
@@ -130,6 +186,7 @@ def main() -> None:
                 print(f"SMOKE_JS: {result}", flush=True)
             except Exception as exc:  # noqa: BLE001
                 print(f"SMOKE_JS_ERR: {exc}", flush=True)
+            state["quitting"] = True
             try:
                 window.destroy()
             except Exception:  # noqa: BLE001
@@ -142,6 +199,9 @@ def main() -> None:
     except Exception as exc:  # noqa: BLE001
         _log_error("运行时崩溃", exc)
         sys.exit(1)
+    finally:
+        if inst is not None:
+            inst.release()
 
 
 if __name__ == "__main__":

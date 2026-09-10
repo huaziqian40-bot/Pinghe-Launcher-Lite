@@ -270,13 +270,13 @@ class Api:
             def _ddl():
                 try:
                     now2 = datetime.now()
-                    # 首页只看"今天及以后"的 DDL —— 过期作业归"我的课程"页
-                    # (按日期粒度比较, 今天的作业整天都算未过期)
-                    today_iso = now2.date().isoformat()
+                    # 首页与"我的课程"页统一口径: 前 5 天 ~ 后 14 天
+                    # (按日期粒度比较, 今天的作业整天都算在窗口内)
+                    lo = (now2 - timedelta(days=5)).date().isoformat()
                     hi = (now2 + timedelta(days=14)).isoformat(timespec="minutes")
                     ddl = [
                         it for it in self.svc.courses.deadlines(days=14)
-                        if it["due_at"] and it["due_at"][:10] >= today_iso
+                        if it["due_at"] and it["due_at"][:10] >= lo
                         and it["due_at"] <= hi
                     ]
                     host = self.cfg.managebac_base_url.split("//")[-1]
@@ -524,6 +524,15 @@ class Api:
             classes = self.svc.courses.classes()
             tasks = self.svc.courses.all_tasks()
             grades = self.svc.courses.grades()
+            # 与首页同一时间窗: 前 5 天 ~ 后 14 天(没有截止时间的留下当"随时可交")
+            from datetime import datetime as _dt, timedelta as _td
+
+            lo = ( _dt.now() - _td(days=5)).date().isoformat()
+            hi = (_dt.now() + _td(days=14)).isoformat(timespec="minutes")
+            tasks = [
+                t for t in tasks
+                if not t.get("due_at") or (t["due_at"][:10] >= lo and t["due_at"] <= hi)
+            ]
             # 过滤掉用户左滑移除过的 DDL (与首页同一套 dismissed key)
             host = self.cfg.managebac_base_url.split("//")[-1]
             dismissed = storage.ddl_dismissed_keys(self.svc._conn(), host)

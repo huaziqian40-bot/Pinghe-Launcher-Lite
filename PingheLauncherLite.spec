@@ -9,7 +9,10 @@ a = Analysis(
         ('ui', 'ui'),
         ('tools/WebView2/MicrosoftEdgeWebview2Setup.exe', '.'),
     ],
-    hiddenimports=[],
+    hiddenimports=[
+        # 托盘图标: pystray 按平台动态导入后端, PyInstaller 静态分析看不到
+        'pystray', 'pystray._win32', 'pystray._base',
+    ],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
