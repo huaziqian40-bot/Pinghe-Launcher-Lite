@@ -47,6 +47,8 @@ data/                          ← 数据根目录(便携:<安装目录>\data)
 ├── logs/                      诊断日志(非用户数据,可随时删)
 │   ├── app.log
 │   └── error.log
+├── _backups/                  自动备份(启动时最多一天一份, 保留最近 14 份)
+│   └── data-YYYYMMDD-HHMMSS.zip
 └── _migrated_backup/          由旧版布局迁移过来的历史文件(保留不删,可手动清理)
 ```
 
@@ -367,14 +369,28 @@ agent/20260910-213045.json
 
 ---
 
-## 6. `logs/`
+## 6. `logs/` 与 `_backups/`
 
 | 文件 | 内容 |
 |---|---|
-| `app.log` | 运行日志(启动、同步、错误摘要),UTF-8 文本 |
-| `error.log` | 崩溃堆栈 |
+| `logs/app.log` | 运行日志(启动、同步、错误摘要),UTF-8 文本 |
+| `logs/error.log` | 崩溃堆栈 |
+| `_backups/data-<时间戳>.zip` | **自动备份**:启动时若距上次超过 `backup.interval_hours`(默认 20 小时)就打包一份,保留最近 `backup.keep`(默认 14)份 |
 
-不属于用户数据,可随时删除;发 issue 时附带这两个文件最有用。
+自动备份**只收不可再生的数据**:`settings.yaml`、`Schedule`、`agent/`、
+`phll/state.json`、`phll/xinlv/`、`phll/mail/`;课表与作业缓存(可重新抓取、
+动辄上百 MB)不进包。可在 `settings.yaml` 里调整:
+
+```yaml
+backup:
+  enabled: true
+  interval_hours: 20
+  keep: 14
+```
+
+恢复方式:关掉应用 → 把 zip 里的文件按原路径解回 `data/` 覆盖 → 重新打开。
+
+日志不属于用户数据,可随时删除;发 issue 时附带这两个文件最有用。
 
 ---
 

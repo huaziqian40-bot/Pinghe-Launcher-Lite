@@ -167,11 +167,22 @@ def main() -> None:
     # ---- 托盘 + 唤醒监听(仅正常启动时) ----
     tray = None
     if not smoke:
+        from .. import filestore as _fs
         from ..tray import create_tray
 
         tray = create_tray(window, _quit, _show_main)
         if inst is not None:
             inst.listen(_show_main)
+
+        # 启动时做一次自动备份(settings/Schedule/agent/心履/联系人;
+        # 后台线程, 失败静默) —— 数据丢了就没了, 先留个副本
+        def _backup_soon() -> None:
+            try:
+                _fs.auto_backup()
+            except Exception:  # noqa: BLE001
+                pass
+
+        threading.Thread(target=_backup_soon, name="auto-backup", daemon=True).start()
 
     if smoke:
         def close_later():

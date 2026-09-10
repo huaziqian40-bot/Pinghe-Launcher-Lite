@@ -40,6 +40,7 @@ PHLL_DIR = "phll"
 AGENT_DIR = "agent"
 LOG_DIR = "logs"
 BACKUP_DIR = "_migrated_backup"
+AUTO_BACKUP_DIR = "_backups"
 
 #: phll/ 内部子目录
 EDUPAGE_SUB = "edupage"
@@ -244,3 +245,71 @@ def move_all_legacy() -> list[str]:
     if (r / "agent_sessions").is_dir():
         names.append("agent_sessions")
     return move_legacy(names)
+
+
+# ---------------------------------------------------------------- 自动备份
+def auto_backup(interval_hours: float = 20.0, keep: int = 14) -> Path | None:
+    """把"小而珍贵、丢了就没了"的数据打包进 ``data/_backups/``.
+
+    只备份不可再生的部分: ``settings.yaml`` / ``Schedule`` / ``agent/`` /
+    ``phll/state.json`` / ``phll/xinlv/`` / ``phll/mail/`` —— 课表与作业缓存
+    能重新抓取, 不进备份(否则每次要压几百 MB)。
+
+    默认每 ~20 小时做一次, 保留最近 14 份; 可在 settings.yaml 里调::
+
+        backup:
+          enabled: true
+          interval_hours: 20
+          keep: 14
+
+    返回本次生成的压缩包路径; 不需要备份时返回 None。**绝不删除任何用户数据**,
+    清理只发生在 ``_backups/`` 内部。
+    """
+    import time
+    import zipfile
+
+    try:
+        root_ = ensure_root()
+        doc = load_settings() or {}
+        conf = doc.get("backup") or {}
+        if conf.get("enabled") is False:
+            return None
+        keep = int(conf.get("keep") or keep)
+        interval = float(conf.get("interval_hours") or interval_hours)
+        bdir = root_ / AUTO_BACKUP_DIR
+        bdir.mkdir(parents=True, exist_ok=True)
+        existing = sorted(bdir.glob("data-*.zip"))
+        if existing:
+            age_h = (time.time() - existing[-1].stat().st_mtime) / 3600
+            if age_h < interval:
+                return None
+
+        targets: list[Path] = []
+        for name in (SETTINGS, SCHEDULE):
+            p = root_ / name
+            if p.is_file():
+                targets.append(p)
+        for sub in (("phll", "state.json"), ("phll", "xinlv"), ("phll", "mail"), (AGENT_DIR,)):
+            p = root_.joinpath(*sub)
+            if p.is_file():
+                targets.append(p)
+            elif p.is_dir():
+                targets.extend(x for x in p.rglob("*") if x.is_file())
+        if not targets:
+            return None
+
+        out = bdir / f"data-{datetime.now().strftime('%Y%m%d-%H%M%S')}.zip"
+        with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as z:
+            for p in targets:
+                try:
+                    z.write(p, p.relative_to(root_).as_posix())
+                except OSError:
+                    continue
+        for old in sorted(bdir.glob("data-*.zip"))[:-max(1, keep)]:
+            try:
+                old.unlink()
+            except OSError:
+                pass
+        return out
+    except Exception:  # noqa: BLE001  (备份失败绝不阻塞启动)
+        return None
