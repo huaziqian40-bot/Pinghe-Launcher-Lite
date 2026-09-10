@@ -18,9 +18,12 @@ from ..exceptions import PingheError
 
 MAX_ROUNDS = 8
 PROPOSAL_TTL = 600  # 10 分钟
-from .. import paths as _paths
+from .. import filestore as _fs
 
-SESSIONS_DIR = _paths.data_dir() / "agent_sessions"
+
+def _sessions_dir():
+    """AI 会话目录: ``data/agent/``(每次动态取, 便携/测试环境切换立即生效)."""
+    return _fs.agent_dir()
 
 # ---------------------------------------------------------------- 权限模式
 # readonly        只读: 写工具全部禁用
@@ -176,12 +179,12 @@ class AgentEngine:
         if not self.history:
             return None
         try:
-            SESSIONS_DIR.mkdir(parents=True, exist_ok=True)
+            _sessions_dir().mkdir(parents=True, exist_ok=True)
             title = next(
                 (m["content"][:30] for m in self.history if m["role"] == "user"),
                 "会话",
             )
-            (SESSIONS_DIR / f"{self.session_id}.json").write_text(
+            (_sessions_dir() / f"{self.session_id}.json").write_text(
                 json.dumps({"id": self.session_id, "title": title,
                             "history": self.history}, ensure_ascii=False),
                 encoding="utf-8",
@@ -191,10 +194,10 @@ class AgentEngine:
             return None
 
     def list_sessions(self) -> list[dict]:
-        if not SESSIONS_DIR.exists():
+        if not _sessions_dir().exists():
             return []
         out = []
-        for p in SESSIONS_DIR.glob("*.json"):
+        for p in _sessions_dir().glob("*.json"):
             try:
                 data = json.loads(p.read_text(encoding="utf-8"))
                 out.append({
@@ -209,7 +212,7 @@ class AgentEngine:
 
     def load_session(self, sid: str) -> dict:
         self.save_session()
-        data = json.loads((SESSIONS_DIR / f"{sid}.json").read_text(encoding="utf-8"))
+        data = json.loads((_sessions_dir() / f"{sid}.json").read_text(encoding="utf-8"))
         self.history = data.get("history", [])
         self.proposals.clear()
         self.session_id = sid

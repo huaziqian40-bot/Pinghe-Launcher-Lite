@@ -13,11 +13,11 @@ from dataclasses import dataclass
 from datetime import date, datetime, time as dtime, timedelta
 from pathlib import Path
 
-from ..config import CONFIG_DIR, Config
+from ..config import Config
 from ..exceptions import LoginRequiredError, PingheError
 from ..managebac.client import ManageBacClient
 from ..xinlv import MOODS, XinlvAuthError, XinlvClient, validate_entry
-from .. import paths, storage
+from .. import filestore as fs, paths, storage
 from ..logutil import log as _log
 
 KEYRING_SERVICE = "hellopinghe"
@@ -178,7 +178,7 @@ class EdupageService:
         if key in self._week_cache:
             return self._week_cache[key]
 
-        cache_file = paths.data_dir() / f"edupage_week_v4_{monday.isoformat()}_{cid or 'all'}.json"
+        cache_file = fs.phll(fs.EDUPAGE_SUB, f"week_{monday.isoformat()}_{cid or 'all'}.json")
         if cache_file.exists():
             age = _time.time() - cache_file.stat().st_mtime
             if age < 6 * 3600:
@@ -242,11 +242,6 @@ class EdupageService:
         try:
             cache_file.parent.mkdir(parents=True, exist_ok=True)
             cache_file.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
-            # 清掉旧版缓存(v2 截断 / v3 泄漏日 / v3 跨账号共用)
-            for pattern in ("edupage_week_2*.json", "edupage_week_v2_*.json",
-                            "edupage_week_v3_*.json"):
-                for old in cache_file.parent.glob(pattern):
-                    old.unlink(missing_ok=True)
         except Exception:  # noqa: BLE001
             pass
 
@@ -432,9 +427,9 @@ class EdupageService:
             json.dumps(selected, sort_keys=True).encode("utf-8")
         ).hexdigest()[:8]
         cid = self.my_class_id()
-        cache_dir = paths.data_dir()
+        cache_dir = fs.phll(fs.EDUPAGE_SUB)
         cache_file = (cache_dir /
-                      f"edupage_personal_v7_{day.isoformat()}_{cid or 'all'}_{sel_key}.json")
+                      f"personal_{day.isoformat()}_{cid or 'all'}_{sel_key}.json")
         if cache_file.exists():
             age = _time.time() - cache_file.stat().st_mtime
             if age < 2 * 3600:
@@ -504,12 +499,10 @@ class EdupageService:
         try:
             cache_dir.mkdir(parents=True, exist_ok=True)
             cache_file.write_text(json.dumps(out, ensure_ascii=False), encoding="utf-8")
-            for pattern in ("edupage_personal_2*.json", "edupage_personal_v2_*.json",
-                            "edupage_personal_v3_*.json", "edupage_personal_v4_*.json",
-                            "edupage_personal_v5_*.json", "edupage_personal_v6_*.json"):
-                for old in cache_dir.glob(pattern):
-                    if old != cache_file:
-                        old.unlink(missing_ok=True)
+            # 选课一变, 同一天其他选课哈希的旧缓存就作废
+            for old in cache_dir.glob(f"personal_{day.isoformat()}_*.json"):
+                if old != cache_file:
+                    old.unlink(missing_ok=True)
         except Exception:  # noqa: BLE001
             pass
         return out
@@ -957,7 +950,7 @@ class MailService:
         import email as _email
         from email.utils import getaddresses
 
-        cache = CONFIG_DIR / "mail_contacts.json"
+        cache = fs.phll(fs.MAIL_SUB, "contacts.json")
         if not force and cache.exists():
             try:
                 raw = json.loads(cache.read_text(encoding="utf-8"))
@@ -1031,7 +1024,7 @@ class MailService:
             contacts.append({"name": best_name, "email": addr,
                              "count": entry["count"]})
         try:
-            CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+            cache.parent.mkdir(parents=True, exist_ok=True)
             cache.write_text(json.dumps(
                 {"ts": _time.time(), "contacts": contacts},
                 ensure_ascii=False), encoding="utf-8")
@@ -1054,10 +1047,10 @@ class MailService:
                     break
         return out
 
-    # ---- 自建联系人 / 隐藏标记(与收割结果合并, 存 contacts_custom.json) ----
+    # ---- 自建联系人 / 隐藏标记(与收割结果合并) ----
     @staticmethod
     def _custom_file() -> Path:
-        return CONFIG_DIR / "contacts_custom.json"
+        return fs.phll(fs.MAIL_SUB, "contacts_custom.json")
 
     def _custom(self) -> dict:
         try:
@@ -1070,9 +1063,9 @@ class MailService:
         return {"custom": [], "hidden": []}
 
     def _save_custom(self, data: dict) -> None:
-        CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-        self._custom_file().write_text(
-            json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")
+        p = self._custom_file()
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")
 
     def contacts_merged(self) -> list[dict]:
         """收割通讯录 + 用户自建/隐藏 合并; 自建条目置顶并带 custom 标记。"""
@@ -1208,7 +1201,7 @@ class CoursesService:
         if self._client is None:
             client = ManageBacClient(self.cfg.managebac_base_url)
             host = self.cfg.managebac_base_url.split("//")[-1]
-            session_file = paths.data_dir() / f"session_{host}.json"
+            session_file = fs.phll(fs.MANAGEBAC_SUB, f"session_{host}.json")
             if session_file.exists():
                 import json
 
@@ -1234,7 +1227,7 @@ class CoursesService:
         client = ManageBacClient(url)
         client.login(email, password)
         host = url.split("//")[-1]
-        session_file = paths.data_dir() / f"session_{host}.json"
+        session_file = fs.phll(fs.MANAGEBAC_SUB, f"session_{host}.json")
         import json
 
         session_file.parent.mkdir(parents=True, exist_ok=True)
@@ -1663,14 +1656,10 @@ class XinlvService:
     def status(self) -> dict:
         conn = self._conn()
         today = date.today().isoformat()
-        row = conn.execute(
-            "SELECT COUNT(*) FROM xinlv_entries WHERE deleted=0 AND date=?",
-            (today,),
-        ).fetchone()
         return {
             "logged_in": self.is_logged_in(),
             "username": self.cfg.xinlv_username,
-            "today_count": int(row[0]),
+            "today_count": storage.xinlv_count_on(conn, today),
             "pending": storage.xinlv_pending_count(conn),
             "server_time": storage.xinlv_state_get(conn, "server_time"),
         }

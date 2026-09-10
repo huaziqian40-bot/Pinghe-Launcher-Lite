@@ -12,6 +12,8 @@ a = Analysis(
     hiddenimports=[
         # 托盘图标: pystray 按平台动态导入后端, PyInstaller 静态分析看不到
         'pystray', 'pystray._win32', 'pystray._base',
+        # settings.yaml: PyYAML 在函数体内延迟导入, 显式声明更保险
+        'yaml',
     ],
     hookspath=[],
     hooksconfig={},

@@ -17,22 +17,26 @@ import sys
 from datetime import date, timedelta
 from pathlib import Path
 
-from .config import CONFIG_PATH, PROVIDER_PRESETS, Config
+from .config import PROVIDER_PRESETS, Config
 from .exceptions import LoginError, PingheError
 from .managebac.client import ManageBacClient
 from .storage import connect, save_classes, save_deadlines, upcoming_deadlines
 
-from . import paths as _paths
-SESSION_DIR = _paths.data_dir()
+from . import filestore as _fs
+
+
+def _session_dir() -> Path:
+    """ManageBac 会话文件: ``data/phll/managebac/``(与 GUI 共用同一份)."""
+    return _fs.phll(_fs.MANAGEBAC_SUB)
 
 
 def _session_path(client: ManageBacClient) -> Path:
     host = client.base_url.split("//")[-1].replace(":", "_")
-    return SESSION_DIR / f"session_{host}.json"
+    return _session_dir() / f"session_{host}.json"
 
 
 def save_session(client: ManageBacClient) -> None:
-    SESSION_DIR.mkdir(parents=True, exist_ok=True)
+    _session_dir().mkdir(parents=True, exist_ok=True)
     _session_path(client).write_text(
         json.dumps({"cookies": client.session.cookies.get_dict()}, indent=2),
         encoding="utf-8",
@@ -101,7 +105,7 @@ def cmd_ddl(args: argparse.Namespace) -> int:
     if args.save:
         conn = connect()
         n = save_deadlines(conn, client.base_url, items)
-        print(f"已写入本地数据库 {n} 条 → {SESSION_DIR / 'hellopinghe.db'}")
+        print(f"已写入本地缓存 {n} 条 → {_fs.phll(_fs.MANAGEBAC_SUB, 'deadlines.json')}")
     return 0
 
 
@@ -118,7 +122,7 @@ def cmd_timetable(args: argparse.Namespace) -> int:
 
     cfg = Config.load()
     if not (cfg.edupage_username or args.username):
-        raise PingheError("先在 ~/.hellopinghe/config.json 填 edupage_username,或用 --username 传入")
+        raise PingheError(f"先在 {_fs.settings_path()} 填 accounts.edupage.username,或用 --username 传入")
     username = args.username or cfg.edupage_username
     password = getpass.getpass("Edupage 密码(不落盘): ")
     account = ep.login(username, password, cfg.edupage_subdomain)
@@ -155,7 +159,7 @@ def cmd_preset(args: argparse.Namespace) -> int:
         cfg.save()
     a = cfg.active_provider()
     print(f"当前 AI: {a.get('name', '?')}\n  protocol: {a.get('protocol')}\n  base_url: {a.get('base_url')}\n  model   : {cfg.agent_model or '(未设)'}\n  api_key : {'已填' if a.get('api_key') else '(待填)'}")
-    print(f"配置文件: {CONFIG_PATH}")
+    print(f"配置文件: {_fs.settings_path()}")
     return 0
 
 
