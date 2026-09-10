@@ -314,6 +314,7 @@ function renderTimetable(d) {
     `<div class="tt-head ${day.day === today ? "today" : ""}" style="grid-row:1;grid-column:${di + 2}">${esc(day.label)}</div>`).join("");
 
   const spans = [];   // 连堂合并块最后画, 盖在被跨过的空格上
+  const pRows = [];   // P1-P10 的行号(用于行高统一)
   let r = 2;
   PERIODS.forEach((p, pi) => {
     const busy = byDay.some((b) => b.cells[pi].length);
@@ -326,6 +327,7 @@ function renderTimetable(d) {
       r++;
       return;
     }
+    if (!p.rest) pRows.push(r);   // 正课行 → 稍后统一高度
     html += timeCell;
     byDay.forEach((b, di) => {
       const ls = b.cells[pi];
@@ -361,8 +363,45 @@ function renderTimetable(d) {
   }
 
   $("#tt-week").innerHTML = html + spans.join("");
+  ttPRows = pRows;
+  ttFitRows(pRows);
   updateNowLine();
 }
+
+/* P1-P10 行高统一: 量出所有正课行的自然高度取最大值, 再把每个正课行都固定
+   成这个高度 —— 免得"三节课并行"的行很高、"只有一节课"的行很矮, 一片杂乱。
+   Lunch/晚自习横幅行与"课外"行保持自适应; 连堂合并块跨两行, 天然够高。 */
+function ttFitRows(pRows) {
+  const grid = $("#tt-week");
+  if (!grid || !pRows || !pRows.length) return;
+  grid.style.gridTemplateRows = "";          // 先还原, 量的才是自然高度
+  const byRow = new Map();
+  $$("#tt-week .tt-cell").forEach((c) => {
+    const row = parseInt(c.style.gridRow, 10);
+    if (!row) return;
+    const h = c.offsetHeight;
+    if (h > (byRow.get(row) || 0)) byRow.set(row, h);
+  });
+  const heights = pRows.map((row) => byRow.get(row) || 0);
+  const maxH = Math.max(...heights);
+  if (!maxH) return;                          // 页面不可见(隐藏时量到 0) → 不处理
+  const lastRow = Math.max(...$$("#tt-week [style*='grid-row']")
+    .map((el) => parseInt(el.style.gridRow, 10) || 0));
+  const tpl = [];
+  for (let row = 1; row <= lastRow; row++) {
+    tpl.push(pRows.includes(row) ? `${maxH}px` : "auto");
+  }
+  grid.style.gridTemplateRows = tpl.join(" ");
+}
+/* 窗口尺寸/缩放变化时重新统一(字体大小变了, 自然高度也会变) */
+let ttPRows = [];
+let ttFitTimer = 0;
+window.addEventListener("resize", () => {
+  clearTimeout(ttFitTimer);
+  ttFitTimer = setTimeout(() => {
+    if (currentView === "timetable" && ttPRows.length) ttFitRows(ttPRows);
+  }, 180);
+});
 /* 当前时间指示线: 一根横线贯穿整张周课表, 落在"现在"对应的节次行内
    (行内按时间比例插值)。只在看本周(ttOffset=0)且时间在校内时段时显示。 */
 function updateNowLine(nowMins) {
@@ -2172,11 +2211,12 @@ function grpChecked(checkedSet, fam, teacher, group) {
     checkedSet.has(`${fam}|${teacher}|`);
 }
 function grpRowHTML(fam, g, checkedSet, pad, lead, autoCheck) {
-  /* 无组 = 全班必修课(班会/语文这类), 人人都有, 锁定为已选不可取消 */
+  /* 无组 = 全班必修课(班会/语文这类) 或 默认必选课(国家理科),
+     人人都有, 锁定为已选不可取消 */
   const whole = !g.group;
   const chk = (whole || autoCheck || grpChecked(checkedSet, fam, g.teacher, g.group))
     ? "checked" : "";
-  const label = whole ? "全班必修" : `组${g.group}`;
+  const label = whole ? (g.default ? "默认必选" : "全班必修") : `组${g.group}`;
   const rooms = (g.rooms || []).join(" ");
   return `<label class="subject-row${whole ? " wc" : ""}" style="padding-left:${pad}px">
     <input type="checkbox" data-sub="${esc(g.subject)}" data-teacher="${esc(g.teacher)}"

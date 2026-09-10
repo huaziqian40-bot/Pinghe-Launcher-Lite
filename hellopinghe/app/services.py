@@ -36,6 +36,20 @@ def subject_family(name: str) -> str:
     return _LEVEL_RE.sub(r"\1", n).strip()
 
 
+#: 国家理科: Edupage 把国家课程的理科拆成三张轮换课卡
+#: (国家物理/国家化学/国家生物, 组 G1/G2/G3, 同一时段并行),
+#: 对学生是同一门课 —— 选课与课表统一合并成"国家理科", 且默认选中。
+#: 只匹配理化生: Native Chinese/Geography/History/Politics 是独立科目。
+_NATIVE_SCIENCE_KEYS = ("native physics", "native chemistry", "native biology",
+                        "国家物理", "国家化学", "国家生物", "国家理科")
+NATIVE_SCIENCE_LABEL = "国家理科"
+
+
+def is_native_science(name: str) -> bool:
+    fam = subject_family(name).lower()
+    return any(k in fam for k in _NATIVE_SCIENCE_KEYS)
+
+
 # ---------------------------------------------------------------- 密钥存储
 # Windows: DPAPI 加密 JSON 存数据目录(便携要求); 其他平台: keyring。
 # 统一从 secrets 模块走, 本文件保留旧名字供 bridge 等处引用。
@@ -362,8 +376,13 @@ class EdupageService:
                 group = ",".join(l.groups) if l.groups else ""
                 teacher = l.teachers[0].name.strip() if l.teachers else ""
                 room = l.classrooms[0].name if l.classrooms else ""
+                display = l.subject.name
+                if is_native_science(l.subject.name):
+                    # 国家理科: 三张轮换卡合成一个"默认必选"选项(无组, 不可取消)
+                    fam, group, teacher = NATIVE_SCIENCE_LABEL, "", "理科组"
+                    display = NATIVE_SCIENCE_LABEL
                 ent = grouped.setdefault((fam, group, teacher), {
-                    "subject": l.subject.name, "group": group,
+                    "subject": display, "group": group,
                     "teacher": teacher or "(未指定老师)",
                     "rooms": set(), "times": []})
                 ent["rooms"].add(room)
@@ -375,11 +394,13 @@ class EdupageService:
         by_subject: dict[str, list] = {}
         for (fam, _g, _t), ent in grouped.items():
             times = sorted(ent["times"], key=lambda x: (x["_iso"], x["start"]))
+            native = fam == NATIVE_SCIENCE_LABEL
             by_subject.setdefault(fam, []).append({
                 "id": f"{fam}|{ent['teacher']}|{ent['group']}",
                 "group": ent["group"],
                 "teacher": ent["teacher"],
                 "subject": ent["subject"],
+                "default": native,          # 默认必选(前端锁定为已选)
                 "rooms": sorted(x for x in ent["rooms"] if x),
                 "times": [{"day": t["day"], "start": t["start"], "end": t["end"]}
                           for t in times]})
@@ -396,10 +417,12 @@ class EdupageService:
         通用两层规则(没有任何账号特判, 全部由 Edupage 课卡数据驱动):
         ① 选课命中(科目族+组号+老师) → 显示;
         ② 课卡无教学组 = 全班必修(班会/国家课程这类 Edupage 不打组的课) → 显示;
+        ③ 国家理科(国家物理/化学/生物三张轮换卡) → 默认必选, 且同一时段
+           合并成一条"国家理科"(否则一个格子并排三张卡);
         其余(有组但未选) = 年级里其他同学的并行选项, 不显示。
         未跑向导的新账号会先看到必修课, 选完课后选修课自动出现。
 
-        带磁盘缓存(2 小时, v6 文件名带班级 id + 选课哈希 —— 课卡按登录
+        带磁盘缓存(2 小时, v7 文件名带班级 id + 选课哈希 —— 课卡按登录
         账号可见, 缓存绝不能跨账号共用)。
         """
         import hashlib
@@ -411,7 +434,7 @@ class EdupageService:
         cid = self.my_class_id()
         cache_dir = paths.data_dir()
         cache_file = (cache_dir /
-                      f"edupage_personal_v6_{day.isoformat()}_{cid or 'all'}_{sel_key}.json")
+                      f"edupage_personal_v7_{day.isoformat()}_{cid or 'all'}_{sel_key}.json")
         if cache_file.exists():
             age = _time.time() - cache_file.stat().st_mtime
             if age < 2 * 3600:
@@ -421,10 +444,26 @@ class EdupageService:
                     pass  # 缓存损坏则重新计算
 
         out = []
+        native: dict[tuple, dict] = {}   # (start,end) → 合并中的国家理科
         for l in self.master_plan(day):
             if not self._for_my_class(l):
                 continue
             subject = (l.subject.name if l.subject else "").strip()
+            if is_native_science(subject):
+                # 默认必选: 不看选课; 同一时段多张卡合并(房间/老师收集去重)
+                key = (l.start_time.strftime("%H:%M") if l.start_time else "",
+                       l.end_time.strftime("%H:%M") if l.end_time else "")
+                b = native.setdefault(key, {"rooms": [], "teachers": [],
+                                            "cancelled": True})
+                for c in (l.classrooms or []):
+                    if c.name and c.name not in b["rooms"]:
+                        b["rooms"].append(c.name)
+                for t in (l.teachers or []):
+                    nm = t.name.strip()
+                    if nm and nm not in b["teachers"]:
+                        b["teachers"].append(nm)
+                b["cancelled"] = b["cancelled"] and bool(l.is_cancelled)
+                continue
             card_teachers = {t.name.strip() for t in (l.teachers or [])}
             group = ",".join(l.groups) if l.groups else ""
             card_groups = [g.strip() for g in group.split(",") if g.strip()]
@@ -446,13 +485,28 @@ class EdupageService:
                 "cancelled": bool(l.is_cancelled),
                 "curriculum": getattr(l, "curriculum", None) or "",
             })
+
+        # 合并后的国家理科: 一条记录代表整格(老师/教室压缩展示)
+        for (start, end), b in native.items():
+            teachers, rooms = b["teachers"], b["rooms"]
+            out.append({
+                "start": start, "end": end,
+                "subject": NATIVE_SCIENCE_LABEL,
+                "teacher": (teachers[0] if len(teachers) == 1
+                            else (f"{teachers[0]} 等{len(teachers)}位" if teachers else "")),
+                "room": " · ".join(rooms),
+                "group": "",
+                "cancelled": b["cancelled"],
+                "curriculum": "",
+            })
+
         out.sort(key=lambda x: (x["start"], x["subject"]))
         try:
             cache_dir.mkdir(parents=True, exist_ok=True)
             cache_file.write_text(json.dumps(out, ensure_ascii=False), encoding="utf-8")
             for pattern in ("edupage_personal_2*.json", "edupage_personal_v2_*.json",
                             "edupage_personal_v3_*.json", "edupage_personal_v4_*.json",
-                            "edupage_personal_v5_*.json"):
+                            "edupage_personal_v5_*.json", "edupage_personal_v6_*.json"):
                 for old in cache_dir.glob(pattern):
                     if old != cache_file:
                         old.unlink(missing_ok=True)
