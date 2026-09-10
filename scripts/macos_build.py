@@ -2,11 +2,14 @@
 """一键 macOS 构建: 在局域网 Mac 上同步源码 → venv → PyInstaller(.app) → DMG → 拉回 Windows.
 
 用法(在 Windows 开发机上):
-    python scripts/macos_build.py                       # 用环境变量 MAC_HOST/MAC_USER/MAC_PASS
-    python scripts/macos_build.py --host 192.168.5.3 --user huazixian --pass 000000
+    python scripts/macos_build.py --host 192.168.5.13 --user huazixian
+        # 默认用 ~/.ssh/macos_build 免密登录(该机已授权); 无密钥时用 --pass / MAC_PASS
+    python scripts/macos_build.py --host <Mac 的 IP> --user <用户名> --pass <密码>
 
-凭据绝不含在仓库里(Mac 构建机常被手动关机, 先开机再跑)。
-依赖: 本机 pip install paramiko; Mac 需开机且有网络(装依赖用)。
+凭据绝不含在仓库里(私钥在 ~/.ssh/macos_build, 不要提交)。
+Mac 构建机常被手动关机, 先开机再跑; 它的 IP 由 DHCP 分配会变, 用前先 ping 或看 ARP 表。
+依赖: 本机 pip install paramiko; Mac 需开机、联网、装好 Python 3.12。
+输出: deliver/PingheLauncherLite-mac-<日期>-<架构>.dmg(此机为 Intel → x86_64; Apple Silicon → arm64)
 """
 import argparse
 import io
@@ -14,6 +17,7 @@ import os
 import sys
 import tarfile
 import time
+from pathlib import Path
 
 HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # 仓库根
 
@@ -41,20 +45,37 @@ def sh(ssh, cmd, timeout=1800, show=True):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--host", default=os.environ.get("MAC_HOST", "192.168.5.3"))
+    ap.add_argument("--host", default=os.environ.get("MAC_HOST", "192.168.5.3"),
+                    help="Mac 的地址(IP 会变, 用之前先确认; 例: 192.168.5.13)")
     ap.add_argument("--user", default=os.environ.get("MAC_USER", "huazixian"))
-    ap.add_argument("--pass", dest="pwd", default=os.environ.get("MAC_PASS", ""))
+    ap.add_argument("--pass", dest="pwd", default=os.environ.get("MAC_PASS", ""),
+                    help="SSH 密码(不填则优先用密钥, 仍无则交互输入)")
+    ap.add_argument("--key", default=os.environ.get("MAC_KEY",
+                    str(Path.home() / ".ssh" / "macos_build")),
+                    help="SSH 私钥路径(默认 ~/.ssh/macos_build, 该机已授权可免密)")
     args = ap.parse_args()
-    if not args.pwd:
-        args.pwd = input(f"{args.user}@{args.host} SSH 密码: ")
 
     import paramiko
 
     ssh = paramiko.SSHClient()
     ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-    print(f"[1/8] 连接 {args.user}@{args.host} …")
-    ssh.connect(args.host, username=args.user, password=args.pwd,
-                timeout=8, look_for_keys=False, allow_agent=False)
+
+    # 优先密钥认证(免密), 失败再退回密码
+    connected = False
+    if args.key and Path(args.key).expanduser().exists():
+        print(f"[1/8] 连接 {args.user}@{args.host} (密钥) …")
+        try:
+            ssh.connect(args.host, username=args.user, key_filename=str(Path(args.key).expanduser()),
+                        timeout=8, look_for_keys=False, allow_agent=False)
+            connected = True
+        except Exception as exc:  # noqa: BLE001
+            print(f"      密钥认证失败({type(exc).__name__}), 改用密码")
+    if not connected:
+        if not args.pwd:
+            args.pwd = input(f"{args.user}@{args.host} SSH 密码: ")
+        print(f"[1/8] 连接 {args.user}@{args.host} (密码) …")
+        ssh.connect(args.host, username=args.user, password=args.pwd,
+                    timeout=8, look_for_keys=False, allow_agent=False)
     print("OK")
 
     # 获取 Mac 的 HOME 和构建路径(必须在 Windows 侧解析, 传给 Mac 时用绝对路径)
@@ -62,7 +83,11 @@ def main():
     mac_home = home_out.read().decode().strip()
     REMOTE_DIR = f"{mac_home}/hellopinghe-build"
     VENV = f"{mac_home}/hellopinghe-venv"
-    print(f"  Mac home: {mac_home}")
+    _, arch_out, _ = ssh.exec_command("uname -m")
+    arch = arch_out.read().decode().strip() or "x86_64"
+    _, ver_out, _ = ssh.exec_command("sw_vers -productVersion")
+    mac_ver = ver_out.read().decode().strip()
+    print(f"  Mac home: {mac_home}  |  架构: {arch}  |  macOS {mac_ver}")
 
     print("[2/8] 打包源码 …")
     skip = ("/.git", "/build", "/dist", "/__pycache__", "/deliver",
@@ -116,7 +141,8 @@ def main():
 
     print("[7/8] 打 DMG …")
     stamp = time.strftime("%Y%m%d")
-    dmg = f"PingheLauncherLite-mac-{stamp}.dmg"
+    # 文件名带架构(与 Releases 里的命名一致: ...-arm64.dmg / ...-x86_64.dmg)
+    dmg = f"PingheLauncherLite-mac-{stamp}-{arch}.dmg"
     sh(ssh, f"cd {remote_abs}/src/dist && rm -f {dmg} && "
             f"hdiutil create -volname 'Pinghe Launcher Lite' -srcfolder "
             f"'Pinghe Launcher Lite.app' -ov -format UDZO {dmg} | tail -2")
