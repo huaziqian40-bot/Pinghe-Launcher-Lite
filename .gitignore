@@ -15,11 +15,21 @@ _probe_*.py
 *.log
 msi_extract
 
-# ��Ʒ�������� GitHub Releases, �����ֿ�
+# 产品安装包走 GitHub Releases, 不入库
 PingheLauncherLite.exe
+HelloPingheLauncher.exe
 /deliver/
 tools/wix314-binaries.zip
 /tools/
+*.dmg
+*.icns
 
 # 测试环境(便携数据 + 本地 exe, 不入库)
 testenv/
+
+# 本地工作文档与外部仓库克隆(不公开发布)
+PH-Launcher/
+INTEGRATION.md
+CONTRIBUTOR-HANDOFF.md
+NEW-AI-PROMPT.md
+PHLauncher-DataIntegration-Handoff.zip

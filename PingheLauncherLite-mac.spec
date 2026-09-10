@@ -49,7 +49,7 @@ app = BUNDLE(
     info_plist={
         'CFBundleName': 'Pinghe Launcher Lite',
         'CFBundleDisplayName': 'Pinghe Launcher Lite',
-        'CFBundleShortVersionString': '1.0.0',
+        'CFBundleShortVersionString': '1.1.0',
         'NSHighResolutionCapable': True,
         'LSMinimumSystemVersion': '11.0',
     },

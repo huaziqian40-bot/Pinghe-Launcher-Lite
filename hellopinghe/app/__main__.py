@@ -171,6 +171,9 @@ def main() -> None:
         from ..tray import create_tray
 
         tray = create_tray(window, _quit, _show_main)
+        if tray is None:
+            # 没有托盘(非 Windows): 关窗就是退出, 否则窗口隐藏后无法找回
+            window.events.closing -= _on_closing
         if inst is not None:
             inst.listen(_show_main)
 
