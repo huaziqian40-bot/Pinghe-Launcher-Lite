@@ -1213,6 +1213,27 @@ class ScheduleService:
         storage.events_delete(conn, int(event_id))
 
 
+def _clean_selection(value) -> str:
+    """选课项里的单个字段(科目/组号/老师)清理成一行短文本。"""
+    return " ".join(str(value if value is not None else "").split())[:60]
+
+
+def _publish_managebac(tasks: list[dict]) -> None:
+    """把课程与作业写进共用 data/School（失败不影响本程序）。"""
+    try:
+        from .. import sharedschool
+
+        courses: dict[str, dict] = {}
+        for task in tasks or []:
+            cid = str(task.get("class_id") or "")
+            if not cid:
+                continue
+            courses.setdefault(cid, {"class_id": cid, "class_name": task.get("class_name") or "", "grade": None})
+        sharedschool.update({"managebac": sharedschool.managebac_section(list(courses.values()), tasks)})
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def _check_day(day: str) -> None:
     if not re.match(r"^\d{4}-\d{2}-\d{2}$", day):
         raise PingheError("日期格式应为 YYYY-MM-DD")
@@ -1296,7 +1317,9 @@ class CoursesService:
             if updated is not None and updated.tzinfo is None:
                 updated = updated.replace(tzinfo=now.tzinfo)
             if updated and now - updated < timedelta(hours=6):
-                return storage.load_tasks_cache(conn, host)
+                cached_tasks = storage.load_tasks_cache(conn, host)
+                _publish_managebac(cached_tasks)
+                return cached_tasks
             # 本机没有新鲜缓存时，用共用文件里对方同步好的作业
             try:
                 from .. import sharedschool
@@ -1308,7 +1331,9 @@ class CoursesService:
                 pass
         tasks = self._client_ready().get_all_tasks()
         storage.save_tasks_cache(conn, host, tasks)
-        return storage.load_tasks_cache(conn, host)
+        loaded = storage.load_tasks_cache(conn, host)
+        _publish_managebac(loaded)
+        return loaded
 
     def grades(self, force: bool = False) -> dict[str, str]:
         now = _time.monotonic()
