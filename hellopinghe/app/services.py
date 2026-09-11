@@ -437,6 +437,15 @@ class EdupageService:
                     return json.loads(cache_file.read_text(encoding="utf-8"))
                 except Exception:  # noqa: BLE001
                     pass  # 缓存损坏则重新计算
+        # 本机没有当天缓存时，直接用共用文件里对方同步好的课表
+        try:
+            from .. import sharedschool
+
+            shared_day = sharedschool.edupage_days().get(day.isoformat())
+            if shared_day:
+                return shared_day
+        except Exception:  # noqa: BLE001
+            pass
 
         out = []
         native: dict[tuple, dict] = {}   # (start,end) → 合并中的国家理科
@@ -512,6 +521,19 @@ class EdupageService:
             shareddata.write_timetable_days({day.isoformat(): out})
         except Exception:  # noqa: BLE001
             pass  # 共享文件写不写都不影响本程序
+        # 同时写共用学校数据 data/School 的 edupage 段(课程/课表/选课一份)
+        try:
+            from .. import sharedschool
+
+            selected = [
+                " · ".join(part for part in (
+                    _clean_selection(item.get("subject")), _clean_selection(item.get("group")),
+                    _clean_selection(item.get("teacher"))) if part)
+                for item in (self.cfg.selected_lessons or [])
+            ]
+            sharedschool.update({"edupage": sharedschool.edupage_section({day.isoformat(): out}, selected)})
+        except Exception:  # noqa: BLE001
+            pass
         return out
 
 
@@ -1275,6 +1297,15 @@ class CoursesService:
                 updated = updated.replace(tzinfo=now.tzinfo)
             if updated and now - updated < timedelta(hours=6):
                 return storage.load_tasks_cache(conn, host)
+            # 本机没有新鲜缓存时，用共用文件里对方同步好的作业
+            try:
+                from .. import sharedschool
+
+                shared_tasks = (sharedschool.read().get("managebac") or {}).get("tasks") or []
+                if shared_tasks:
+                    return shared_tasks
+            except Exception:  # noqa: BLE001
+                pass
         tasks = self._client_ready().get_all_tasks()
         storage.save_tasks_cache(conn, host, tasks)
         return storage.load_tasks_cache(conn, host)
