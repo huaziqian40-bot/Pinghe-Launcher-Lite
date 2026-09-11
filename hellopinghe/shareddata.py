@@ -13,12 +13,51 @@ from __future__ import annotations
 import json
 import os
 import threading
+import time as _time
 from datetime import datetime
 from pathlib import Path
 
 MARKERS = {"pll": ".pll-running", "phl": ".phl-running"}
 NAMES = {"pll": "Pinghe Launcher Lite", "phl": "PH Launcher"}
+HEARTBEAT_SECONDS = 30            # 自己的标记多久刷新一次
+HEARTBEAT_STALE_SECONDS = 90      # 对方多久没刷新就当它已经不在了
 _lock = threading.Lock()
+
+
+def _started_at() -> str:
+    try:
+        return datetime.fromtimestamp(_PROCESS_START).astimezone().isoformat(timespec="seconds")
+    except Exception:  # noqa: BLE001
+        return datetime.now().astimezone().isoformat(timespec="seconds")
+
+
+def _process_start_time() -> float:
+    """本进程启动时间(拿不到就退化成"现在")。"""
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        class FILETIME(ctypes.Structure):
+            _fields_ = [("dwLowDateTime", wintypes.DWORD), ("dwHighDateTime", wintypes.DWORD)]
+
+        creation, exit_, kernel, user = FILETIME(), FILETIME(), FILETIME(), FILETIME()
+        kernel32 = ctypes.windll.kernel32
+        handle = kernel32.OpenProcess(0x1000, False, os.getpid())
+        if not handle:
+            return _time.time()
+        try:
+            if not kernel32.GetProcessTimes(handle, ctypes.byref(creation), ctypes.byref(exit_),
+                                            ctypes.byref(kernel), ctypes.byref(user)):
+                return _time.time()
+        finally:
+            kernel32.CloseHandle(handle)
+        ticks = (creation.dwHighDateTime << 32) | creation.dwLowDateTime
+        return ticks / 10_000_000 - 11644473600  # 1601-01-01 → Unix 纪元
+    except Exception:  # noqa: BLE001
+        return _time.time()
+
+
+_PROCESS_START = _process_start_time()
 
 
 def _marker(data_dir: Path, kind: str) -> Path:
@@ -26,19 +65,33 @@ def _marker(data_dir: Path, kind: str) -> Path:
 
 
 def _pid_alive(pid: int) -> bool:
-    """Windows 下用 OpenProcess 探活; os.kill(pid, 0) 会真的杀进程, 不能用."""
+    """Windows 下判断进程是否真的活着.
+
+    两个坑:
+    * ``os.kill(pid, 0)`` 在 Windows 上会真的杀进程, 不能用;
+    * 只看 ``OpenProcess`` 是否成功也不行 —— 进程被强杀后未回收(僵尸)时句柄仍能打开,
+      实测 PID 8848 明明已经没有这个进程, OpenProcess 照样返回句柄, 于是误判
+      "另一个程序正在运行", 用户会看到弹窗说程序已在运行而打不开。
+    因此还要用 ``GetExitCodeProcess`` 确认它仍是 STILL_ACTIVE(259)。
+    """
     if pid <= 0:
         return False
     try:
         import ctypes
 
         PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+        STILL_ACTIVE = 259
         kernel32 = ctypes.windll.kernel32
         handle = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, int(pid))
         if not handle:
             return False
-        kernel32.CloseHandle(handle)
-        return True
+        try:
+            code = ctypes.c_ulong(0)
+            if not kernel32.GetExitCodeProcess(handle, ctypes.byref(code)):
+                return False
+            return code.value == STILL_ACTIVE
+        finally:
+            kernel32.CloseHandle(handle)
     except Exception:  # noqa: BLE001
         return False
 
@@ -49,17 +102,47 @@ def read_marker(data_dir: Path, kind: str) -> dict | None:
         pid = int(data.get("pid") or 0)
         if pid <= 0:
             return None
-        return {"pid": pid, "kind": data.get("kind") or kind}
+        return {"pid": pid, "kind": data.get("kind") or kind,
+                "updated_at": str(data.get("updated_at") or "")}
     except Exception:  # noqa: BLE001
         return None
+
+
+def _marker_fresh(marker: dict, now: float | None = None) -> bool:
+    """标记是不是"还在跳"的心跳。
+
+    每 30 秒刷新一次, 90 秒没动静就当对方已经不在(崩溃/被强杀/断电)——
+    光看 PID 不够: PID 会被系统回收给别人, 那样会误判成"对方在运行"而打不开程序。
+    老版本写的标记没有时间戳, 只能当成仍然有效(保守, 不影响升级前的行为)。
+    """
+    stamp = str(marker.get("updated_at") or "")
+    if not stamp:
+        return True
+    try:
+        at = datetime.fromisoformat(stamp).timestamp()
+    except Exception:  # noqa: BLE001
+        return True
+    return ((now if now is not None else _time.time()) - at) < HEARTBEAT_STALE_SECONDS
 
 
 def sibling_running(data_dir: Path, kind: str = "pll") -> dict | None:
     sibling = "phl" if kind == "pll" else "pll"
     marker = read_marker(data_dir, sibling)
-    if marker and _pid_alive(marker["pid"]):
+    if marker and _pid_alive(marker["pid"]) and _marker_fresh(marker):
         return {**marker, "name": NAMES[sibling]}
     return None
+
+
+def _write_marker(data_dir: Path, kind: str, pid: int) -> None:
+    data_dir.mkdir(parents=True, exist_ok=True)
+    tmp = _marker(data_dir, kind).with_suffix(".tmp")
+    tmp.write_text(
+        json.dumps({"kind": kind, "pid": pid, "started_at": _started_at(),
+                    "updated_at": datetime.now().astimezone().isoformat(timespec="seconds")},
+                   ensure_ascii=False),
+        encoding="utf-8",
+    )
+    os.replace(tmp, _marker(data_dir, kind))
 
 
 def acquire(data_dir: Path, kind: str = "pll") -> dict | None:
@@ -68,11 +151,28 @@ def acquire(data_dir: Path, kind: str = "pll") -> dict | None:
     if conflict:
         return conflict
     with _lock:
-        data_dir.mkdir(parents=True, exist_ok=True)
-        tmp = _marker(data_dir, kind).with_suffix(".tmp")
-        tmp.write_text(json.dumps({"kind": kind, "pid": os.getpid()}, ensure_ascii=False), encoding="utf-8")
-        os.replace(tmp, _marker(data_dir, kind))
+        _write_marker(data_dir, kind, os.getpid())
     return None
+
+
+def touch(data_dir: Path, kind: str = "pll") -> bool:
+    """刷新心跳; 标记不是自己的(已被别人接管)时不动它。"""
+    try:
+        marker = read_marker(data_dir, kind)
+        if marker and marker["pid"] != os.getpid():
+            return False
+        with _lock:
+            _write_marker(data_dir, kind, os.getpid())
+        return True
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def heartbeat(data_dir: Path, kind: str = "pll", interval: int = HEARTBEAT_SECONDS) -> None:
+    """后台线程定期刷新自己的标记(调用方拿 daemon 线程跑它)。"""
+    while True:
+        _time.sleep(interval)
+        touch(data_dir, kind)
 
 
 def release(data_dir: Path, kind: str = "pll") -> None:

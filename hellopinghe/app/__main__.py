@@ -116,8 +116,16 @@ def main() -> None:
 
         # ---- 同系列互斥: PH Launcher 共享同一批数据文件, 不能同时运行 ----
         from .. import shareddata
+        from ..logutil import log as _log
 
+        # 数据目录写进日志: 用户报"数据不见了/两边没共用"时, 一眼就能看出用的是哪个目录。
+        _log("启动: 数据目录 %s (便携=%s)" % (paths.data_dir(), paths.is_portable()))
         _conflict = shareddata.acquire(paths.data_dir(), "pll")
+        if _conflict is None:
+            # 心跳: 每 30 秒刷新自己的运行标记。光靠 PID 判断会被回收的 PID 骗到,
+            # 对方 90 秒没刷新就当成它已经不在。
+            threading.Thread(target=shareddata.heartbeat, args=(paths.data_dir(), "pll"),
+                             name="shareddata-heartbeat", daemon=True).start()
         if _conflict is not None:
             if sys.platform == "win32":
                 import ctypes
