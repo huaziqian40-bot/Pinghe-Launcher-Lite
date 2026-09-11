@@ -58,7 +58,7 @@ def sibling_running(data_dir: Path, kind: str = "pll") -> dict | None:
     sibling = "phl" if kind == "pll" else "pll"
     marker = read_marker(data_dir, sibling)
     if marker and _pid_alive(marker["pid"]):
-        return marker
+        return {**marker, "name": NAMES[sibling]}
     return None
 
 

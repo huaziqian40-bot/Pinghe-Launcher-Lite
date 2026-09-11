@@ -115,9 +115,9 @@ def main() -> None:
             sys.exit(0)
 
         # ---- 同系列互斥: PH Launcher 共享同一批数据文件, 不能同时运行 ----
-        from .. import appmutex
+        from .. import shareddata
 
-        _conflict = appmutex.acquire(paths.data_dir(), "pll")
+        _conflict = shareddata.acquire(paths.data_dir(), "pll")
         if _conflict is not None:
             if sys.platform == "win32":
                 import ctypes
@@ -236,9 +236,9 @@ def main() -> None:
         if inst is not None:
             inst.release()
         try:
-            from .. import appmutex
+            from .. import shareddata
 
-            appmutex.release(paths.data_dir(), "pll")
+            shareddata.release(paths.data_dir(), "pll")
         except Exception:  # noqa: BLE001
             pass
 
