@@ -269,15 +269,23 @@ class Api:
 
             def _ddl():
                 try:
-                    now2 = datetime.now()
+                    # 时间戳可能带本地时区偏移(规范 v1)也可能不带: 统一成 aware
+                    # 再比较/相减, 否则会出现 offset-naive 与 offset-aware 的
+                    # TypeError(管理册 DDL 那一行就是这么崩的)。
+                    now2 = datetime.now().astimezone()
+
+                    def _aware(value: str) -> datetime:
+                        moment = datetime.fromisoformat(value)
+                        return moment if moment.tzinfo else moment.replace(tzinfo=now2.tzinfo)
+
                     # 首页与"我的课程"页统一口径: 前 5 天 ~ 后 14 天
                     # (按日期粒度比较, 今天的作业整天都算在窗口内)
                     lo = (now2 - timedelta(days=5)).date().isoformat()
-                    hi = (now2 + timedelta(days=14)).isoformat(timespec="minutes")
+                    hi = now2 + timedelta(days=14)
                     ddl = [
                         it for it in self.svc.courses.deadlines(days=14)
                         if it["due_at"] and it["due_at"][:10] >= lo
-                        and it["due_at"] <= hi
+                        and _aware(it["due_at"]) <= hi
                     ]
                     host = self.cfg.managebac_base_url.split("//")[-1]
                     dismissed = storage.ddl_dismissed_keys(self.svc._conn(), host)
@@ -288,9 +296,7 @@ class Api:
                             continue
                         it = dict(it)
                         it["key"] = key
-                        delta = abs(
-                            (datetime.fromisoformat(it["due_at"]) - now2).total_seconds()
-                        )
+                        delta = abs((_aware(it["due_at"]) - now2).total_seconds())
                         it["urgent"] = delta <= 2 * 86400
                         out.append(it)
                     out.sort(key=lambda x: x["due_at"])

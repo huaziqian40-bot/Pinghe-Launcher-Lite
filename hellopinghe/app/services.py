@@ -1267,8 +1267,13 @@ class CoursesService:
         host = self.cfg.managebac_base_url.split("//")[-1]
         conn = self._conn_factory()
         if not force:
+            # 缓存时间戳按规范带本地时区偏移(aware), now() 是 naive:
+            # 直接相减会报 "can't subtract offset-naive and offset-aware date"。
+            now = datetime.now().astimezone()
             updated = storage.tasks_cache_age(conn, host)
-            if updated and datetime.now() - updated < timedelta(hours=6):
+            if updated is not None and updated.tzinfo is None:
+                updated = updated.replace(tzinfo=now.tzinfo)
+            if updated and now - updated < timedelta(hours=6):
                 return storage.load_tasks_cache(conn, host)
         tasks = self._client_ready().get_all_tasks()
         storage.save_tasks_cache(conn, host, tasks)
@@ -1593,12 +1598,15 @@ class XinlvService:
         """
         from datetime import datetime
 
+        _local_tz = datetime.now().astimezone().tzinfo
+
         def _ts(v):
             try:
-                return datetime.fromisoformat(v)
+                moment = datetime.fromisoformat(v)
             except (TypeError, ValueError):
-                return datetime.min.replace(
-                    tzinfo=datetime.now().astimezone().tzinfo)
+                return datetime.min.replace(tzinfo=_local_tz)
+            # 远端可能给不带时区的时间戳: 统一成 aware 再比较(LWW)。
+            return moment if moment.tzinfo else moment.replace(tzinfo=_local_tz)
 
         local = storage.xinlv_get(conn, remote["uuid"])
         if remote.get("deleted"):

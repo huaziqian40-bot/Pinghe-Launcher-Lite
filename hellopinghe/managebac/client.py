@@ -177,13 +177,23 @@ class ManageBacClient:
 
         from datetime import datetime, timedelta
 
+        # 页面解析出的截止时间可能带时区也可能不带: 统一成 aware 再比较,
+        # 避免 "can't compare offset-naive and offset-aware datetimes"。
+        now = datetime.now().astimezone()
+
+        def _aware(moment):
+            if moment is None:
+                return None
+            return moment if moment.tzinfo else moment.replace(tzinfo=now.tzinfo)
+
         if days_ahead is not None:
-            cutoff = datetime.now() + timedelta(days=days_ahead)
+            cutoff = now + timedelta(days=days_ahead)
             items = [
                 it for it in items
-                if it.due_at is None or it.due_at <= cutoff
+                if it.due_at is None or _aware(it.due_at) <= cutoff
             ]
-        items.sort(key=lambda it: it.due_at or datetime.max)
+        far_future = datetime.max.replace(tzinfo=now.tzinfo)
+        items.sort(key=lambda it: _aware(it.due_at) or far_future)
         return items
 
     def get_overall_grades(self) -> dict[str, str | None]:
