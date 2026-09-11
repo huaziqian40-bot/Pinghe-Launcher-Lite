@@ -466,12 +466,14 @@ class EdupageService:
                 except Exception:  # noqa: BLE001
                     pass  # 缓存损坏则重新计算
         # 本机没有当天缓存时，直接用共用文件里对方同步好的课表。
+        # 两个来源互为备份: data/School 的 edupage 段(统一格式)与 data/Timetable(兼容格式)。
         # 注意: 共用课表是"全班可见的全部课卡"，必须用同一套选课规则过滤一遍，
         # 否则个人课表里会冒出同年级其他人的并行选项(与本地路径不一致)。
         try:
-            from .. import sharedschool
+            from .. import shareddata, sharedschool
 
-            shared_day = sharedschool.edupage_days().get(day.isoformat())
+            shared_day = (sharedschool.edupage_days().get(day.isoformat())
+                          or shareddata.read_timetable_days().get(day.isoformat()))
             if shared_day:
                 return [card for card in shared_day if self.card_selected(card)]
         except Exception:  # noqa: BLE001
@@ -1363,11 +1365,13 @@ class CoursesService:
                 cached_tasks = storage.load_tasks_cache(conn, host)
                 _publish_managebac(cached_tasks)
                 return cached_tasks
-            # 本机没有新鲜缓存时，用共用文件里对方同步好的作业
+            # 本机没有新鲜缓存时，用共用文件里对方同步好的作业。
+            # 必须转成 PLL 自己的字段形状(id→task_id 等, 补 past_due),
+            # 否则界面按 t["past_due"] 取值会 KeyError, 整页"我的课程"报错。
             try:
                 from .. import sharedschool
 
-                shared_tasks = (sharedschool.read().get("managebac") or {}).get("tasks") or []
+                shared_tasks = sharedschool.managebac_tasks_for_pll()
                 if shared_tasks:
                     return shared_tasks
             except Exception:  # noqa: BLE001

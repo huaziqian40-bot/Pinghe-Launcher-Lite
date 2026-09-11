@@ -69,18 +69,39 @@ def _new_doc(kind: str, **extra) -> dict:
 
 
 # ================================================================ 日程(Schedule)
+def _schedule_high_water(doc: dict) -> int:
+    """已分配过的最大 id: 取事件里的最大 id 与 ``lastId`` 高水位的大者.
+
+    PH Launcher 删除事件后会留下 ``lastId``(它写进来的高水位字段), 只看事件里的
+    最大 id 会把删除过的 id 再发一次 —— 同一个 id 在两个程序里指向不同的事,
+    读方按 id 做的映射就串了。规范里的"删除后不复用"两边都要守。
+    """
+    highest = 0
+    for event in doc.get("events") or []:
+        try:
+            highest = max(highest, int(event.get("id") or 0))
+        except (TypeError, ValueError):
+            continue
+    try:
+        high_water = int(doc.get("lastId") or 0)
+    except (TypeError, ValueError):
+        high_water = 0
+    return max(highest, high_water, 0)
+
+
 def events_add(conn, day: str, time_: str, title: str, note: str) -> int:
     new_id = {"v": 1}
 
     def mutate(doc):
         if "events" not in doc:
             doc.update(_new_doc("pinghe-schedule", events=[]))
-        ids = [int(e.get("id") or 0) for e in doc["events"]]
-        new_id["v"] = (max(ids) + 1) if ids else 1
+        new_id["v"] = _schedule_high_water(doc) + 1
         doc["events"].append({
             "id": new_id["v"], "day": day, "time": time_ or "",
             "title": title, "note": note or "", "created": fs.now_iso(),
         })
+        # 维护高水位: PH Launcher 也认这个字段, 谁删了事件都不会让 id 被重用。
+        doc["lastId"] = max(int(doc.get("lastId") or 0) if str(doc.get("lastId") or "").isdigit() else 0, new_id["v"])
         doc["updated_at"] = fs.now_iso()
 
     fs.update_json(_schedule_path(), mutate, default=_new_doc("pinghe-schedule", events=[]))
@@ -115,6 +136,8 @@ def events_delete(conn, event_id: int) -> None:
     def mutate(doc):
         doc["events"] = [e for e in (doc.get("events") or [])
                          if int(e.get("id") or 0) != int(event_id)]
+        # 删掉最高 id 时也别让高水位退回去, 否则下次新增会重用已删除的 id。
+        doc["lastId"] = _schedule_high_water(doc)
         doc["updated_at"] = fs.now_iso()
 
     fs.update_json(_schedule_path(), mutate)

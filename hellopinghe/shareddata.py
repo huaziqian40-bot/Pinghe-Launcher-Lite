@@ -24,6 +24,11 @@ HEARTBEAT_STALE_SECONDS = 90      # 对方多久没刷新就当它已经不在�
 _lock = threading.Lock()
 
 
+def _clean(value, limit: int = 200) -> str:
+    """共享文件里的文本一律压平空白并截断(与 sharedschool._clean 同款)。"""
+    return " ".join(str(value if value is not None else "").split())[:limit]
+
+
 def _started_at() -> str:
     try:
         return datetime.fromtimestamp(_PROCESS_START).astimezone().isoformat(timespec="seconds")
@@ -190,7 +195,10 @@ _timetable_lock = threading.Lock()
 
 
 def write_timetable_days(days: dict[str, list[dict]], data_dir: Path | None = None) -> Path:
-    """把 personal() 的按天课卡写进共享 ``data/Timetable``(原子替换, 读改写)."""
+    """把 personal() 的按天课卡写进共享 ``data/Timetable``(原子替换, 读改写).
+
+    未知字段(未来版本/对方程序写的)一律原样保留, 只改自己负责的部分。
+    """
     if data_dir is None:
         from . import paths
 
@@ -202,7 +210,7 @@ def write_timetable_days(days: dict[str, list[dict]], data_dir: Path | None = No
             doc = json.loads(target.read_text(encoding="utf-8"))
         except Exception:  # noqa: BLE001
             doc = {}
-        if doc.get("kind") not in (None, "pinghe-timetable"):
+        if not isinstance(doc, dict) or doc.get("kind") not in (None, "pinghe-timetable"):
             doc = {}
         days_out = doc.get("days") if isinstance(doc.get("days"), dict) else {}
         for day, lessons in (days or {}).items():
@@ -211,6 +219,7 @@ def write_timetable_days(days: dict[str, list[dict]], data_dir: Path | None = No
             else:
                 days_out[day] = lessons
         payload = {
+            **doc,                                  # 保留未知字段(数据规范 §2.3)
             "version": 1,
             "kind": "pinghe-timetable",
             "app": NAMES["pll"],
@@ -222,3 +231,49 @@ def write_timetable_days(days: dict[str, list[dict]], data_dir: Path | None = No
         tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
         os.replace(tmp, target)
     return target
+
+
+def read_timetable_days(data_dir: Path | None = None) -> dict[str, list[dict]]:
+    """共享 ``data/Timetable`` → 按天课卡(本地没有缓存时的兜底来源之一).
+
+    与 ``sharedschool.edupage_days()``(读 data/School 的 edupage 段)互为备份:
+    两个程序都会把课表写进两份文件, 只要有一份在, 对方就能用。
+    容错读取: 文件缺失/损坏/不是本格式 → 返回空字典, 绝不抛错。
+    """
+    if data_dir is None:
+        from . import paths
+
+        data_dir = paths.data_dir()
+    try:
+        doc = json.loads((data_dir / "Timetable").read_text(encoding="utf-8"))
+    except Exception:  # noqa: BLE001
+        return {}
+    if not isinstance(doc, dict) or doc.get("kind") not in (None, "pinghe-timetable"):
+        return {}
+    days = doc.get("days")
+    if not isinstance(days, dict):
+        return {}
+    out: dict[str, list[dict]] = {}
+    for day, cards in days.items():
+        if not isinstance(cards, list) or not cards:
+            continue
+        rows = []
+        for card in cards:
+            if not isinstance(card, dict):
+                continue
+            subject = _clean(card.get("subject"))
+            if not subject:
+                continue
+            rows.append({
+                "subject": subject,
+                "teacher": _clean(card.get("teacher"), 100),
+                "room": _clean(card.get("room"), 60),
+                "start": _clean(card.get("start"), 5),
+                "end": _clean(card.get("end"), 5),
+                "group": _clean(card.get("group"), 80),
+                "cancelled": bool(card.get("cancelled")),
+                "curriculum": _clean(card.get("curriculum"), 40),
+            })
+        if rows:
+            out[_clean(day, 20)] = sorted(rows, key=lambda item: (item["start"], item["subject"]))
+    return out

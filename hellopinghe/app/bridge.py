@@ -545,18 +545,19 @@ class Api:
             dismissed = storage.ddl_dismissed_keys(self.svc._conn(), host)
             tasks = [
                 t for t in tasks
-                if f'{t["title"]}|{t["due_at"] or ""}' not in dismissed
+                if f'{t.get("title", "")}|{t.get("due_at") or ""}' not in dismissed
             ]
             # 未截止(按截止时间升序, 手动排序优先) + 已过期(最近的在前)
             # —— 首页只显示未截止的, 过期作业在本页完整可查
-            upcoming = [t for t in tasks if not t["past_due"]]
-            past = [t for t in tasks if t["past_due"]]
+            # 缺字段的条目(对方程序写的旧数据)不能让整页报错: 一律用 get 取值。
+            upcoming = [t for t in tasks if not t.get("past_due")]
+            past = [t for t in tasks if t.get("past_due")]
             rank = {k: i for i, k in enumerate(self.cfg.task_order)}
             upcoming.sort(key=lambda t: (
-                rank.get(f'{t["title"]}|{t["due_at"] or ""}', len(rank)),
-                t["due_at"] or "",
+                rank.get(f'{t.get("title", "")}|{t.get("due_at") or ""}', len(rank)),
+                t.get("due_at") or "",
             ))
-            past.sort(key=lambda t: t["due_at"] or "", reverse=True)
+            past.sort(key=lambda t: t.get("due_at") or "", reverse=True)
             # 按用户拖拽保存的顺序排课程, 未出现的课程追加在后;
             # 总评直接并进行里(课程列表一行 = 课程名 + 总评徽章)
             order = list(self.cfg.course_class_order)

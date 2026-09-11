@@ -15,7 +15,7 @@ from __future__ import annotations
 import json
 import os
 import threading
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 KIND = "pinghe-school"
@@ -86,14 +86,21 @@ def merge_managebac(existing: dict | None, incoming: dict | None) -> dict | None
 
 
 def merge_edupage(existing: dict | None, incoming: dict | None) -> dict | None:
-    """edupage 段只保留当前这一周: 周不同就整段替换, 同一周按课卡取并集。"""
+    """edupage 段只保留当前这一周: 不在同一周就整段替换, 同一周按课卡取并集。
+
+    同一周按"所在周的周一"比较, 不比对字符串: 两个程序给的 `week_start` 不一定
+    同一天(PHL 用 EduPage 自己的一周锚点, PLL 按天算课表时用的是当天的周一),
+    字符串比较会把同一周当成"换了一周", 于是把对方写好的整周课表整段替换掉。
+    """
     if not isinstance(existing, dict):
         return incoming or None
     if not isinstance(incoming, dict):
         return existing
-    if _clean(existing.get("week_start"), 20) != _clean(incoming.get("week_start"), 20):
+    if _week_start_of(_clean(existing.get("week_start"), 20)) != _week_start_of(_clean(incoming.get("week_start"), 20)):
         return incoming
     merged = dict(incoming)
+    if _clean(existing.get("week_start"), 20):
+        merged["week_start"] = _clean(existing.get("week_start"), 20)  # 保留原来那一周的锚点
     merged["lessons"] = _merge_rows(
         existing.get("lessons"), incoming.get("lessons"),
         lambda row: "|".join([_clean(row.get("date"), 20), _clean(row.get("start"), 5),
@@ -160,14 +167,29 @@ def _lesson_rows(lessons: list[dict]) -> list[dict]:
     return rows
 
 
+def _week_start_of(day: str) -> str:
+    """某一天所在那一周的周一(共享段用"周一日期"标识一周)。"""
+    try:
+        d = datetime.strptime(day, "%Y-%m-%d").date()
+    except ValueError:
+        return day
+    return (d - timedelta(days=d.weekday())).isoformat()
+
+
 def edupage_section(days_by_date: dict[str, list[dict]], selected_groups: list[str] | None = None) -> dict:
-    """按天课卡(与 personal() 同键) → 共享段。"""
+    """按天课卡(与 personal() 同键) → 共享段。
+
+    ``week_start`` 用**这一天的周一**, 不是这一天本身: PLL 是按天算课表的
+    (`personal(day)`), 如果写成当天日期, 它每写一天都会被当成"换了一周",
+    共享段里 PH Launcher 写好的整周课表就被整段替换掉了。
+    """
     lessons = []
     for day in sorted((days_by_date or {}).keys()):
         for row in _lesson_rows(days_by_date[day]):
             lessons.append({**row, "date": row["date"] or day})
+    first_day = min(days_by_date) if days_by_date else ""
     return {
-        "week_start": min(days_by_date) if days_by_date else "",
+        "week_start": _week_start_of(first_day) if first_day else "",
         "fetched_at": _now_iso(),
         "class_name": "",
         "lessons": lessons,
@@ -231,6 +253,47 @@ def mail_section(unread: int, recent: list[dict] | None = None) -> dict:
             for m in (recent or []) if isinstance(m, dict)
         ][:30],
     }
+
+
+def managebac_tasks_for_pll(data_dir: Path | None = None) -> list[dict]:
+    """共享 managebac 段的作业 → PLL 自己的作业字典形状。
+
+    PH Launcher 写进去的字段是 ``id/course_id/course/title/due_at/due_text/status/score``,
+    而 PLL 的界面按 ``task_id/class_id/class_name/.../past_due/can_submit`` 取值。
+    不转换就直接喂给界面会 `KeyError: 'past_due'`, 整页"我的课程"报错。
+    """
+    section = read(data_dir).get("managebac") or {}
+    now = datetime.now().astimezone()
+    out: list[dict] = []
+    for row in section.get("tasks") or []:
+        if not isinstance(row, dict):
+            continue
+        title = _clean(row.get("title"))
+        if not title:
+            continue
+        due_at = row.get("due_at")
+        due_at = _clean(due_at, 40) if due_at else None
+        past_due = False
+        if due_at:
+            try:
+                parsed = datetime.fromisoformat(str(due_at).replace("Z", "+00:00"))
+                if parsed.tzinfo is None:
+                    parsed = parsed.replace(tzinfo=now.tzinfo)
+                past_due = parsed < now
+            except ValueError:
+                past_due = False
+        out.append({
+            "task_id": _clean(row.get("id"), 40),
+            "class_id": _clean(row.get("course_id"), 40),
+            "class_name": _clean(row.get("course")),
+            "title": title,
+            "due_at": due_at,
+            "status": _clean(row.get("status"), 80),
+            "past_due": past_due,
+            "can_submit": False,
+        })
+    out.sort(key=lambda item: item["due_at"] or "")
+    return out
 
 
 def mail_summary(data_dir: Path | None = None) -> dict:

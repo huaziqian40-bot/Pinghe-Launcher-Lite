@@ -209,15 +209,29 @@ class AgentEngine:
             return None
         try:
             _sessions_dir().mkdir(parents=True, exist_ok=True)
+            path = _sessions_dir() / f"{self.session_id}.json"
             title = next(
                 (m["content"][:30] for m in self.history if m["role"] == "user"),
                 "会话",
             )
-            (_sessions_dir() / f"{self.session_id}.json").write_text(
-                json.dumps({"id": self.session_id, "title": title,
-                            "history": self.history}, ensure_ascii=False),
-                encoding="utf-8",
-            )
+            # 读-改-写: 这个文件可能是 PH Launcher 写的(带 version/kind/app/updated_at
+            # 等本程序不认识的字段), 未知字段一律原样保留, 只更新自己负责的部分。
+            doc: dict = {}
+            try:
+                existing = json.loads(path.read_text(encoding="utf-8"))
+                if isinstance(existing, dict):
+                    doc = existing
+            except Exception:  # noqa: BLE001  (缺失/损坏都当新文件)
+                doc = {}
+            doc.update({
+                "id": self.session_id,
+                "title": title,
+                "history": self.history,
+                "app": "Pinghe Launcher Lite",
+                "updated_at": _fs.now_iso(),
+            })
+            doc.setdefault("version", 1)
+            path.write_text(json.dumps(doc, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
             return self.session_id
         except Exception:  # noqa: BLE001
             return None

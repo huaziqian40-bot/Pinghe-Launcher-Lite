@@ -1,5 +1,7 @@
 """数据目录解析中枢.
 
+- 环境变量 PHLL_DATA_DIR 有值: 用它(自动化测试/互通测试/高级用户改向; 与 PH Launcher
+  的 PHL_DATA_DIR 对称, 正常使用时不设置就没有任何影响)
 - 便携模式(安装器在应用目录写入 portable.flag): 所有数据存安装目录下的 data 子目录
 - 普通运行(源码/未便携): 数据存 ~/.hellopinghe(与历史版本一致)
 
@@ -7,6 +9,7 @@
 """
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
@@ -14,6 +17,7 @@ FLAG_NAME = "portable.flag"
 FRESH_FLAG = "fresh.flag"        # 测试环境: 存在则禁止旧数据迁移(数据彻底隔离)
 LEGACY_HOME_DIR = Path.home() / ".hellopinghe"      # 历史数据目录(迁移源)
 LEGACY_SCHOOLHUB_DIR = Path.home() / ".schoolhub"   # 更旧的 SchoolHub 目录
+DATA_DIR_ENV = "PHLL_DATA_DIR"   # 显式指定数据目录(测试用; 两个软件的测试脚本靠它隔离)
 
 
 def exe_dir() -> Path | None:
@@ -40,6 +44,9 @@ def is_fresh() -> bool:
 
 def data_dir() -> Path:
     """当前生效的数据目录(导入时即确定; portable.flag 由安装器预先写入)."""
+    override = (os.environ.get(DATA_DIR_ENV) or "").strip()
+    if override:
+        return Path(override).expanduser()
     d = exe_dir()
     if d and (d / FLAG_NAME).exists():
         return d / "data"
