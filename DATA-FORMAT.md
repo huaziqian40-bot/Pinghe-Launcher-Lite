@@ -12,6 +12,11 @@
 1. **数据全部在一个目录里**,便携安装时就在程序目录下的 `data/`(普通安装/源码运行
    是 `~/.hellopinghe/`,测试环境由 `portable.flag` 决定)。目录位置由
    `hellopinghe/paths.py::data_dir()` 单点解析,任何模块都不许自己拼 `Path.home()`。
+   解析顺序:环境变量 `PHLL_DATA_DIR`(测试/自动化,与 PH Launcher 的 `PHL_DATA_DIR` 对称)
+   → 程序目录下的 `portable.flag` → `~/.hellopinghe`。
+   **两个程序装在同一个文件夹时,各自 exe 旁边的 `data/` 是同一个目录**,这就是"共用"的全部机制:
+   Windows 安装包(`installer/PingheLauncherLite.wxs`)会写入 `portable.flag`,
+   所以装完数据就落在程序目录,不会跑到用户目录里。
 2. **只分三类**:
    - 人可读可改的**配置**(YAML):`settings.yaml`
    - **两个应用可以共用**的数据:日程 `Schedule`、AI 会话 `agent/`
@@ -200,6 +205,7 @@ secrets_extra: {}               # 认不出归属的凭据键落在这里(键→
 | `events[].title` | str | ✓ | 事项标题 |
 | `events[].note` | str | | 备注,可空 |
 | `events[].created` | str | | 创建时间(ISO8601 带时区) |
+| `lastId` | int | | **id 高水位**:分配过的最大 id。删掉最大 id 的事件后这个值不退回去,保证"删除后不复用";PH Launcher 也写这个字段,PLL 新增时取"现存最大 id 与 `lastId`"的较大者 +1 |
 
 语义与约定:
 
@@ -241,6 +247,13 @@ agent/20260910-213045.json
 | `id` | str | 会话 id(与文件名一致) |
 | `title` | str | 会话标题(通常取首条用户消息前 30 字) |
 | `history` | list | OpenAI Chat Completions 风格的消息数组(见下) |
+| `version` | int | 可选:PH Launcher 会写 |
+| `kind` | str | 可选:PH Launcher 写 `phl-agent-session` |
+| `app` | str | 可选:最后写入者(`PH Launcher` / `Pinghe Launcher Lite`),便于排查与"谁写的谁负责" |
+| `updated_at` | str | 可选:最后写入时间(ISO8601 带时区) |
+
+**写回时只改这四个已知字段,其它字段(对方写的)原样保留** —— 会话文件是两边的共用文件,
+整份覆盖会把对方写的元数据抹掉。
 
 消息角色与字段(与 OpenAI 协议一致,便于直接喂给 LLM):
 
@@ -407,25 +420,105 @@ backup:
 
 ---
 
-## 8. PHL 适配清单
+## 8. `Timetable` — 共用课表(按天课卡)
 
-- [ ] **日程互通(推荐先做)**:读写 `data/Schedule`。加载时按第 3 节校验字段;
-      新增用 `max(id)+1`;写入用"读-改-写 + 原子替换";时间戳带本地时区。
-- [ ] **AI 会话互通**:按第 4 节读写 `data/agent/*.json`(OpenAI 消息格式,
-      可直接喂给模型);
-- [ ] **配置**:如果要让用户在两处填一次账号,直接读同一份 `data/settings.yaml`
-      的 `accounts` 段;**不要**复制到自己的配置里(会不同步);
-      写回时只改自己拥有的字段,保留未知字段与凭据字段。
-- [ ] **不要碰** `data/phll/`(PLL 私有缓存与平台 cookie)。
-- [ ] 若 PHL 也想做心情记录:可直接复用 `phll/xinlv/entries.json` 的字段与
-      同步规则(第 5.3 节),或自行调用心履官方 API —— 但**同一台机器上不要
-      两个应用各自上传**,否则会互相覆盖(建议约定:以 PLL 为准,或先合并)。
-- [ ] 两应用同时运行时,对 `Schedule` 的写入务必"读最新再改",避免丢对方的改动。
+```json
+{
+  "version": 1,
+  "kind": "pinghe-timetable",
+  "app": "PH Launcher",
+  "updated_at": "2026-09-11T12:51:43+08:00",
+  "days": {
+    "2026-09-21": [
+      { "subject": "Physics HL1", "teacher": "Jing Jiang", "room": "A201",
+        "start": "08:00", "end": "08:40", "group": "A", "cancelled": false }
+    ]
+  }
+}
+```
+
+- 键与 PLL `personal()` 的课卡一致,两个程序都不需要转换字段;`group` 为空 = 全班必修;
+  `cancelled` 为 `true` 的课不提醒。
+- 两个程序都会写这份文件(谁同步成功谁写);**本地没有缓存时也读它**——
+  与 `School` 的 `edupage` 段互为备份,只要有一份在就能用。
+- 写入是"读-改-写":只覆盖当天的数组,未知字段原样保留。
 
 ---
 
-## 9. 变更记录
+## 9. `School` — 学校信息快照(课表 / 课程作业 / 邮箱摘要)
+
+```json
+{
+  "version": 1,
+  "kind": "pinghe-school",
+  "app": "PH Launcher",
+  "updated_at": "2026-09-11T12:51:44+08:00",
+  "edupage": { "week_start": "2026-09-07", "fetched_at": "…+08:00", "class_name": "…",
+               "lessons": [ { "date": "2026-09-07", "start": "08:00", "end": "08:40",
+                              "subject": "…", "teacher": "…", "room": "…",
+                              "group": "A", "cancelled": false } ],
+               "selected_groups": ["…"] },
+  "managebac": { "fetched_at": "…+08:00",
+                 "courses": [ { "id": "11", "name": "…", "grade": "6" } ],
+                 "tasks":   [ { "id": "…", "course_id": "11", "course": "…", "title": "…",
+                                "due_at": "…", "due_text": "…", "status": "…", "score": "…" } ] },
+  "mail": { "fetched_at": "…+08:00", "unread": 3,
+            "recent": [ { "uid": "9001", "from": "…", "subject": "…", "date": "…",
+                          "unread": true } ] }
+}
+```
+
+- **只写自己负责的段**,其余段与未知字段原样保留;写入走"读-改-写 + 原子替换"。
+- `managebac` 段两端都写 → **按条目自己的 id 取并集**(同 id 用新抓到的字段)。
+  不合并的话:一边 20 门课/7 份作业、另一边 13 门/51 份,后写的会把对方的条目全抹掉。
+- `edupage` 段同一周取并集、换了一周整段替换(不攒历史)。
+- `mail` 段**只放摘要**:未读数 + 最近 30 条的发件人/主题/日期;**正文与附件绝不进共享文件**。
+- 时间戳一律带本地时区偏移(`+08:00`),不写 `Z`。
+
+---
+
+## 10. 同系列互斥(`.phl-running` / `.pll-running`)
+
+两个程序共用 `settings.yaml`/`Schedule`/`agent/`,所以**不能同时运行**。各自在数据根目录写一个
+自己的运行标记,启动时先看对方那个:
+
+```json
+{ "kind": "pll", "pid": 4532, "started_at": "2026-09-11T12:39:00+08:00",
+  "updated_at": "2026-09-11T12:39:31+08:00" }
+```
+
+- 对方的标记存在、PID 活着、且 `updated_at` 在 **90 秒**内 → 提示后退出,不启动。
+- 每 **30 秒**刷新一次 `updated_at`(心跳)。**只看 PID 不够**:进程被强杀尚未回收时
+  `OpenProcess` 仍会成功,PID 也会被系统回收给别人 —— 两种都会误判成"对方正在运行"而打不开。
+- 老版本写的、没有时间戳的标记按"仍然有效"处理(保守)。
+- 退出时只删自己的标记(删前核对 PID)。
+
+---
+
+## 11. PHL 适配清单
+
+> 状态(2026-09-11):下面这项清单 **PH Launcher 已经全部做完**,见 PH Launcher 仓库的
+> `docs/data-format.md`。两侧一起跑的自检(数据目录请用副本):
+> `node scripts/interop-check.cjs seed|check <dataDir>` +
+> `python -X utf8 scripts/interop_check.py check|write`。
+
+- [x] **日程互通**:读写 `data/Schedule`(第 3 节),新增 id 取"现存最大 id 与 `lastId` 高水位"的较大者 +1;
+- [x] **AI 会话互通**:按第 4 节读写 `data/agent/*.json`(OpenAI 消息格式,可直接喂给模型);
+- [x] **配置**:直接读同一份 `data/settings.yaml` 的 `accounts` 段;**不要**复制到自己的配置里(会不同步);
+      写回时只改自己拥有的字段,保留未知字段与凭据字段。
+- [x] **不要碰** `data/phll/`(PLL 私有缓存与平台 cookie)。
+- [x] **课表与学校数据**:`data/Timetable`(第 8 节)与 `data/School`(第 9 节),两端都写、都读。
+- [x] **同系列互斥**:`.phl-running` / `.pll-running`(第 10 节)。
+- [x] 两应用同时运行时,对 `Schedule` 的写入"读最新再改"(PHL 侧还做一次 mtime 比对重试)。
+- [ ] 心情记录暂未共享(PHL 的心履是原生接入,数据在 `phl/` 私有目录里);
+      同一台机器上**不要**两个应用各自上传,否则会互相覆盖。
+
+
+---
+
+## 12. 变更记录
 
 | 版本 | 日期 | 变更 |
 |---|---|---|
 | 1 | 2026-09-10 | 首次确定布局:`settings.yaml` + `Schedule` + `agent/` + `phll/` + `logs/`;凭据并入 settings.yaml;旧布局(SQLite/config.json/secrets.json/散落缓存)自动迁移 |
+| 1.1 | 2026-09-11 | 补记两个程序共用的 `Timetable`(第 8 节)、`School`(第 9 节)与同系列互斥标记(第 10 节);`Schedule` 增加 `lastId` 高水位;`agent/` 增加可选的 `version/kind/app/updated_at`;新增 `PHLL_DATA_DIR` 环境变量;MSI 安装包写入 `portable.flag` 并预建 `data/` |
