@@ -163,6 +163,35 @@ def build_tools() -> list[dict]:
     ]
 
 
+# ---------------------------------------------------------------- 会话兼容
+# PH Launcher 的会话可能带有本程序不支持的高级消息(工具调用/提案/附件引用)。
+# 读取时把不认识的消息替换成提示行, 保证历史永远可以直接喂给模型。
+_UNSUPPORTED_HINT = "（这一条消息使用了 PH Launcher 的高级格式，当前这一条消息格式不支持，请使用 PH Launcher 查看。）"
+
+
+def _compatible_history(history):
+    out = []
+    for msg in history or []:
+        if not isinstance(msg, dict):
+            continue
+        role = msg.get("role")
+        if role == "system":
+            content = msg.get("content")
+            if isinstance(content, str) and content.strip():
+                out.append({"role": "system", "content": content})
+            continue
+        if role not in ("user", "assistant"):
+            continue  # tool 等过程消息不是对话内容, 整条跳过
+        content = msg.get("content")
+        if isinstance(content, str) and content.strip() and not msg.get("tool_calls"):
+            out.append({"role": role, "content": content})
+        elif role == "user":
+            out.append({"role": "user", "content": _UNSUPPORTED_HINT})
+        else:
+            out.append({"role": "assistant", "content": _UNSUPPORTED_HINT})
+    return out
+
+
 class AgentEngine:
     def __init__(self, cfg: Config, services):
         self.cfg = cfg
@@ -213,7 +242,7 @@ class AgentEngine:
     def load_session(self, sid: str) -> dict:
         self.save_session()
         data = json.loads((_sessions_dir() / f"{sid}.json").read_text(encoding="utf-8"))
-        self.history = data.get("history", [])
+        self.history = _compatible_history(data.get("history", []))
         self.proposals.clear()
         self.session_id = sid
         return {"session": sid, "title": data.get("title", ""), "history": self.history}

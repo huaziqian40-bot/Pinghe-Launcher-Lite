@@ -114,6 +114,25 @@ def main() -> None:
                 print("Pinghe Launcher Lite 已在运行(无法唤醒, 可能正在退出)", flush=True)
             sys.exit(0)
 
+        # ---- 同系列互斥: PH Launcher 共享同一批数据文件, 不能同时运行 ----
+        from .. import appmutex
+
+        _conflict = appmutex.acquire(paths.data_dir(), "pll")
+        if _conflict is not None:
+            if sys.platform == "win32":
+                import ctypes
+
+                ctypes.windll.user32.MessageBoxW(
+                    0,
+                    (f"检测到 {_conflict['name']} 正在运行。\n\n"
+                     "两个程序共用同一份数据，不能同时打开；"
+                     "请先退出对方，再启动 Pinghe Launcher Lite。"),
+                    "Pinghe Launcher Lite", 0x10)
+            else:
+                print(f"检测到 {_conflict['name']} 正在运行, 已退出", flush=True)
+            inst.release()
+            sys.exit(0)
+
     try:
         _ensure_webview2()
         import webview   # noqa: E402  (在 WebView2 检测之后导入)
@@ -216,6 +235,12 @@ def main() -> None:
     finally:
         if inst is not None:
             inst.release()
+        try:
+            from .. import appmutex
+
+            appmutex.release(paths.data_dir(), "pll")
+        except Exception:  # noqa: BLE001
+            pass
 
 
 if __name__ == "__main__":

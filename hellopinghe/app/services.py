@@ -505,6 +505,13 @@ class EdupageService:
                     old.unlink(missing_ok=True)
         except Exception:  # noqa: BLE001
             pass
+        # 写共享课表 data/Timetable(PH Launcher 直接使用, 键与课卡一致)
+        try:
+            from .. import shareddata
+
+            shareddata.write_timetable_days({day.isoformat(): out})
+        except Exception:  # noqa: BLE001
+            pass  # 共享文件写不写都不影响本程序
         return out
 
 
