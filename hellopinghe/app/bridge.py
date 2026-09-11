@@ -14,6 +14,7 @@ import uuid
 from ..config import Config
 from ..exceptions import LoginRequiredError, PingheError
 from ..logutil import warn as _log_warn, error as _log_error
+from .. import sharedschool as _sharedschool
 from .agent import AgentEngine, detect_ai_environment
 from .services import Services, secret_set, secret_get
 
@@ -776,7 +777,21 @@ class Api:
             cached = _snap_get(key, 45)
             if cached is not None:
                 return cached
-            out = {"mails": self.svc.mail.list_mail(unseen_only, limit)}
+            try:
+                out = {"mails": self.svc.mail.list_mail(unseen_only, limit), "shared": False}
+            except PingheError:
+                # 本机没登录邮箱(或登不上)时，用另一个程序写进 data/School 的摘要兜底：
+                # 只显示标题，读正文仍需在本机登录。真正的错误仍然抛出去，不吞。
+                summary = _sharedschool.mail_summary()
+                if unseen_only or not summary["items"]:
+                    raise
+                out = {
+                    "mails": summary["items"],
+                    "shared": True,
+                    "note": "这是另一个程序上次同步到的邮箱摘要（只能看标题）"
+                            + (f"，读取于 {summary['fetched_at']}" if summary["fetched_at"] else "")
+                            + "。要读正文，请在本机登录邮箱。",
+                }
             _snap_put(key, out)
             return out
         return _wrap(job)

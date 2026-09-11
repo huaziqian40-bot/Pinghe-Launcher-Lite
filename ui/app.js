@@ -1477,11 +1477,17 @@ document.addEventListener("keydown", (e) => {
 /* ================= 邮箱 ================= */
 async function loadMail() { await fetchMail(); }
 function renderMail(d) {
-  $("#ml-list").innerHTML = (d.mails || []).map((m) => `
-    <div class="mail-item ${m.seen ? "" : "unread"}" data-uid="${m.uid}">
+  /* 共享摘要(另一个程序写的): 只能看标题, 不给点击, 避免点到读不出来的邮件 */
+  const shared = !!(d && d.shared);
+  const note = shared
+    ? `<div class="empty shared-note">${esc(d.note || "这是另一个程序上次同步到的邮箱摘要（只能看标题）。要读正文，请在本机登录邮箱。")}</div>`
+    : "";
+  $("#ml-list").innerHTML = note + ((d.mails || []).map((m) => `
+    <div class="mail-item ${m.seen ? "" : "unread"}"${shared ? "" : ` data-uid="${m.uid}"`}>
       <div class="subj">${m.seen ? "" : "🔵 "}${esc(m.subject)}</div>
       <div class="meta">${esc(m.from)} · ${esc(m.date)}</div>
-    </div>`).join("") || `<div class="empty">没有邮件</div>`;
+    </div>`).join("") || `<div class="empty">没有邮件</div>`);
+  if (shared) return;
   $$("#ml-list .mail-item").forEach((el) => {
     el.onclick = async () => {
       try {

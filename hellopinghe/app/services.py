@@ -715,6 +715,19 @@ class MailService:
                     "date": date_str,
                     "seen": "\\Seen" in flags_str,
                 })
+            # 整箱读完之后把摘要写进共用 data/School：PH Launcher 不用再登录一次
+            # 就能看到"有几封未读"。只写头部字段，正文与附件绝不进共享文件。
+            if not unseen_only and items:
+                try:
+                    from .. import sharedschool
+
+                    sharedschool.update({"mail": sharedschool.mail_section(
+                        sum(1 for item in items if not item["seen"]),
+                        [{"uid": item["uid"], "from": item["from"], "subject": item["subject"],
+                          "date": item["date"], "unread": not item["seen"]} for item in items],
+                    )})
+                except Exception:  # noqa: BLE001
+                    pass
             return items
         finally:
             try:

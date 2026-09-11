@@ -51,11 +51,71 @@ def read(data_dir: Path | None = None) -> dict:
     return {}
 
 
+def _merge_rows(existing, incoming, key_of, limit: int) -> list[dict]:
+    """按 id 取并集: 已有的条目保留, 同 id 用新抓到的覆盖。"""
+    merged: dict[str, dict] = {}
+    for row in existing or []:
+        if isinstance(row, dict):
+            key = key_of(row)
+            if key:
+                merged[key] = row
+    for row in incoming or []:
+        if isinstance(row, dict):
+            key = key_of(row)
+            if key:
+                merged[key] = row
+    return list(merged.values())[:limit]
+
+
+def merge_managebac(existing: dict | None, incoming: dict | None) -> dict | None:
+    """两个程序都会写 managebac 段, 整段覆盖会互相抹掉对方的条目
+    (一边 20 门课/7 份作业, 一边 13 门课/51 份作业)。这里按 MB 自己的 id 取并集:
+    同一个数据文件夹意味着同一个账号, id 相同即同一条, 新抓到的字段更可信。
+    """
+    if not isinstance(existing, dict):
+        return incoming or None
+    if not isinstance(incoming, dict):
+        return existing
+    return {
+        "fetched_at": _clean(incoming.get("fetched_at"), 40) or _clean(existing.get("fetched_at"), 40),
+        "courses": _merge_rows(existing.get("courses"), incoming.get("courses"),
+                               lambda row: _clean(row.get("id"), 32), 60),
+        "tasks": _merge_rows(existing.get("tasks"), incoming.get("tasks"),
+                             lambda row: _clean(row.get("id"), 120), 600),
+    }
+
+
+def merge_edupage(existing: dict | None, incoming: dict | None) -> dict | None:
+    """edupage 段只保留当前这一周: 周不同就整段替换, 同一周按课卡取并集。"""
+    if not isinstance(existing, dict):
+        return incoming or None
+    if not isinstance(incoming, dict):
+        return existing
+    if _clean(existing.get("week_start"), 20) != _clean(incoming.get("week_start"), 20):
+        return incoming
+    merged = dict(incoming)
+    merged["lessons"] = _merge_rows(
+        existing.get("lessons"), incoming.get("lessons"),
+        lambda row: "|".join([_clean(row.get("date"), 20), _clean(row.get("start"), 5),
+                              _clean(row.get("subject")), _clean(row.get("group"), 80)]),
+        2000,
+    )
+    if not (incoming.get("selected_groups") or []):
+        merged["selected_groups"] = existing.get("selected_groups") or []
+    return merged
+
+
 def update(sections: dict, data_dir: Path | None = None) -> dict:
-    """只替换传入的段, 其余段落与未知字段原样保留, 原子落盘。"""
+    """只替换传入的段, 其余段落与未知字段原样保留, 原子落盘。
+
+    段内按 id 取并集(见 merge_managebac / merge_edupage), 免得两个程序互相覆盖。
+    """
     target = _path(data_dir)
     with _lock:
-        doc = read(data_dir)
+        original = read(data_dir)
+        # 浅拷贝: 后面替换段时不能把 original 里的旧段一起改掉,
+        # 否则下面按 id 取并集时会拿"新段"和"新段"合并, 旧条目就丢了。
+        doc = dict(original)
         if not doc:
             doc = {"version": 1, "kind": KIND, "app": APP, "updated_at": _now_iso(),
                    "edupage": None, "managebac": None, "mail": None}
@@ -64,6 +124,10 @@ def update(sections: dict, data_dir: Path | None = None) -> dict:
                 doc[section] = sections[section]
             elif section not in doc:
                 doc[section] = None
+        if isinstance(sections.get("managebac"), dict):
+            doc["managebac"] = merge_managebac(original.get("managebac"), sections["managebac"])
+        if isinstance(sections.get("edupage"), dict):
+            doc["edupage"] = merge_edupage(original.get("edupage"), sections["edupage"])
         doc["version"] = 1
         doc["kind"] = KIND
         doc["app"] = APP
@@ -166,4 +230,29 @@ def mail_section(unread: int, recent: list[dict] | None = None) -> dict:
              "unread": bool(m.get("unread"))}
             for m in (recent or []) if isinstance(m, dict)
         ][:30],
+    }
+
+
+def mail_summary(data_dir: Path | None = None) -> dict:
+    """另一个程序上次同步到的邮箱摘要(只有未读数与邮件头部, 没有正文)。
+
+    本机没登录邮箱时用它兜底显示; 返回 {"unread": int, "items": [...], "fetched_at": str};
+    没有共享数据时 unread=0、items 为空。items 里的 seen 是给界面用的取反字段。
+    """
+    section = read(data_dir).get("mail") or {}
+    items = []
+    for row in section.get("recent") or []:
+        if not isinstance(row, dict):
+            continue
+        items.append({
+            "uid": _clean(row.get("uid"), 20),
+            "from": _clean(row.get("from"), 160),
+            "subject": _clean(row.get("subject")),
+            "date": _clean(row.get("date"), 60),
+            "seen": not bool(row.get("unread")),
+        })
+    return {
+        "unread": int(section.get("unread") or 0),
+        "items": items,
+        "fetched_at": _clean(section.get("fetched_at"), 40),
     }
