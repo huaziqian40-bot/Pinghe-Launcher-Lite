@@ -406,6 +406,34 @@ class EdupageService:
             for fam, rows in sorted(by_subject.items())
         ]
 
+    def card_selected(self, card: dict) -> bool:
+        """一张课卡是不是"我选的课"(本地课卡与共用课卡用同一套规则)。
+
+        无教学组 = 全班必修(班会/国家课程这类 Edupage 不打组的课) → 显示;
+        国家理科三张轮换卡 → 默认必选;其余有组但没命中选课 → 不显示。
+        共用文件里的课卡只有一个 teacher 字段(不像本地课卡是列表),
+        所以老师用等值比较;共用数据缺老师时只按科目 + 组号判断。
+        """
+        group = str(card.get("group") or "").strip()
+        if not group:
+            return True
+        subject = str(card.get("subject") or "").strip()
+        if is_native_science(subject):
+            return True
+        card_groups = [g.strip() for g in group.split(",") if g.strip()]
+        card_teacher = str(card.get("teacher") or "").strip()
+        for item in (self.cfg.selected_lessons or []):
+            if subject_family(subject) != subject_family(item.get("subject") or ""):
+                continue
+            wanted_teacher = str(item.get("teacher") or "").strip()
+            if wanted_teacher and card_teacher and wanted_teacher != card_teacher:
+                continue
+            wanted_group = str(item.get("group") or "").strip()
+            if wanted_group and wanted_group not in card_groups:
+                continue
+            return True
+        return False
+
     def personal(self, day: date) -> list[dict]:
         """按选课结果过滤出的个人课表(当天) —— 对所有账号一视同仁.
 
@@ -437,13 +465,15 @@ class EdupageService:
                     return json.loads(cache_file.read_text(encoding="utf-8"))
                 except Exception:  # noqa: BLE001
                     pass  # 缓存损坏则重新计算
-        # 本机没有当天缓存时，直接用共用文件里对方同步好的课表
+        # 本机没有当天缓存时，直接用共用文件里对方同步好的课表。
+        # 注意: 共用课表是"全班可见的全部课卡"，必须用同一套选课规则过滤一遍，
+        # 否则个人课表里会冒出同年级其他人的并行选项(与本地路径不一致)。
         try:
             from .. import sharedschool
 
             shared_day = sharedschool.edupage_days().get(day.isoformat())
             if shared_day:
-                return shared_day
+                return [card for card in shared_day if self.card_selected(card)]
         except Exception:  # noqa: BLE001
             pass
 
