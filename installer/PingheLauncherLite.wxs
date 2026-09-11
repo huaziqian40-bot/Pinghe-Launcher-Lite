@@ -3,6 +3,10 @@
   Pinghe Launcher Lite Windows 安装包 (WiX 3.x)
   - 按用户安装 (perUser): 装到 %LocalAppData%\Programs\PingheLauncherLite, 无需管理员权限
   - 带开始菜单快捷方式, 支持在"应用和功能"里正常卸载与升级
+  - 安装时写入 portable.flag 并建好 data 目录: 数据固定在程序目录里, 和 PH Launcher
+    装在同一个文件夹时两个程序共用同一份 data/(见 DATA-FORMAT.md §1)。
+    不给这个标记的话, 装完数据会落到 ~/.hellopinghe, 两个程序就各自为政了。
+  - 卸载只删程序文件; data/ 里有用户数据时不会被删除(MSI 只删空目录)。
 -->
 <Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
   <Product Id="*"
@@ -24,7 +28,8 @@
     <MediaTemplate EmbedCab="yes" />
 
     <Directory Id="TARGETDIR" Name="SourceDir">
-      <!-- 主程序: %LocalAppData%\Programs\PingheLauncherLite\PingheLauncherLite.exe -->
+      <!-- 主程序: %LocalAppData%\Programs\PingheLauncherLite\PingheLauncherLite.exe
+           想让两个程序共用数据时, 用 msiexec INSTALLFOLDER="同一个文件夹" 装到一起。 -->
       <Directory Id="LocalAppDataFolder">
         <Directory Id="AppProgramsFolder" Name="Programs">
           <Directory Id="INSTALLFOLDER" Name="PingheLauncherLite">
@@ -37,6 +42,17 @@
               <RegistryValue Root="HKCU"
                              Key="Software\PingheLauncherLite"
                              Name="exe_installed"
+                             Type="integer"
+                             Value="1"
+                             KeyPath="yes" />
+            </Component>
+            <!-- 便携数据标记: 装完数据就落在程序目录(与 PH Launcher 同一个 data/)。
+                 ICE38 要求按用户安装的组件用 HKCU 键做 KeyPath, 所以键值当 KeyPath。 -->
+            <Component Id="PortableDataMarker" Guid="b1d47a58-6c02-4f31-9e77-3a58c2f04d19" Win64="yes">
+              <File Id="PortableFlagFile" Source="portable.flag" Checksum="no" />
+              <RegistryValue Root="HKCU"
+                             Key="Software\PingheLauncherLite"
+                             Name="portable_data"
                              Type="integer"
                              Value="1"
                              KeyPath="yes" />
@@ -68,6 +84,7 @@
 
     <Feature Id="Main" Title="Pinghe Launcher Lite" Level="1">
       <ComponentRef Id="MainExecutable" />
+      <ComponentRef Id="PortableDataMarker" />
       <ComponentRef Id="StartMenuShortcut" />
     </Feature>
 
