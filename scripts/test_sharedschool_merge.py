@@ -61,6 +61,17 @@ def main() -> int:
     )
     check(len(next_week["lessons"]) == 1 and next_week["week_start"] == "2026-09-14", "换周整段替换")
 
+    # 1.5 空段不许删数据: 按天写时空的周末/跨周空写入不能清掉对方写好的整周课表
+    full_week = {"week_start": "2026-09-07", "fetched_at": "a",
+                 "lessons": [lesson("2026-09-07", "Math", "A"), lesson("2026-09-08", "Physics", "B")]}
+    empty_same_week = sharedschool.merge_edupage(full_week, {"week_start": "2026-09-07", "lessons": []})
+    check(len(empty_same_week["lessons"]) == 2, "同一周的空写入不该清掉课表")
+    empty_next_week = sharedschool.merge_edupage(full_week, {"week_start": "2026-09-14", "lessons": []})
+    check(len(empty_next_week["lessons"]) == 2, "跨周的空写入也不该清掉课表")
+    real_next_week = sharedschool.merge_edupage(full_week, {"week_start": "2026-09-14",
+                                                            "lessons": [lesson("2026-09-14", "New", "A")]})
+    check(len(real_next_week["lessons"]) == 1, "真有课的一周才替换")
+
     # 2.5 作业 id 归一化: PHL 老数据写的是复合 id, 新版写裸作业号 -> 同一条只留一份
     legacy = {"fetched_at": "a",
               "courses": [{"id": "11", "name": "Biology"}],

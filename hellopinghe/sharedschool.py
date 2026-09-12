@@ -108,6 +108,12 @@ def merge_edupage(existing: dict | None, incoming: dict | None) -> dict | None:
         return incoming or None
     if not isinstance(incoming, dict):
         return existing
+    # 空段绝不许删数据: personal() 是按天写的, 周末/还没同步的那一周会写出空数组,
+    # 换周判断一旦命中就把对方写好的整周课表清掉了(实测 School.edupage 从 352 变 0)。
+    has_incoming = any(isinstance(row, dict) for row in (incoming.get("lessons") or []))
+    has_existing = any(isinstance(row, dict) for row in (existing.get("lessons") or []))
+    if not has_incoming:
+        return existing if has_existing else incoming
     if _week_start_of(_clean(existing.get("week_start"), 20)) != _week_start_of(_clean(incoming.get("week_start"), 20)):
         return incoming
     merged = dict(incoming)
