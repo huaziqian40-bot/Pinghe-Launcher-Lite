@@ -60,8 +60,13 @@ def main() -> int:
         return 0
     if selected and kept_total == 0:
         raise AssertionError("有选课却一节课都没留下, 过滤规则不对")
-    if kept_total >= len(lessons):
-        raise AssertionError("过滤后没有变少, 说明规则没生效")
+    # 共用文件里可能是"整班课表"(过滤后会变少), 也可能是对方写好的"个人课表"
+    # (本来就全是自己选的, 过滤后不会变少) —— 两种情况都要能通过。
+    dropped = len(lessons) - kept_total
+    if dropped == 0:
+        print("这份数据里的课卡本来就都命中选课(对方写的就是过滤后的课表), 不需要变少")
+    else:
+        print(f"过滤掉了 {dropped} 节不属于自己选的课")
     print(f"个人课表过滤自检 OK: {len(lessons)} → {kept_total} 节")
     return 0
 

@@ -61,6 +61,19 @@ def main() -> int:
     )
     check(len(next_week["lessons"]) == 1 and next_week["week_start"] == "2026-09-14", "换周整段替换")
 
+    # 2.5 作业 id 归一化: PHL 老数据写的是复合 id, 新版写裸作业号 -> 同一条只留一份
+    legacy = {"fetched_at": "a",
+              "courses": [{"id": "11", "name": "Biology"}],
+              "tasks": [{"id": "managebac:11:22", "course_id": "11", "course": "Biology",
+                         "title": "Lab", "due_at": "2026-09-20T23:59", "status": "Pending"}]}
+    fresh = {"fetched_at": "b",
+             "courses": [{"id": "11", "name": "Biology"}],
+             "tasks": [{"id": "22", "course_id": "11", "course": "Biology",
+                        "title": "Lab", "due_at": "2026-09-20T23:59", "status": "Submitted"}]}
+    merged_tasks = sharedschool.merge_managebac(legacy, fresh)
+    check(len(merged_tasks["tasks"]) == 1, f"复合 id 与裸 id 应合并成一条, 实际 {len(merged_tasks['tasks'])}")
+    check(merged_tasks["tasks"][0]["id"] == "22", "留下的应是新抓到的裸作业号")
+
     # 3. 空段/坏段
     check(sharedschool.merge_managebac(None, None) is None, "两个空段 -> None")
     check(sharedschool.merge_edupage({}, {"week_start": "2026-09-07"})["week_start"] == "2026-09-07", "已有段坏/空时用新的")

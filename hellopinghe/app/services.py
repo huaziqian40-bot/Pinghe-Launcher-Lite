@@ -406,6 +406,25 @@ class EdupageService:
             for fam, rows in sorted(by_subject.items())
         ]
 
+    def _shared_day_cards(self, day: str) -> list[dict]:
+        """共用文件里那一天的课卡 —— 两个来源里挑"能判是不是我的课"的那份.
+
+        data/School 的 edupage 段与 data/Timetable 都可能被对方写过。教学组是判断
+        "这节是不是我选的"的唯一依据: 某一份要是把教学组都丢了(旧版本写出来的),
+        用它就会把整班课表当成个人课表显示。因此优先选带教学组的那份。
+        """
+        from .. import shareddata, sharedschool
+
+        school_cards = sharedschool.edupage_days().get(day) or []
+        timetable_cards = shareddata.read_timetable_days().get(day) or []
+        for cards in (school_cards, timetable_cards):
+            if any(str(card.get("group") or "").strip() for card in cards):
+                return cards
+        # 两份都没有教学组信息: 只能用一份, 并且留下线索(这时候过滤不出来不是用户的错)。
+        if school_cards or timetable_cards:
+            _log("共用课表缺少教学组信息, 无法判断哪些是自己的课(回退到全班课表): %s" % day)
+        return school_cards or timetable_cards
+
     def card_selected(self, card: dict) -> bool:
         """一张课卡是不是"我选的课"(本地课卡与共用课卡用同一套规则)。
 
@@ -470,10 +489,7 @@ class EdupageService:
         # 注意: 共用课表是"全班可见的全部课卡"，必须用同一套选课规则过滤一遍，
         # 否则个人课表里会冒出同年级其他人的并行选项(与本地路径不一致)。
         try:
-            from .. import shareddata, sharedschool
-
-            shared_day = (sharedschool.edupage_days().get(day.isoformat())
-                          or shareddata.read_timetable_days().get(day.isoformat()))
+            shared_day = self._shared_day_cards(day.isoformat())
             if shared_day:
                 return [card for card in shared_day if self.card_selected(card)]
         except Exception:  # noqa: BLE001
@@ -1317,28 +1333,42 @@ class CoursesService:
             raise LoginRequiredError("managebac")
         client.login(self.cfg.managebac_email, pw)
         secret_set(f"managebac:{self.cfg.managebac_base_url}", pw)
+        # 自动登录也要把会话存下来: 否则每次启动都要重新登录一次,
+        # 而"没登录就去请求"会拿到登录页(0 门课/0 条作业), 看起来像数据没了。
+        self._save_session(client)
+
+    def _save_session(self, client: ManageBacClient) -> None:
+        host = self.cfg.managebac_base_url.split("//")[-1]
+        session_file = fs.phll(fs.MANAGEBAC_SUB, f"session_{host}.json")
+        try:
+            import json
+
+            session_file.parent.mkdir(parents=True, exist_ok=True)
+            session_file.write_text(
+                json.dumps({"cookies": client.session.cookies.get_dict()}, indent=2),
+                encoding="utf-8",
+            )
+        except Exception:  # noqa: BLE001  存不下来只是下次要再登录, 不影响本次
+            pass
 
     def login(self, url: str, email: str, password: str) -> None:
         client = ManageBacClient(url)
         client.login(email, password)
-        host = url.split("//")[-1]
-        session_file = fs.phll(fs.MANAGEBAC_SUB, f"session_{host}.json")
-        import json
-
-        session_file.parent.mkdir(parents=True, exist_ok=True)
-        session_file.write_text(
-            json.dumps({"cookies": client.session.cookies.get_dict()}, indent=2),
-            encoding="utf-8",
-        )
         secret_set(f"managebac:{url}", password)
         self.cfg.managebac_base_url = url
         self.cfg.managebac_email = email
         self._client = client
+        self._save_session(client)
 
     def classes(self) -> dict[str, str]:
+        # 必须确保已登录: 未登录时 /student/classes/my 会返回登录页, 解析出 0 门课,
+        # 于是"我的课程"空、总评全都没有分数。
+        self.ensure_login()
         return self._client_ready().get_classes()
 
     def deadlines(self, days: int = 21) -> list[dict]:
+        # ensure_login 是幂等的(会话有效时只是一次 GET), 每次取数前调用。
+        self.ensure_login()
         items = self._client_ready().get_deadlines(days_ahead=days)
         return [
             {
@@ -1361,31 +1391,40 @@ class CoursesService:
             updated = storage.tasks_cache_age(conn, host)
             if updated is not None and updated.tzinfo is None:
                 updated = updated.replace(tzinfo=now.tzinfo)
-            if updated and now - updated < timedelta(hours=6):
-                cached_tasks = storage.load_tasks_cache(conn, host)
+            cached_tasks = storage.load_tasks_cache(conn, host)
+            # 空缓存不算数: 未登录时请求会返回登录页, 解析出 0 条并被当成"新鲜缓存",
+            # 接下来 6 小时首页 DDL 与"我的课程"就都是空的。
+            if updated and now - updated < timedelta(hours=6) and cached_tasks:
                 _publish_managebac(cached_tasks)
                 return cached_tasks
-            # 本机没有新鲜缓存时，用共用文件里对方同步好的作业。
-            # 必须转成 PLL 自己的字段形状(id→task_id 等, 补 past_due),
-            # 否则界面按 t["past_due"] 取值会 KeyError, 整页"我的课程"报错。
-            try:
-                from .. import sharedschool
+        # 本机没有新鲜缓存: 先自己抓(自己的最全, 抓到就写进共用文件),
+        # 抓不到(未登录/网络问题)才退回共用文件里对方的那一份。
+        try:
+            self.ensure_login()
+            tasks = self._client_ready().get_all_tasks()
+            storage.save_tasks_cache(conn, host, tasks)
+            loaded = storage.load_tasks_cache(conn, host)
+            _publish_managebac(loaded)
+            if loaded:
+                return loaded
+        except Exception as exc:  # noqa: BLE001
+            _log("ManageBac 作业抓取失败, 改用共用文件里的数据: %s" % str(exc)[:120])
+        try:
+            from .. import sharedschool
 
-                shared_tasks = sharedschool.managebac_tasks_for_pll()
-                if shared_tasks:
-                    return shared_tasks
-            except Exception:  # noqa: BLE001
-                pass
-        tasks = self._client_ready().get_all_tasks()
-        storage.save_tasks_cache(conn, host, tasks)
-        loaded = storage.load_tasks_cache(conn, host)
-        _publish_managebac(loaded)
-        return loaded
+            shared_tasks = sharedschool.managebac_tasks_for_pll()
+            if shared_tasks:
+                return shared_tasks
+        except Exception:  # noqa: BLE001
+            pass
+        return []
 
     def grades(self, force: bool = False) -> dict[str, str]:
         now = _time.monotonic()
         if not force and self._grades_cache and now - self._grades_cache[0] < 3600:
             return self._grades_cache[1]
+        # 总评是按课程页逐个抓的: 没登录时一样只有 0 个分数。
+        self.ensure_login()
         grades = self._client_ready().get_overall_grades()
         self._grades_cache = (now, grades)
         return grades

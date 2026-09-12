@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import threading
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -37,6 +38,17 @@ def _now_iso() -> str:
 
 def _clean(value, limit: int = 200) -> str:
     return " ".join(str(value if value is not None else "").split())[:limit]
+
+
+def _bare_task_id(value) -> str:
+    """作业 id 取"ManageBac 自己的作业号"。
+
+    PHL 内部用复合 id(``managebac:<课程号>:<作业号>``), Lite 用裸作业号; 共用文件里
+    统一写裸号, 但读/合并时都要容错(老数据可能是复合形式), 否则同一条作业会留两份。
+    """
+    text = _clean(value, 120)
+    match = re.match(r"^managebac:\d+:(\d+)$", text)
+    return match.group(1) if match else text
 
 
 def read(data_dir: Path | None = None) -> dict:
@@ -81,7 +93,7 @@ def merge_managebac(existing: dict | None, incoming: dict | None) -> dict | None
         "courses": _merge_rows(existing.get("courses"), incoming.get("courses"),
                                lambda row: _clean(row.get("id"), 32), 60),
         "tasks": _merge_rows(existing.get("tasks"), incoming.get("tasks"),
-                             lambda row: _clean(row.get("id"), 120), 600),
+                             lambda row: _bare_task_id(row.get("id") or row.get("phl_id")), 600),
     }
 
 
@@ -283,7 +295,7 @@ def managebac_tasks_for_pll(data_dir: Path | None = None) -> list[dict]:
             except ValueError:
                 past_due = False
         out.append({
-            "task_id": _clean(row.get("id"), 40),
+            "task_id": _bare_task_id(row.get("id") or row.get("phl_id")),
             "class_id": _clean(row.get("course_id"), 40),
             "class_name": _clean(row.get("course")),
             "title": title,
