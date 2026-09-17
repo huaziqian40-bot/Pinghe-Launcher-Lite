@@ -297,6 +297,119 @@
 
     <!-- ================= 设置 ================= -->
     <section class="view" id="view-settings">
+      <div class="card phix-card" id="phix-card">
+        <div class="card-title">phix 统一账号 · 云同步
+          <span class="muted small">一套账号打通心履与 PH Launcher · 数据端到端加密，服务器只存密文</span>
+        </div>
+
+        <div class="phix-warn" id="phix-transport-warn" hidden></div>
+
+        <div id="phix-login-box">
+          <div class="form-row">
+            <input type="text" id="phix-server" placeholder="服务器地址（如 http://127.0.0.1:8931）" class="flex1">
+            <button class="ghost" id="phix-test">测试连接</button>
+          </div>
+          <div class="form-row">
+            <input type="text" id="phix-username" placeholder="账号" class="flex1">
+            <input type="password" id="phix-password" placeholder="密码" class="flex1">
+          </div>
+          <div class="form-row">
+            <input type="password" id="phix-syncphrase" placeholder="独立同步口令（仅强模式账号需要）" class="flex1">
+          </div>
+          <div class="form-row">
+            <button class="primary" id="phix-login">登录</button>
+            <button class="ghost" id="phix-register">注册新账号</button>
+            <span id="phix-login-msg" class="muted small"></span>
+          </div>
+        </div>
+
+        <div id="phix-main-box" hidden>
+          <div class="phix-avatar-row">
+            <div class="phix-avatar" id="phix-avatar-wrap" title="点击更换头像">
+              <div class="phix-avatar-img" id="phix-avatar-img"></div>
+              <input type="file" id="phix-avatar-file" accept="image/*" style="display:none">
+            </div>
+            <div class="phix-avatar-info">
+              <div id="phix-avatar-name" class="muted small">未设置</div>
+              <div class="muted small">头像 · 点击更换（≤200KB）</div>
+            </div>
+          </div>
+          <div class="phix-status" id="phix-status-line"></div>
+          <div class="form-row">
+            <button class="primary" id="phix-sync">立即同步</button>
+            <button class="ghost" id="phix-preview">预览（不写入）</button>
+            <button class="ghost" id="phix-logout">退出登录</button>
+            <span id="phix-sync-msg" class="muted small"></span>
+          </div>
+          <div class="form-row">
+            <label class="chk"><input type="checkbox" id="phix-auto"> 自动同步</label>
+            <span class="muted small">每</span>
+            <input type="number" id="phix-interval" min="2" max="240" style="width:72px">
+            <span class="muted small">分钟</span>
+            <button class="ghost" id="phix-save-opts">保存</button>
+          </div>
+          <div class="phix-objs" id="phix-objs"></div>
+
+          <!-- 登录设备（P3）：一次登录 = 一个会话，注销后那台机器立刻掉线 -->
+          <div class="phix-sessions">
+            <div class="form-row">
+              <span class="muted small">登录设备（一次登录 = 一个会话）</span>
+              <button class="ghost" id="phix-sess-refresh">刷新列表</button>
+              <button class="ghost" id="phix-sess-revoke-others">注销其它设备</button>
+            </div>
+            <div id="phix-sessions-list"></div>
+          </div>
+
+          <div id="phix-locked" hidden class="phix-warn">
+            <b>数据是锁着的</b>：这个账号用的是独立同步口令，服务端解不开你的数据。
+            <div class="form-row">
+              <input type="password" id="phix-unlock-pass" placeholder="同步口令" class="flex1">
+              <button class="primary" id="phix-unlock">解锁</button>
+            </div>
+          </div>
+
+          <div id="phix-recovery" hidden class="phix-recovery">
+            <b>⚠️ 请立刻抄下这串恢复码</b> —— 忘记密码时只有它能救回云端数据，它只显示这一次。
+            <div class="phix-code" id="phix-recovery-code"></div>
+            <button class="ghost" id="phix-recovery-done">我已抄好</button>
+          </div>
+
+          <details class="phix-more">
+            <summary>高级与安全设置</summary>
+            <div class="form-row">
+              <input type="password" id="phix-old-pass" placeholder="当前登录密码" class="flex1">
+              <input type="password" id="phix-new-pass" placeholder="新登录密码" class="flex1">
+              <button class="ghost" id="phix-change-pass">改登录密码</button>
+            </div>
+            <div class="form-row">
+              <input type="password" id="phix-sp-login" placeholder="当前登录密码" class="flex1">
+              <input type="password" id="phix-sp-new" placeholder="新的独立同步口令" class="flex1">
+              <button class="ghost" id="phix-set-sp">改用独立同步口令</button>
+            </div>
+            <div class="muted small">
+              用独立同步口令之后，**连服务器都拿不到你的数据**（真正端到端）；
+              代价是每次运行要输一次它。换密码与换同步口令都不会让云端密文作废——
+              云端数据一把钥匙（DEK）加密，口令只是用来包裹这把钥匙。
+            </div>
+            <div class="form-row">
+              <span class="muted small">忘记密码？（用注册时抄下的恢复码重设，不需要旧密码）</span>
+            </div>
+            <div class="form-row">
+              <input type="text" id="phix-rc-username" placeholder="账号" class="flex1">
+              <input type="text" id="phix-rc-code" placeholder="恢复码 XXXX-XXXX-…" class="flex1">
+            </div>
+            <div class="form-row">
+              <input type="password" id="phix-rc-newpass" placeholder="新的登录密码" class="flex1">
+              <button class="ghost" id="phix-recover">用恢复码重设</button>
+            </div>
+            <div id="phix-conflicts" class="phix-conflicts"></div>
+            <div class="form-row">
+              <button class="ghost" id="phix-open-dir">打开同步状态目录</button>
+            </div>
+          </details>
+        </div>
+      </div>
+
       <div class="grid-2">
         <div class="card">
           <div class="card-title">ManageBac</div>
@@ -385,6 +498,54 @@
       </div>
     </section>
   </main>
+</div>
+
+<!-- ================= phix 首启引导（向导之前） ================= -->
+<div id="phix-onboard" class="overlay hidden">
+  <div class="wizard card" style="width:440px">
+    <div class="wizard-head"><b>连接 phix 云账号</b><span class="muted small" id="ob-step-label">可跳过</span></div>
+    <div id="ob-ask">
+      <p style="text-align:center;margin:16px 0 12px;font-size:15px">你有 phix 账号吗？</p>
+      <p class="muted small" style="text-align:center;margin-bottom:16px">
+        phix 是平和社团的统一账号，一套账号打通心履与 PH Launcher，数据端到端加密。</p>
+      <div class="form-row" style="justify-content:center;gap:12px">
+        <button class="primary" id="ob-yes">有，去登录</button>
+        <button class="ghost" id="ob-no">没有，注册或跳过</button>
+      </div>
+    </div>
+    <div id="ob-login" class="hidden">
+      <div class="form-row">
+        <input type="text" id="ob-server" placeholder="服务器地址" class="flex1" value="http://192.168.5.41:8931">
+      </div>
+      <div class="form-row">
+        <input type="text" id="ob-username" placeholder="账号" class="flex1">
+        <input type="password" id="ob-password" placeholder="密码" class="flex1">
+      </div>
+      <div class="form-row">
+        <button class="primary" id="ob-login-btn">登录</button>
+        <button class="ghost" id="ob-back-ask">← 返回</button>
+        <span id="ob-msg" class="muted small"></span>
+      </div>
+    </div>
+    <div id="ob-register" class="hidden">
+      <p class="muted small" style="margin:8px 0">注册新账号后即可使用云同步功能。也可以直接跳过，在设置里随时注册。</p>
+      <div class="form-row">
+        <input type="text" id="ob-reg-server" placeholder="服务器地址" class="flex1" value="http://192.168.5.41:8931">
+      </div>
+      <div class="form-row">
+        <input type="text" id="ob-reg-user" placeholder="账号" class="flex1">
+        <input type="password" id="ob-reg-pass" placeholder="密码（至少 6 位）" class="flex1">
+      </div>
+      <div class="form-row">
+        <button class="primary" id="ob-reg-btn">注册</button>
+        <button class="ghost" id="ob-back-ask2">← 返回</button>
+        <span id="ob-msg2" class="muted small"></span>
+      </div>
+    </div>
+    <div class="wizard-foot">
+      <button class="ghost" id="ob-skip">跳过，进入设置向导</button>
+    </div>
+  </div>
 </div>
 
 <!-- ================= 首次启动向导 ================= -->
@@ -504,15 +665,30 @@
 <div id="ml-modal" class="overlay hidden">
   <div class="mail-card">
     <div class="wizard-head">
-      <b>✉ 写邮件</b>
+      <b id="ml-title">✉ 写邮件</b>
       <button class="ghost" id="ml-cancel">✕ 关闭</button>
     </div>
     <div class="form-row" style="position:relative">
       <input type="text" id="ml-to" placeholder="收件人 (输入名字自动匹配通讯录)" class="flex1" autocomplete="off">
       <div id="ml-ac" class="ac-list hidden"></div>
     </div>
+    <div class="form-row">
+      <input type="text" id="ml-cc" placeholder="抄送 Cc (可留空)" class="flex1" autocomplete="off">
+    </div>
+    <div class="form-row">
+      <input type="text" id="ml-bcc" placeholder="密送 Bcc (可留空, 收件人看不到)" class="flex1" autocomplete="off">
+    </div>
     <div class="form-row"><input type="text" id="ml-subject" placeholder="主题" class="flex1"></div>
     <textarea id="ml-body" placeholder="正文…"></textarea>
+    <div class="form-row att-row">
+      <button class="ghost" id="ml-attach">📎 添加附件</button>
+      <span class="muted small" id="ml-att-info"></span>
+      <!-- 选文件入口: 浏览器/WebView2 里走的原生文件选择框。
+           pywebview 会把选中的文件带 file.path, 走"路径"上传(不经过 base64);
+           拿不到路径时自动退到 FileReader 读字节。 -->
+      <input type="file" id="ml-file" multiple class="hidden">
+    </div>
+    <div id="ml-att-list" class="att-list hidden"></div>
     <div class="form-row" style="justify-content:flex-end;margin-top:10px">
       <span id="ml-msg" class="muted small flex1"></span>
       <button class="primary" id="ml-send">发送</button>

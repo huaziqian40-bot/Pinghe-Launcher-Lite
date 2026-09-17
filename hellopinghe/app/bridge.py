@@ -51,6 +51,58 @@ def _snap_drop_prefix(prefix: str) -> None:
             _SNAP.pop(k, None)
 
 
+def _parse_attachment_json(text) -> list:
+    """把前端传来的附件参数(JSON 文本)解析成列表.
+
+    前端只传文本, 各种"没传/空串/传了对象/传了拼坏的两段 JSON"都可能出现 ——
+    发信不该因为这些参数形态崩掉, 也**不许**静默把附件丢了: 只要里面真带了
+    附件规格就一定解析出来, 实在解析不了才报中文错。
+
+    以前这里直接用 `json.loads`, 遇到坏文本会冒出
+    "附件参数解析失败: Expecting value: line 1 column 2 (char 1)" 这种看不懂的
+    报错(日志里真的出现过), 现在按下面的顺序兜底。
+    """
+    if not text:
+        return []
+    if isinstance(text, list):
+        return text
+    if isinstance(text, dict):
+        return [text]
+    raw = str(text).strip()
+    if not raw:
+        return []
+    try:
+        data = json.loads(raw)
+    except Exception:  # noqa: BLE001  单段解析不了 → 试试"两段数组拼在一起"
+        data = None
+        # 浏览器/中间层偶发把两次调用拼成 "[] []" 这种; 逐段解析再合并
+        parts = re.findall(r"\[[\s\S]*?\]", raw)
+        if len(parts) > 1:
+            merged: list = []
+            ok_all = True
+            for chunk in parts:
+                try:
+                    got = json.loads(chunk)
+                except Exception:  # noqa: BLE001
+                    ok_all = False
+                    break
+                if isinstance(got, list):
+                    merged.extend(got)
+                elif isinstance(got, dict):
+                    merged.append(got)
+            if ok_all:
+                return merged
+        raise PingheError(
+            "附件参数看不懂(前端传来的不是合法的 JSON 数组)。"
+            "请重新选一次附件再发; 若反复出现请把这一行日志发给开发者: "
+            f"附件参数={raw[:200]!r}")
+    if isinstance(data, list):
+        return data
+    if isinstance(data, dict):
+        return [data]
+    raise PingheError(f"附件参数格式不对(应该是数组), 实际是 {type(data).__name__}")
+
+
 def _wrap(fn, *args, **kwargs) -> dict:
     try:
         data = fn(*args, **kwargs)
@@ -819,12 +871,90 @@ class Api:
     def mail_unread(self) -> dict:
         return _wrap(lambda: {"count": self.svc.mail.unread_count()})
 
-    def mail_send(self, to: str, subject: str, body: str) -> dict:
+    def mail_send(self, to: str, subject: str, body: str, cc: str = "",
+                  bcc: str = "", attachments_json: str = "") -> dict:
+        """发信。`attachments_json` 是附件数组的 JSON 文本, 每项支持三种写法:
+        `{"name":..,"path":..}` / `{"name":..,"data_base64":..}` / `"路径"`。
+        老调用方 `mail_send(to, subject, body)` 照旧能用。"""
         def job():
-            self.svc.mail.send(to.strip(), subject, body)
+            specs = _parse_attachment_json(attachments_json)
+            result = self.svc.mail.send(to.strip(), subject, body,
+                                        cc=cc, bcc=bcc, attachments=specs)
             self.svc.mail._unread_cache = None
+            _snap_drop_prefix("mail|")
             _snap_drop("home")
-            return {"sent": True}
+            return result
+        return _wrap(job)
+
+    def mail_prefill(self, uid: str, mode: str = "reply") -> dict:
+        """回复 / 转发的预填内容(前端"回复""转发"按钮用)。
+
+        `mode="reply"`:  收件人 = Reply-To 优先, 没有才用 From; 主题 `Re: `;
+                        正文引用块; **不带**原附件。
+        `mode="forward"`: 收件人留空; 主题 `Fwd: `; 正文引用块;
+                        **带上原附件**(按字节转 base64 交给前端, 超限的记在 skipped)。
+        """
+        import email as _email
+        import imaplib
+
+        m = (mode or "reply").strip().lower()
+        if m not in ("reply", "forward"):
+            return {"ok": False, "error": f"不认识的模式: {mode}"}
+
+        def job():
+            M = self.svc.mail._conn()
+            try:
+                typ, md = M.uid("FETCH", uid, "(BODY.PEEK[])")
+                raw = b""
+                for part in md:
+                    if isinstance(part, tuple):
+                        raw = part[1] or b""
+                        break
+                if not raw:
+                    raise PingheError(f"邮件 {uid} 不存在")
+                msg = _email.message_from_bytes(raw)
+                # 回信/转发说明这封已经读过了, 与"点开就算已读"保持一致
+                try:
+                    M.uid("STORE", uid, "+FLAGS", "(\\Seen)")
+                except Exception:  # noqa: BLE001
+                    pass
+                data = (self.svc.mail.reply_prefill(msg) if m == "reply"
+                        else self.svc.mail.forward_prefill(msg))
+                data["uid"] = uid
+                return data
+            finally:
+                try:
+                    M.logout()
+                except Exception:  # noqa: BLE001
+                    pass
+        return _wrap(job)
+
+    def mail_pick_attachments(self) -> dict:
+        """弹系统文件选择框(可多选), 返回选中的**真实路径**。
+
+        与 task_pick_and_submit / agent_pick_workspace 同一模式: 模态对话框在
+        js_api 调用线程上阻塞, 用户选完再返回。前端用这些路径去发信,
+        Python 端直接读文件, 不经过 base64。
+        """
+        import webview
+
+        try:
+            picked = webview.windows[0].create_file_dialog(
+                webview.OPEN_DIALOG, allow_multiple=True)
+        except Exception as exc:  # noqa: BLE001
+            _log_warn(f"mail_pick_attachments: {exc}")
+            return {"ok": False, "error": f"打不开文件选择框: {exc}"}
+        if not picked:
+            return {"ok": True, "data": {"cancelled": True, "files": []}}
+        files = []
+        for path in picked:
+            try:
+                size = os.path.getsize(str(path))
+            except OSError:
+                continue
+            files.append({"name": os.path.basename(str(path)),
+                          "path": str(path), "size": size})
+        return {"ok": True, "data": {"cancelled": False, "files": files}}
         return _wrap(job)
 
     # ================================================================ Agent

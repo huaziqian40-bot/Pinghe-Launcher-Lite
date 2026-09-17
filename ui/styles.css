@@ -246,6 +246,20 @@ a{color:var(--green-700)}
 .att-bar{margin:6px 0;display:flex;flex-wrap:wrap;gap:6px;align-items:center}
 .att-dl{font-size:12px;padding:3px 8px}
 .mail-read h3{margin:4px 0 10px}
+/* 阅读窗格顶部的 回复 / 转发 按钮(用户要求放在"查看邮件页面上面") */
+.mail-actions{display:flex;gap:8px;align-items:center;flex-wrap:wrap;
+  padding-bottom:8px;margin-bottom:6px;border-bottom:1px solid var(--border)}
+.mail-actions .btn-reply,.mail-actions .btn-forward{font-size:12.5px;padding:4px 12px}
+.mail-actions .spacer{flex:1}
+/* 撰写窗口里的附件列表 */
+.att-row{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.att-list{margin:4px 0 0;padding:6px 8px;border:1px solid var(--border);
+  border-radius:10px;background:var(--white);max-height:120px;overflow:auto;
+  display:flex;flex-direction:column;gap:4px}
+.att-one{display:flex;align-items:center;gap:8px;font-size:12.5px}
+.att-one .grow{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.att-one .att-size{color:var(--ink-3);font-size:11.5px;flex-shrink:0}
+.att-one .att-x{font-size:12px;padding:1px 7px;line-height:1.5}
 
 /* ---------- 讨论(Discussion) ---------- */
 .disc-thread{display:flex;flex-direction:column;gap:10px}
@@ -563,3 +577,44 @@ button,.chip,.item,.mail-item,.session-item,.file-item,.tt-lesson,.gt-lesson{
 .list-sep::after{content:"";flex:1;height:1px;background:var(--border)}
 .badge.past{background:var(--ivory-200);color:var(--ink-3)}
 .ddl-item.past-due{opacity:.85}
+/* ---------- phix 统一账号 · 云同步（设置页） ---------- */
+.phix-card{border-left:3px solid var(--green-600, #4a7c59)}
+.phix-status{margin:2px 0 10px;line-height:1.7}
+.phix-lock{background:#fdf3d7;color:#8a6d1f;border-radius:6px;padding:1px 8px;font-size:12px}
+.phix-objs{display:flex;flex-wrap:wrap;gap:6px 16px;margin:8px 0 4px}
+.phix-objs .phix-obj{font-size:12.5px;display:inline-flex;align-items:center;gap:5px}
+.phix-warn{background:#fdf3d7;border:1px solid #ecdcae;border-radius:8px;
+  padding:10px 12px;margin:10px 0;font-size:13px;line-height:1.7}
+.phix-recovery{background:#fff4f4;border:1px solid #f0c9c9;border-radius:8px;
+  padding:10px 12px;margin:10px 0;font-size:13px;line-height:1.7}
+.phix-code{font-family:ui-monospace,Consolas,monospace;font-size:18px;letter-spacing:2px;
+  font-weight:700;margin:8px 0;user-select:all;word-break:break-all}
+.phix-more{margin-top:12px}
+.phix-more>summary{cursor:pointer;font-weight:650;font-size:13px;color:var(--ink-2, #555)}
+.phix-conflicts{margin-top:10px}
+.phix-conflicts .item{padding:6px 0;border-bottom:1px solid var(--border)}
+
+/* ---------- phix：网线加密状态徽标 ---------- */
+.phix-wire{border-radius:6px;padding:1px 8px;font-size:12px;white-space:nowrap}
+.phix-wire.on{background:#e6f4ea;color:#1f5a46}
+.phix-wire.off{background:var(--ivory-200);color:var(--ink-3)}
+
+/* ---------- phix：头像 ---------- */
+.phix-avatar-row{display:flex;align-items:center;gap:12px;margin:6px 0 10px}
+.phix-avatar{width:56px;height:56px;border-radius:50%;overflow:hidden;cursor:pointer;
+  border:2px solid var(--border);background:var(--ivory-200);position:relative;flex-shrink:0}
+.phix-avatar:hover{border-color:var(--green-600, #4a7c59)}
+.phix-avatar-img{width:100%;height:100%;object-fit:cover;display:flex;align-items:center;
+  justify-content:center;font-size:22px;color:var(--ink-3)}
+.phix-avatar-info{flex:1;min-width:0}
+.phix-avatar-info .phix-avatar-name{font-weight:600;font-size:13px;color:var(--ink)}
+
+/* ---------- phix：登录设备（会话）列表 ---------- */
+.phix-sessions{margin:10px 0 4px}
+.phix-sess{display:flex;align-items:center;gap:8px;padding:5px 0;font-size:12.5px;
+  border-bottom:1px solid var(--border)}
+.phix-sess .grow{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.phix-sess-tag{border-radius:6px;padding:1px 7px;font-size:11.5px;white-space:nowrap;
+  background:var(--ivory-200);color:var(--ink-3)}
+.phix-sess-tag.on{background:#e6f4ea;color:#1f5a46}
+.phix-sess-tag.off{background:#f3e2e2;color:#8a3b3b}

@@ -1462,7 +1462,7 @@ async function openCoreModal(kind) {
 }
 $("#core-close").onclick = () => $("#core-modal").classList.add("hidden");
 $("#core-close2").onclick = () => $("#core-modal").classList.add("hidden");
-/* 点遮罩 / Escape 关闭新弹卡 */
+/* 点遮罩 / Escape 关闭新弹卡(ml-modal 的遮罩点击在邮箱那一节自己处理) */
 ["cd-modal", "td-modal", "core-modal"].forEach((id) => {
   $("#" + id).addEventListener("click", (e) => {
     if (e.target.id === id) $("#" + id).classList.add("hidden");
@@ -1470,7 +1470,7 @@ $("#core-close2").onclick = () => $("#core-modal").classList.add("hidden");
 });
 document.addEventListener("keydown", (e) => {
   if (e.key === "Escape") {
-    ["cd-modal", "td-modal", "core-modal"].forEach((id) => $("#" + id).classList.add("hidden"));
+    ["cd-modal", "td-modal", "core-modal", "ml-modal"].forEach((id) => $("#" + id).classList.add("hidden"));
   }
 });
 
@@ -1516,6 +1516,11 @@ function renderMail(d) {
             `</div>`;
         }
         $("#ml-read").innerHTML = `
+          <div class="mail-actions">
+            <button class="primary btn-reply" data-act="reply">↩ 回复</button>
+            <button class="primary btn-forward" data-act="forward">➡ 转发</button>
+            <span class="spacer"></span>
+          </div>
           <h3>${esc(m.subject)}</h3>
           <div class="muted small">${esc(m.from)} · ${esc(m.date)}</div>
           ${rcSection}
@@ -1548,6 +1553,10 @@ function renderMail(d) {
             } catch (e) { toast(e.message); }
             btn.disabled = false;
           };
+        });
+        /* 回复 / 转发(按钮在阅读窗格顶部) */
+        $$("#ml-read .mail-actions [data-act]").forEach((btn) => {
+          btn.onclick = () => startMailFrom(btn.dataset.act, el.dataset.uid, btn);
         });
       } catch (e) { toast(e.message); }
     };
@@ -1624,13 +1633,171 @@ $("#ml-to").addEventListener("keydown", (e) => {
     acClose();
   }
 });
-$("#ml-compose").onclick = async () => {
-  $("#ml-msg").textContent = "";
+/* ================= 写邮件 / 回复 / 转发 =================
+ * 撰写窗口是同一个: 写邮件=空白、回复=预填收件人+Re: 主题+引用块、
+ * 转发=收件人留空+Fwd: 主题+引用块+原附件。
+ * 附件对象: {name, size, path?, data_base64?} —— path 走"路径上传"(不经过
+ * base64), 拿不到路径时退到 FileReader 读字节。
+ */
+const ML_ATT_MAX_ONE = 20 * 1024 * 1024;    /* 与 Python 端单个上限一致 */
+let mlAtts = [];        /* 撰写窗口里已选的附件 */
+let mlMode = "compose"; /* compose | reply | forward */
+
+function mlSize(n) {
+  n = Number(n) || 0;
+  if (n < 1024) return `${n}B`;
+  if (n < 1024 * 1024) return `${Math.max(1, Math.round(n / 1024))}KB`;
+  return `${(n / 1024 / 1024).toFixed(1)}MB`;
+}
+function mlAttLabel() {
+  const box = $("#ml-att-list");
+  const info = $("#ml-att-info");
+  if (!mlAtts.length) {
+    box.classList.add("hidden");
+    box.innerHTML = "";
+    info.textContent = "";
+    return;
+  }
+  const total = mlAtts.reduce((s, a) => s + (a.size || 0), 0);
+  info.textContent = `${mlAtts.length} 个附件 · ${mlSize(total)}`;
+  box.classList.remove("hidden");
+  box.innerHTML = mlAtts.map((a, i) => `
+    <div class="att-one">
+      <span class="grow" title="${esc(a.name)}">📎 ${esc(a.name)}</span>
+      <span class="att-size">${mlSize(a.size)}</span>
+      <button class="ghost att-x" data-i="${i}" title="移除这个附件">✕</button>
+    </div>`).join("");
+  $$("#ml-att-list .att-x").forEach((b) => {
+    b.onclick = (e) => {
+      /* 必须阻止冒泡: ✕ 点下去会冒泡到整行, 不拦就会误删**别的**附件 */
+      e.stopPropagation();
+      mlAtts.splice(Number(b.dataset.i), 1);
+      mlAttLabel();
+    };
+  });
+}
+
+function readFileB64(file) {
+  return new Promise((resolve, reject) => {
+    const fr = new FileReader();
+    fr.onload = () => {
+      const s = String(fr.result || "");
+      resolve(s.slice(s.indexOf(",") + 1));   /* 去掉 data:...;base64, 前缀 */
+    };
+    fr.onerror = () => reject(new Error(`读取文件失败: ${file.name}`));
+    fr.readAsDataURL(file);
+  });
+}
+
+/* 选中的 File 对象 → 附件规格。优先 file.path(pywebview 会给真实路径),
+ * 拿不到就退回把字节读成 base64 —— 两条路 Python 端都收。 */
+async function mlFileToSpec(file) {
+  if (!file) return null;
+  if (file.size > ML_ATT_MAX_ONE) {
+    toast(`「${file.name}」${mlSize(file.size)} 超过单个附件上限 ${mlSize(ML_ATT_MAX_ONE)}, 没有加进来`);
+    return null;
+  }
+  const raw = file.path || (file.webkitRelativePath || "");
+  if (raw && !/^[a-z]:[\\/]fakepath[\\/]/i.test(raw) && raw.includes(":")) {
+    return { name: file.name, size: file.size, path: raw };
+  }
+  try {
+    return { name: file.name, size: file.size, data_base64: await readFileB64(file) };
+  } catch (e) {
+    toast(e.message);
+    return null;
+  }
+}
+
+async function mlAddFiles(files) {
+  for (const f of files) {
+    const dup = mlAtts.some((a) => a.name === f.name && a.size === f.size);
+    if (dup) continue;                       /* 同一个文件不重复加 */
+    if (mlAtts.length >= 10) { toast("一次最多带 10 个附件"); break; }
+    const spec = await mlFileToSpec(f);
+    if (spec) mlAtts.push(spec);
+  }
+  mlAttLabel();
+}
+
+/* 打开撰写窗口。prefill 由 Python 端算出(mail_prefill), 含 quote/attachments */
+function openCompose(prefill) {
+  mlMode = (prefill && prefill.mode) || "compose";
+  mlAtts = ((prefill && prefill.attachments) || [])
+    .map((a) => ({ name: a.name, size: a.size || 0, data_base64: a.data_base64 }));
+  $("#ml-title").textContent = mlMode === "reply" ? "↩ 回复邮件"
+    : mlMode === "forward" ? "➡ 转发邮件" : "✉ 写邮件";
+  $("#ml-to").value = (prefill && prefill.to) || "";
+  $("#ml-cc").value = (prefill && prefill.cc) || "";
+  $("#ml-bcc").value = (prefill && prefill.bcc) || "";
+  $("#ml-subject").value = (prefill && prefill.subject) || "";
+  $("#ml-body").value = (prefill && prefill.body) || "";
+  $("#ml-msg").textContent = (prefill && prefill.skipped || []).length
+    ? `⚠ ${prefill.skipped.length} 个原附件没带上(超过大小上限)` : "";
+  $("#ml-att-list").innerHTML = "";
+  $("#ml-att-info").textContent = "";
+  mlAttLabel();
   $("#ml-modal").classList.remove("hidden");
-  $("#ml-body").focus();
+  if (mlMode === "forward") {
+    /* 转发: 焦点落在收件人框 */
+    $("#ml-to").focus();
+  } else if (mlMode === "reply") {
+    /* 回复: 光标停在引用块**上方**, 直接打字就是写在引用前面 */
+    const ta = $("#ml-body");
+    ta.focus();
+    try { ta.setSelectionRange(0, 0); ta.scrollTop = 0; } catch (e) { /* 忽略 */ }
+  } else {
+    $("#ml-body").focus();
+  }
   loadMlContacts();   /* 通讯录未加载则后台拉取(磁盘缓存 24h) */
-};
+}
+
+/* 回复 / 转发: 先让 Python 端取原邮件算出预填, 再开撰写窗口 */
+async function startMailFrom(mode, uid, btn) {
+  const old = btn ? btn.textContent : "";
+  if (btn) { btn.disabled = true; btn.textContent = "准备中…"; }
+  try {
+    const prefill = await call("mail_prefill", uid, mode);
+    openCompose(prefill);
+  } catch (e) {
+    toast(e.message);
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = old; }
+  }
+}
+
+$("#ml-compose").onclick = () => openCompose({ mode: "compose" });
 $("#ml-cancel").onclick = () => { acClose(); $("#ml-modal").classList.add("hidden"); };
+/* 附件: 优先走 HTML 文件选择框; 某些环境下打不开则退到系统对话框(拿真实路径) */
+$("#ml-attach").onclick = () => {
+  const inp = $("#ml-file");
+  try {
+    inp.value = "";
+    inp.click();
+  } catch (e) {
+    pickBySystemDialog().catch((err) => toast(err.message));
+  }
+};
+$("#ml-file").onchange = async (e) => {
+  const files = Array.from(e.target.files || []);
+  e.target.value = "";                     /* 允许再次选同一个文件 */
+  if (!files.length) return;
+  await mlAddFiles(files);
+};
+async function pickBySystemDialog() {
+  const d = await call("mail_pick_attachments");
+  if (d && d.files && d.files.length) {
+    for (const f of d.files) {
+      if (mlAtts.some((a) => a.path && a.path === f.path)) continue;
+      if (f.size > ML_ATT_MAX_ONE) {
+        toast(`「${f.name}」${mlSize(f.size)} 超过单个附件上限, 没有加进来`);
+        continue;
+      }
+      mlAtts.push({ name: f.name, size: f.size, path: f.path });
+    }
+    mlAttLabel();
+  }
+}
 
 /* ---- 通讯录管理 (查看 / 添加 / 修改 / 删除) ---- */
 let ctContacts = [];
@@ -1731,11 +1898,25 @@ $("#ml-send").onclick = async () => {
   btn.disabled = true;
   $("#ml-msg").textContent = "正在发送…";
   try {
-    await call("mail_send", $("#ml-to").value, $("#ml-subject").value, $("#ml-body").value);
+    const specs = mlAtts.map((a) => (a.path
+      ? { name: a.name, path: a.path }
+      : { name: a.name, data_base64: a.data_base64 || "" }));
+    const r = await call("mail_send", $("#ml-to").value, $("#ml-subject").value,
+      $("#ml-body").value, $("#ml-cc").value, $("#ml-bcc").value,
+      JSON.stringify(specs));
     Store.drop("mail|"); Store.drop("home");
-    toast("已发送");
+    if (r && r.skipped && r.skipped.length) {
+      /* 有附件没带上: 如实说清楚, 不假装全发了 */
+      $("#ml-msg").textContent = r.message || `已发送(${r.skipped.length} 个附件没带上)`;
+      toast(`已发送, 但 ${r.skipped.length} 个附件没带上: ${r.skipped.map((s) => s.name).join("、")}`);
+      return;
+    }
+    toast(specs.length ? `已发送(带 ${specs.length} 个附件)` : "已发送");
     $("#ml-modal").classList.add("hidden");
-    $("#ml-to").value = ""; $("#ml-subject").value = ""; $("#ml-body").value = "";
+    mlAtts = [];
+    mlAttLabel();
+    $("#ml-to").value = ""; $("#ml-cc").value = ""; $("#ml-bcc").value = "";
+    $("#ml-subject").value = ""; $("#ml-body").value = "";
     fetchMail().catch(() => {});
   } catch (e) { $("#ml-msg").textContent = `✗ ${e.message}`; }
   btn.disabled = false;
@@ -2096,6 +2277,7 @@ async function loadSettings() {
     `<span class="chip on">${esc(s.subject)}${s.teacher ? " · " + esc(s.teacher) : ""}${s.group ? " · 组" + esc(s.group) : ""}</span>`).join("") ||
     `<span class="muted">尚未选课</span>`;
   await renderDismissed();
+  await phixRefresh().catch(() => {});
   apBindPanel();   /* 外观面板(设置页常驻): 每次进入同步控件值 */
   const ai = await call("ai_get");
   providersState = (ai.providers || []).map((p) => ({ ...p, api_key: "" }));
@@ -2347,6 +2529,59 @@ $("#st-test").onclick = async () => {
   } catch (e) { $("#st-test-result").textContent = e.message; }
 };
 
+/* ================= phix 首启引导 ================= */
+function obShow(what) {
+  ["ob-ask", "ob-login", "ob-register"].forEach((id) => {
+    $(`#${id}`).classList.add("hidden");
+  });
+  if (what) $(`#${what}`).classList.remove("hidden");
+}
+function obBind() {
+  $("#ob-yes").onclick = () => obShow("ob-login");
+  $("#ob-no").onclick = () => obShow("ob-register");
+  $("#ob-back-ask").onclick = () => obShow("ob-ask");
+  $("#ob-back-ask2").onclick = () => obShow("ob-ask");
+  $("#ob-login-btn").onclick = async () => {
+    const server = $("#ob-server").value.trim();
+    const user = $("#ob-username").value.trim();
+    const pass = $("#ob-password").value;
+    if (!server || !user || !pass) { $("#ob-msg").textContent = "服务器、账号、密码都要填"; return; }
+    $("#ob-msg").textContent = "登录中…";
+    try {
+      await call("phix_login", server, user, pass);
+      $("#ob-msg").textContent = "登录成功，正在同步…";
+      await call("phix_sync");
+      phixDone();
+    } catch (e) { $("#ob-msg").textContent = e.message; }
+  };
+  $("#ob-reg-btn").onclick = async () => {
+    const server = $("#ob-reg-server").value.trim();
+    const user = $("#ob-reg-user").value.trim();
+    const pass = $("#ob-reg-pass").value;
+    if (!server || !user || pass.length < 6) {
+      $("#ob-msg2").textContent = "服务器、账号都要填，密码至少 6 位"; return;
+    }
+    $("#ob-msg2").textContent = "注册中…";
+    try {
+      await call("phix_register", server, user, pass, "password");
+      $("#ob-msg2").textContent = "注册成功！请抄下恢复码。";
+      // 注册后自动登录并同步
+      await call("phix_login", server, user, pass);
+      await call("phix_sync");
+      phixDone();
+    } catch (e) { $("#ob-msg2").textContent = e.message; }
+  };
+  $("#ob-skip").onclick = () => phixDone();
+}
+let _obDone = false;
+function phixDone() {
+  _obDone = true;
+  $("#phix-onboard").classList.add("hidden");
+  // 向导或进入主界面
+  const bootFn = window._phixBootNext;
+  if (bootFn) bootFn();
+}
+
 /* ================= 首启向导 ================= */
 let wizSubjects = [];
 function wzShow(n) {
@@ -2454,6 +2689,25 @@ $("#wz-skip").onclick = async () => {
 async function boot() {
   const st = await call("wizard_status");
   if (!st.done) {
+    // 首次启动：先检查 phix 会话
+    try {
+      const phix = await call("phix_status");
+      const hasSession = phix.has_access_token || phix.has_refresh_token || phix.has_token;
+      if (!hasSession) {
+        // 无会话 → 显示 phix 引导
+        obBind();
+        $("#phix-onboard").classList.remove("hidden");
+        window._phixBootNext = () => {
+          // 引导完成后进入向导
+          $("#wizard").classList.remove("hidden");
+          wzShow(1);
+          show("home");
+        };
+        show("home");
+        return;
+      }
+    } catch (e) { /* phix_status 失败就跳过引导 */ }
+    // 有会话或检查失败 → 直接进向导
     $("#wizard").classList.remove("hidden");
     wzShow(1);
     show("home");
@@ -2873,3 +3127,365 @@ async function xlLoadRecommend(mood) {
   }
 }
 xlBindMoodGrid($("#xl-rec-moods"), (mood) => xlLoadRecommend(mood));
+
+/* ================= phix 统一账号 · 云同步 =================
+   一套账号打通「心履」与「PH Launcher / PLL」。数据在本地加密后才上传，
+   服务器只存密文；DEK 只活在内存里，进程退出就没了，下次运行重新用口令解一次。
+   协议细节见 D:\phix\phix-协议规范.md。 */
+const PHIX_OBJECT_LABELS = {
+  "settings.accounts": "四平台账号（Edupage / ManageBac / 邮箱 / 心履）",
+  "settings.lessons": "选课（教学组）",
+  "settings.ui": "界面排序偏好",
+  "settings.ai": "AI 供应商与 Key",
+  schedule: "日程",
+  timetable: "课表",
+  school: "学校数据快照（课表 / 作业 / 邮箱摘要）",
+  profile: "个人资料（头像 / 显示名）",
+  mood: "心情记录",
+};
+const PHIX_DEFAULT_OBJECTS = ["settings.accounts", "settings.lessons",
+  "settings.ui", "schedule", "timetable", "school", "profile", "mood"];
+
+let phixState = null;
+
+async function phixBusy(btn, fn) {
+  const old = btn ? btn.textContent : "";
+  if (btn) { btn.disabled = true; btn.textContent = "处理中…"; }
+  try {
+    return await fn();
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = old; }
+  }
+}
+
+function phixMsg(text, isErr) {
+  const el = $("#phix-login-msg");
+  const el2 = $("#phix-sync-msg");
+  [el, el2].forEach((n) => { if (n) n.textContent = ""; });
+  const target = (phixState && phixState.logged_in) ? el2 : el;
+  if (target) { target.textContent = text || ""; target.style.color = isErr ? "#c0392b" : ""; }
+}
+
+async function phixRefresh() {
+  const st = await call("phix_status");
+  phixState = st;
+  $("#phix-login-box").hidden = !!st.logged_in;
+  $("#phix-main-box").hidden = !st.logged_in;
+  if (!st.logged_in) {
+    $("#phix-server").value = st.server || "";
+    $("#phix-username").value = st.username || "";
+    const sl = $("#phix-sessions-list");
+    if (sl) sl.innerHTML = "";               // 登出后别留着上一份设备列表
+    phixRenderTransportWarning(st);
+    return st;
+  }
+  const when = st.last_sync_at ? String(st.last_sync_at).slice(0, 16).replace("T", " ") : "还没有同步过";
+  const mode = st.key_mode === "syncphrase" ? "独立同步口令（服务器也解不开）" : "登录密码";
+  /* 网线加密（应用层）：开了之后**不接 HTTPS 也是安全的**——网上只有密文 */
+  const wire = st.encrypted
+    ? `<span class="phix-wire on">🔐 网线加密：已启用</span>`
+    : (st.e2e ? `<span class="phix-wire off">网线加密：未生效</span>`
+              : `<span class="phix-wire off">网线加密：已关闭</span>`);
+  $("#phix-status-line").innerHTML =
+    `<b>${esc(st.username)}</b> <span class="muted small">· ${esc(st.server)} · 设备「${esc(st.device)}」`
+    + ` · 加密方式：${esc(mode)} · 上次同步：${esc(when)}</span> `
+    + wire
+    + (st.unlocked ? "" : ` <span class="phix-lock">🔒 未解锁</span>`);
+  $("#phix-locked").hidden = !!st.unlocked;
+  $("#phix-auto").checked = !!st.auto_sync;
+  $("#phix-interval").value = st.sync_interval_minutes || 10;
+  const objs = st.objects && st.objects.length ? st.objects : PHIX_DEFAULT_OBJECTS;
+  $("#phix-objs").innerHTML = `<span class="muted small">同步内容：</span>` +
+    Object.keys(PHIX_OBJECT_LABELS).map((k) =>
+      `<label class="chk phix-obj"><input type="checkbox" data-obj="${esc(k)}"${objs.includes(k) ? " checked" : ""}> ${esc(PHIX_OBJECT_LABELS[k])}</label>`).join("");
+  if (st.recovery_code) {
+    $("#phix-recovery").hidden = false;
+    $("#phix-recovery-code").textContent = st.recovery_code;
+  }
+  const conf = ((st.state || {}).conflicts) || [];
+  $("#phix-conflicts").innerHTML = conf.length
+    ? `<div class="card-title" style="margin-top:10px">需要你留意的冲突（数据都还在，没有被丢）</div>` +
+      conf.map((c) => `<div class="item"><span class="grow">${esc(c.object || c.path || "")}
+        <span class="dim">${esc(c.note || "")}</span></span></div>`).join("")
+    : "";
+  phixRenderTransportWarning(st);
+  phixLoadSessions();      // 设备列表异步补上，不挡着状态渲染
+  phixLoadProfile();       // 异步加载头像
+  return st;
+}
+
+/* 明文 HTTP 到非本机 → 登录口令会明文过网线，必须显眼提示。
+   简单模式下拿到口令等于能解开全部数据；切成"独立同步口令"后才安全。 */
+function phixRenderTransportWarning(st) {
+  const box = $("#phix-transport-warn");
+  if (!box) return;
+  if (!st.insecure_transport) { box.hidden = true; box.innerHTML = ""; return; }
+  box.hidden = false;
+  box.innerHTML = `⚠️ <b>这台服务器走的是明文 HTTP（${esc(st.server)}）</b>，` +
+    `登录口令会在网络上明文传输。<br>` +
+    (st.key_mode === "syncphrase"
+      ? `好在当前账号用的是<b>独立同步口令</b>：就算口令被抓走，对方也解不开你的数据。`
+      : `当前是<b>简单模式</b>——口令被抓走就等于云端数据全被解开。` +
+        `建议在下面的「高级与安全设置」里<b>改用独立同步口令</b>，` +
+        `或者等接入 HTTPS 域名后再用。`);
+}
+
+/* ---------- 头像 / profile ---------- */
+async function phixLoadProfile() {
+  const wrap = $("#phix-avatar-wrap");
+  const img = $("#phix-avatar-img");
+  const name = $("#phix-avatar-name");
+  if (!wrap || !img || !name) return;
+  try {
+    const p = await call("phix_profile_get");
+    name.textContent = p.display_name || "未设置";
+    if (p.avatar) {
+      img.innerHTML = `<img src="${esc(p.avatar)}" style="width:100%;height:100%;object-fit:cover" alt="头像">`;
+    } else {
+      img.innerHTML = `<span>👤</span>`;
+    }
+  } catch (e) {
+    name.textContent = "未设置";
+    img.innerHTML = `<span>👤</span>`;
+  }
+}
+
+function phixBindAvatar() {
+  const wrap = $("#phix-avatar-wrap");
+  const file = $("#phix-avatar-file");
+  if (!wrap || !file) return;
+  wrap.onclick = () => file.click();
+  file.onchange = async () => {
+    const f = file.files && file.files[0];
+    if (!f) return;
+    if (f.size > 200 * 1024) {
+      toast("头像文件不能超过 200KB（当前 " + Math.round(f.size / 1024) + "KB）");
+      file.value = "";
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = async () => {
+      const dataUrl = reader.result;
+      try {
+        await call("phix_profile_save", JSON.stringify({ avatar: dataUrl }));
+        await phixLoadProfile();
+        toast("头像已保存");
+      } catch (e) { toast("保存头像失败：" + e.message); }
+    };
+    reader.readAsDataURL(f);
+    file.value = "";
+  };
+}
+
+/* ---------- 登录设备 / 会话（P3 的 /auth/devices） ----------
+   一次登录 = 一个服务端会话。列出设备名与最近活动时间，可以注销某一台
+   （那台机器的访问令牌立刻失效）或一次注销其它全部。
+   **拿不到列表就安静降级** —— 绝不能让设备列表拖垮整个 phix 面板。 */
+async function phixLoadSessions() {
+  const box = $("#phix-sessions-list");
+  if (!box) return;
+  if (!phixState || !phixState.logged_in) { box.innerHTML = ""; return; }
+  const api = (window.pywebview && window.pywebview.api) || {};
+  if (typeof api.phix_devices !== "function") {
+    box.innerHTML = `<div class="muted small">（当前后端没有设备列表接口）</div>`;
+    return;
+  }
+  try {
+    phixRenderSessions(await call("phix_devices"));
+  } catch (err) {
+    box.innerHTML = `<div class="muted small">设备列表拿不到：${esc(err.message)}</div>`;
+  }
+}
+
+function phixRenderSessions(d) {
+  const box = $("#phix-sessions-list");
+  if (!box) return;
+  const rows = (d && d.sessions) || [];
+  if (!rows.length) {
+    box.innerHTML = `<div class="muted small">这台服务器没报出会话列表。</div>`;
+    return;
+  }
+  const when = (s) => {
+    const t = String(s.last_seen_at || s.created_at || "").slice(0, 16).replace("T", " ");
+    return t || "—";
+  };
+  box.innerHTML = rows.map((s) => {
+    const tags = (s.current ? `<span class="phix-sess-tag on">本机</span>` : "")
+      + (s.revoked ? `<span class="phix-sess-tag off">已注销</span>` : "")
+      + (s.dpop_bound ? `<span class="phix-sess-tag">已绑密钥</span>` : "");
+    const btn = (!s.current && !s.revoked)
+      ? `<button class="ghost" data-revoke="${esc(s.id)}">注销</button>` : "";
+    return `<div class="phix-sess"><span class="grow">${esc(s.device || "未命名设备")}`
+      + `<span class="dim"> · 最近活动 ${esc(when(s))}</span></span>${tags}${btn}</div>`;
+  }).join("");
+  box.querySelectorAll("button[data-revoke]").forEach((b) => {
+    b.onclick = (e) => phixBusy(e.target, async () => {
+      if (!confirm("注销这台设备？\n\n它那边的登录会立刻失效（不影响本机）。")) return;
+      try {
+        phixRenderSessions(await call("phix_revoke_device", Number(b.dataset.revoke), false));
+        phixMsg("那台设备已注销");
+      } catch (err) { phixMsg(err.message, true); }
+    });
+  });
+}
+
+function phixBind() {
+  const on = (id, fn) => { const el = $(id); if (el) el.onclick = fn; };
+
+  on("#phix-test", (e) => phixBusy(e.target, async () => {
+    try {
+      const d = await call("phix_ping", $("#phix-server").value.trim());
+      phixMsg(`连上了：phix v${d.version}，服务器时间 ${String(d.server_time).slice(0, 19)}`);
+    } catch (err) { phixMsg("连不上：" + err.message, true); }
+  }));
+
+  on("#phix-login", (e) => phixBusy(e.target, async () => {
+    const server = $("#phix-server").value.trim();
+    const username = $("#phix-username").value.trim();
+    const password = $("#phix-password").value;
+    if (!server || !username || !password) { phixMsg("服务器地址、账号、密码都要填", true); return; }
+    try {
+      await call("phix_login", server, username, password, $("#phix-syncphrase").value);
+      $("#phix-password").value = ""; $("#phix-syncphrase").value = "";
+      await phixRefresh();
+      phixMsg("登录成功，正在同步…");
+      const r = await call("phix_sync");
+      await phixRefresh();
+      phixMsg(phixSummary(r.summary));
+      Store.drop("home"); Store.drop("courses");
+    } catch (err) { phixMsg(err.message, true); }
+  }));
+
+  on("#phix-register", (e) => phixBusy(e.target, async () => {
+    const server = $("#phix-server").value.trim();
+    const username = $("#phix-username").value.trim();
+    const password = $("#phix-password").value;
+    if (!server || !username || password.length < 6) {
+      phixMsg("注册需要：服务器地址、账号、密码（至少 6 位）", true); return;
+    }
+    if (!confirm(`确定要在 ${server} 注册新账号「${username}」吗？\n\n注册后会出现一串恢复码，请立刻抄下来。`)) return;
+    try {
+      await call("phix_register", server, username, password, "password");
+      $("#phix-password").value = "";
+      await phixRefresh();
+      phixMsg("注册成功！请把上面的恢复码抄到安全的地方。");
+    } catch (err) { phixMsg(err.message, true); }
+  }));
+
+  on("#phix-sync", (e) => phixBusy(e.target, async () => {
+    try {
+      const r = await call("phix_sync");
+      await phixRefresh();
+      phixMsg(phixSummary(r.summary));
+      Store.drop("home"); Store.drop("courses"); Store.drop("mail");
+    } catch (err) { phixMsg(err.message, true); }
+  }));
+
+  on("#phix-preview", (e) => phixBusy(e.target, async () => {
+    try {
+      const r = await call("phix_sync_preview");
+      phixMsg("预览：" + phixSummary(r.summary) + "（没有写入任何文件）");
+    } catch (err) { phixMsg(err.message, true); }
+  }));
+
+  on("#phix-logout", async () => {
+    if (!confirm("退出登录？\n\n本机保存的令牌会被清掉（云端数据不受影响，下次用账号密码登录即可）。")) return;
+    try { await call("phix_logout"); await phixRefresh(); phixMsg("已退出登录"); }
+    catch (err) { phixMsg(err.message, true); }
+  });
+
+  on("#phix-unlock", (e) => phixBusy(e.target, async () => {
+    try {
+      await call("phix_unlock", $("#phix-unlock-pass").value);
+      $("#phix-unlock-pass").value = "";
+      await phixRefresh();
+      phixMsg("已解锁，可以同步了");
+    } catch (err) { phixMsg(err.message, true); }
+  }));
+
+  on("#phix-save-opts", (e) => phixBusy(e.target, async () => {
+    const objs = $$("#phix-objs input[data-obj]").filter((c) => c.checked).map((c) => c.dataset.obj);
+    if (!objs.length) { phixMsg("至少要选一项要同步的内容", true); return; }
+    try {
+      await call("phix_settings_save", JSON.stringify({
+        auto_sync: $("#phix-auto").checked,
+        sync_interval_minutes: Number($("#phix-interval").value) || 10,
+        objects: objs,
+      }));
+      await phixRefresh();
+      phixMsg("同步设置已保存");
+    } catch (err) { phixMsg(err.message, true); }
+  }));
+
+  on("#phix-change-pass", (e) => phixBusy(e.target, async () => {
+    const o = $("#phix-old-pass").value, n = $("#phix-new-pass").value;
+    if (n.length < 6) { phixMsg("新密码至少 6 位", true); return; }
+    try {
+      await call("phix_change_password", o, n);
+      $("#phix-old-pass").value = ""; $("#phix-new-pass").value = "";
+      await phixRefresh();
+      phixMsg("密码已改。云端密文一个字节都没动，别的设备照常能同步。");
+    } catch (err) { phixMsg(err.message, true); }
+  }));
+
+  on("#phix-set-sp", (e) => phixBusy(e.target, async () => {
+    const lp = $("#phix-sp-login").value, sp = $("#phix-sp-new").value;
+    if (sp.length < 6) { phixMsg("同步口令至少 6 位", true); return; }
+    if (!confirm("改用独立同步口令后：\n· 连服务器都拿不到你的数据（真正端到端）\n· 每次运行程序都要输一次这个口令\n\n确定吗？")) return;
+    try {
+      await call("phix_set_passphrase", lp, sp);
+      $("#phix-sp-login").value = ""; $("#phix-sp-new").value = "";
+      await phixRefresh();
+      phixMsg("已切换。以后同步时请在登录框的「独立同步口令」里输入它。");
+    } catch (err) { phixMsg(err.message, true); }
+  }));
+
+  on("#phix-recovery-done", () => { $("#phix-recovery").hidden = true; });
+
+  on("#phix-recover", (e) => phixBusy(e.target, async () => {
+    const user = $("#phix-rc-username").value.trim();
+    const codeTxt = $("#phix-rc-code").value.trim();
+    const np = $("#phix-rc-newpass").value;
+    if (!user || !codeTxt || np.length < 6) {
+      phixMsg("要填：账号、恢复码、新的登录密码（至少 6 位）", true); return;
+    }
+    if (!confirm("用恢复码重设密码？\n\n· 恢复码只在本机使用，不会上传\n· 云端数据一个字节都不会动")) return;
+    const server = $("#phix-server").value.trim() || (phixState && phixState.server) || "";
+    if (!server) { phixMsg("请先填服务器地址", true); return; }
+    try {
+      await call("phix_recover", server, user, codeTxt, np);
+      $("#phix-rc-code").value = ""; $("#phix-rc-newpass").value = "";
+      phixMsg("密码已重设，用新密码登录即可（云端数据没动过）");
+    } catch (err) { phixMsg(err.message, true); }
+  }));
+
+  on("#phix-open-dir", (e) => phixBusy(e.target, async () => {
+    try { const d = await call("phix_open_data_dir"); phixMsg("已打开 " + d.path); }
+    catch (err) { phixMsg(err.message, true); }
+  }));
+
+  on("#phix-sess-refresh", (e) => phixBusy(e.target, () => phixLoadSessions()));
+
+  on("#phix-sess-revoke-others", (e) => phixBusy(e.target, async () => {
+    if (!confirm("注销除本机以外的全部设备？\n\n其它机器上的登录都会立刻失效。")) return;
+    try {
+      phixRenderSessions(await call("phix_revoke_device", 0, true));
+      phixMsg("其它设备都已注销");
+    } catch (err) { phixMsg(err.message, true); }
+  }));
+}
+
+function phixSummary(s) {
+  if (!s) return "";
+  if (s.skipped) return s.skipped;
+  const parts = [];
+  if ((s.pulled || []).length) parts.push(`拉取 ${s.pulled.length} 项`);
+  if ((s.pushed || []).length) parts.push(`上传 ${s.pushed.length} 项`);
+  if (!parts.length) parts.push("没有需要同步的变化");
+  if (s.conflicts) parts.push(`${s.conflicts} 处冲突已记录`);
+  if ((s.errors || []).length) parts.push(`${s.errors.length} 项出错：` + s.errors[0]);
+  return parts.join("，");
+}
+
+phixBind();
+phixBindAvatar();

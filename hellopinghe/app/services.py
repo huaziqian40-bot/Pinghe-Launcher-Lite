@@ -613,6 +613,88 @@ class FreeRoomsService:
 
 
 # ================================================================ 邮件
+#: 附件限额(发信时按"实际读到的字节数"再校验一次, 超限给中文可读报错, 绝不静默丢弃)
+MAIL_ATTACH_MAX_ONE = 20 * 1024 * 1024      # 单个附件上限 20MB
+MAIL_ATTACH_MAX_TOTAL = 25 * 1024 * 1024    # 全部附件合计上限 25MB
+MAIL_ATTACH_MAX_COUNT = 10                  # 附件个数上限
+MAIL_ATTACH_CHUNK = 1024 * 1024             # 读附件时分块大小
+
+
+def mail_size_str(n: int) -> str:
+    """字节数 → 人看得懂的大小(B/KB/MB), 用于错误提示与附件展示."""
+    try:
+        n = int(n or 0)
+    except Exception:  # noqa: BLE001
+        n = 0
+    if n < 1024:
+        return f"{n}B"
+    kb = n / 1024
+    if kb < 1024:
+        return f"{kb:.0f}KB"
+    return f"{kb / 1024:.1f}MB"
+
+
+def _b64(data: bytes) -> str:
+    """附件字节 → base64 文本(前端把 File 读成 base64 交给 Python 时用)."""
+    import base64
+
+    return base64.b64encode(data or b"").decode("ascii")
+
+
+def mail_quote_text(date: str, sender: str, body: str) -> str:
+    """转发/回复用的中文引用块(结构照抄 CipherCore, 文案改成中文).
+
+    `\\n\\n---------- 原始邮件 ----------\\n{日期} 时 {发件人} 写道：\\n> 原文逐行加 > \\n------------------\\n`
+    正文字体最后一定带一个换行: 前端的 `Re:/Fwd:` 撰写框把这一段放在最上面,
+    光标停在**引用块上方**的空白里, 用户直接开始打字就是写在引用前面。
+    """
+    quoted = "\n".join(f"> {line}" for line in (body or "").splitlines())
+    return (f"\n\n---------- 原始邮件 ----------\n"
+            f"{date or '未知时间'} 时 {sender or '未知发件人'} 写道：\n"
+            f"{quoted}\n------------------\n")
+
+
+def mail_plain_body(msg) -> str:
+    """取 `text/plain` 部分当引用正文(跳过 Content-Disposition: attachment).
+
+    找不到 text/plain 时退到 text/html(去掉标签的粗文本), 再退到整封的
+    payload —— 宁可引用得糙一点, 也不要给用户一个空的引用块。
+    """
+    import email as _email
+    import html as _html
+
+    fallback_html = ""
+    for part in msg.walk():
+        if part.get_content_maintype() == "multipart":
+            continue
+        cdisp = str(part.get("Content-Disposition") or "")
+        if "attachment" in cdisp.lower():
+            continue
+        ctype = part.get_content_type()
+        if ctype == "text/plain":
+            payload = part.get_payload(decode=True) or b""
+            charset = part.get_content_charset() or "utf-8"
+            # 嵌套转发的正文本身是 message/rfc822 时 payload 不是 bytes
+            if isinstance(payload, bytes):
+                return payload.decode(charset, errors="replace")
+        elif ctype == "text/html" and not fallback_html:
+            payload = part.get_payload(decode=True) or b""
+            charset = part.get_content_charset() or "utf-8"
+            if isinstance(payload, bytes):
+                text = payload.decode(charset, errors="replace")
+                text = re.sub(r"(?is)<(script|style).*?</\1>", "", text)
+                text = re.sub(r"(?i)<br\s*/?>|</p>|</div>|</tr>", "\n", text)
+                fallback_html = _html.unescape(re.sub(r"<[^>]+>", "", text)).strip()
+    if fallback_html:
+        return fallback_html
+    if not msg.is_multipart():
+        payload = msg.get_payload(decode=True)
+        if isinstance(payload, bytes):
+            return payload.decode(msg.get_content_charset() or "utf-8",
+                                  errors="replace")
+    return ""
+
+
 class MailService:
     """网易企业邮 IMAP 客户端(标准库 imaplib 直写命令).
 
@@ -830,19 +912,7 @@ class MailService:
             except Exception:  # noqa: BLE001
                 pass
             # 提取附件列表
-            attachments = []
-            for part in msg.walk():
-                cd = str(part.get("Content-Disposition") or "")
-                if "attachment" not in cd and not part.get_filename():
-                    continue
-                fname = part.get_filename() or "unnamed"
-                if fname.startswith("=?"):
-                    fname = self._decode(fname)
-                attachments.append({
-                    "index": len(attachments),
-                    "filename": fname[:200],
-                    "size": len(part.get_payload(decode=True) or b""),
-                })
+            attachments = self._attachment_parts(msg, with_bytes=False)
 
             return {
                 "uid": uid,
@@ -861,6 +931,30 @@ class MailService:
             except Exception:  # noqa: BLE001
                 pass
 
+    def _attachment_parts(self, msg, with_bytes: bool = True) -> list[dict]:
+        """列出邮件里的附件部分, `index` 与"下载附件/转发时按序号取"完全一致.
+
+        read() 的回显、read_attachment() 的下载、转发时按序号取字节, 三处必须
+        用同一份规则和同一个顺序, 否则界面上第 2 个附件会下成第 3 个。
+        """
+        out = []
+        for part in msg.walk():
+            cd = str(part.get("Content-Disposition") or "")
+            if "attachment" not in cd and not part.get_filename():
+                continue
+            fname = part.get_filename() or "unnamed"
+            if fname.startswith("=?"):
+                fname = self._decode(fname)
+            item = {
+                "index": len(out),
+                "filename": fname[:200],
+                "size": len(part.get_payload(decode=True) or b""),
+            }
+            if with_bytes:
+                item["data"] = part.get_payload(decode=True) or b""
+            out.append(item)
+        return out
+
     def read_attachment(self, uid: str, part_index: int, filename: str) -> str:
         """提取邮件附件内容, 保存到临时文件, 返回文件路径."""
         import email as _email
@@ -878,12 +972,10 @@ class MailService:
             if not raw:
                 raise PingheError(f"邮件 {uid} 不存在")
             msg = _email.message_from_bytes(raw)
-            atts = [p for p in msg.walk()
-                    if "attachment" in str(p.get("Content-Disposition") or "")
-                    or p.get_filename()]
+            atts = self._attachment_parts(msg)
             if part_index >= len(atts):
                 raise PingheError("附件不存在")
-            payload = atts[part_index].get_payload(decode=True) or b""
+            payload = atts[part_index]["data"]
             safe_name = re.sub(r'[<>:"/\\|?*]', "_", filename)
             out = Path(os.path.expanduser("~")) / "Downloads" / safe_name
             out.parent.mkdir(parents=True, exist_ok=True)
@@ -1228,19 +1320,339 @@ class MailService:
         """获取 SMTP 登录密码（与 IMAP 相同逻辑）。"""
         return self._password()
 
-    def send(self, to: str, subject: str, body: str) -> None:
-        import smtplib
-        from email.header import Header
-        from email.mime.text import MIMEText
+    # ---------------------------------------------------------------- 发信
+    def _parse_addresses(self, value) -> list[str]:
+        """收件人输入框 → 地址列表(支持 , ; 和中文全角逗号/分号)."""
+        import email.utils as _eu
 
-        email = (self.cfg.mail_email or "").strip()
-        msg = MIMEText(body, "plain", "utf-8")
-        msg["Subject"] = Header(subject, "utf-8")
-        msg["From"] = email
-        msg["To"] = to
-        with smtplib.SMTP_SSL(self.cfg.mail_smtp_host, 994, timeout=30) as smtp:
-            smtp.login(email, self._smtp_password())
-            smtp.sendmail(email, [to], msg.as_string())
+        if isinstance(value, (list, tuple)):
+            value = ", ".join(str(x) for x in value if x)
+        # 半角/全角逗号都换成逗号; 分号(email.utils 不认它, 会整串解析失败)
+        # 换成 ", " 再交给 getaddresses。
+        text = (value or "").replace("；", ";").replace("，", ",").replace("、", ",")
+        text = text.replace(";", ", ")
+        out: list[str] = []
+        for name, addr in _eu.getaddresses([text]):
+            addr = (addr or "").strip()
+            if not addr:
+                continue
+            if self._valid_email(addr) and addr not in out:
+                out.append(addr)
+        return out
+
+    def _read_attachment_source(self, att: dict) -> bytes:
+        """把一条附件规格读成字节(path 或 data_base64 两种来源)。"""
+        import base64
+
+        if att.get("path"):
+            path = Path(str(att["path"]))
+            if not path.is_file():
+                raise PingheError(f"附件读不到: {path.name or path}(文件不存在或已被移动)")
+            data = bytearray()
+            with open(path, "rb") as fh:
+                while True:
+                    chunk = fh.read(MAIL_ATTACH_CHUNK)
+                    if not chunk:
+                        break
+                    data.extend(chunk)
+                    if len(data) > MAIL_ATTACH_MAX_ONE:
+                        raise PingheError(
+                            f"附件「{att['name']}」超过单个上限 "
+                            f"{mail_size_str(MAIL_ATTACH_MAX_ONE)}, 没有发送")
+            return bytes(data)
+        if att.get("data_base64") is not None:
+            try:
+                return base64.b64decode(str(att["data_base64"]), validate=False)
+            except Exception as exc:  # noqa: BLE001
+                raise PingheError(f"附件「{att['name']}」内容损坏, 无法发送") from exc
+        raise PingheError(f"附件「{att.get('name') or '未命名'}」没有内容可发送")
+
+    def _collect_attachments(self, attachments) -> tuple[list[tuple[str, bytes]], list[dict]]:
+        """规整附件规格并按限额校验。
+
+        `attachments` 支持三种写法(向后兼容, 前端/Python 调用方各取所需):
+          * `"D:\\a.pdf"`                        —— 路径字符串
+          * `("a.pdf", "D:\\a.pdf")`             —— (显示名, 路径)
+          * `{"name": "a.pdf", "path": ...}`     —— 或 `{"name":…, "data_base64":…}`
+        返回 `(可发送的 [(名字, 字节)], 被跳过的 [{name, reason}])`。
+        超限/读不到的附件**不静默丢**: 要么抛中文错误(硬超限), 要么进 skipped 让
+        界面如实告诉用户"这几张没带上"。
+        """
+        if not attachments:
+            return [], []
+        if isinstance(attachments, (str, dict)):
+            attachments = [attachments]
+
+        specs: list[dict] = []
+        for raw in attachments:
+            if raw is None:
+                continue
+            if isinstance(raw, (str, Path)):
+                specs.append({"name": Path(str(raw)).name, "path": str(raw)})
+            elif isinstance(raw, dict):
+                name = str(raw.get("name") or "").strip()
+                path = raw.get("path")
+                if not name and path:
+                    name = Path(str(path)).name
+                specs.append({**raw, "name": name or "未命名文件",
+                              "path": str(path) if path else ""})
+            elif isinstance(raw, (list, tuple)) and len(raw) == 2:
+                specs.append({"name": str(raw[0]), "path": str(raw[1])})
+            else:
+                raise PingheError(f"不认识的附件写法: {raw!r}")
+
+        if len(specs) > MAIL_ATTACH_MAX_COUNT:
+            raise PingheError(
+                f"一次最多带 {MAIL_ATTACH_MAX_COUNT} 个附件, "
+                f"当前选了 {len(specs)} 个 —— 请减少附件后重试")
+
+        out: list[tuple[str, bytes]] = []
+        skipped: list[dict] = []
+        total = 0
+        for spec in specs:
+            name = spec["name"]
+            try:
+                data = self._read_attachment_source(spec)
+            except PingheError as exc:
+                skipped.append({"name": name, "reason": str(exc)})
+                continue
+            if len(data) > MAIL_ATTACH_MAX_ONE:
+                skipped.append({"name": name, "reason":
+                                f"超过单个附件上限 {mail_size_str(MAIL_ATTACH_MAX_ONE)}"})
+                continue
+            if total + len(data) > MAIL_ATTACH_MAX_TOTAL:
+                skipped.append({"name": name, "reason":
+                                f"加进来会超过附件总上限 {mail_size_str(MAIL_ATTACH_MAX_TOTAL)}"})
+                continue
+            total += len(data)
+            out.append((name, data))
+        return out, skipped
+
+    @staticmethod
+    def _attach_part(name: str, data: bytes):
+        """一个附件 → MIME 部分(base64 + Content-Disposition: attachment)."""
+        import mimetypes
+        from email import encoders
+        from email.header import Header
+        from email.mime.base import MIMEBase
+        from email.utils import encode_rfc2231
+
+        ctype, encoding = mimetypes.guess_type(name)
+        if ctype is None or encoding is not None:
+            ctype = "application/octet-stream"
+        maintype, _, subtype = ctype.partition("/")
+        part = MIMEBase(maintype or "application", subtype or "octet-stream")
+        part.set_payload(data)
+        encoders.encode_base64(part)
+        try:
+            name.encode("ascii")
+        except UnicodeEncodeError:
+            # 中文/日文文件名: 走 RFC 2231 的 `filename*=utf-8''%E2%80%A6`
+            # (① `Header(name,'utf-8')` 正好委托给 encode_rfc2231, 编码 + 前缀
+            #    一次到位; ② 不能直接 add_header(filename=非ASCII) —— 折行会把
+            #    名字折进断行, 收件端 get_filename() 拿到的是碎片;
+            #  ③ 万一本机 Python 生成不出 filename*=, 手工补一个(不写引号)。)
+            part.add_header("Content-Disposition", "attachment",
+                            filename=str(Header(name, "utf-8")))
+            if part.get_param("filename", header="Content-Disposition") is None:
+                part.set_param("filename", encode_rfc2231(name, "utf-8"),
+                               header="Content-Disposition")
+        else:
+            part.add_header("Content-Disposition", "attachment", filename=name)
+        return part
+
+    def build_message(self, to: str, subject: str, body: str, *,
+                      cc: str = "", bcc: str = "",
+                      attachments=None, in_reply_to: str = "",
+                      references: str = "") -> tuple[object, list[str], list[dict]]:
+        """把一封待发的信组装成 MIME 消息。
+
+        返回 `(msg, 信封收件人, skipped)`:
+        信封收件人 = To + Cc + Bcc(直接交给 `smtp.sendmail`, 收信方看到的
+        头部里**没有 Bcc** —— 这正是 Bcc 的语义)。
+        """
+        from email.header import Header
+        from email.mime.multipart import MIMEMultipart
+        from email.mime.text import MIMEText
+        from email.utils import formatdate, make_msgid
+
+        sender = (self.cfg.mail_email or "").strip()
+        to_list = self._parse_addresses(to)
+        cc_list = self._parse_addresses(cc)
+        bcc_list = self._parse_addresses(bcc)
+        if not (to_list or cc_list or bcc_list):
+            raise PingheError("请至少填一个收件人(收件人 / 抄送 / 密送 都可以)")
+
+        msg = MIMEMultipart()
+        # From 只写地址(不编造显示名, 免得收件方看到假的姓名)
+        msg["From"] = sender
+        msg["To"] = ", ".join(to_list)
+        if cc_list:
+            msg["Cc"] = ", ".join(cc_list)
+        # Bcc 不进头部: 只走信封
+        msg["Subject"] = Header(subject or "", "utf-8")
+        msg["Date"] = formatdate(localtime=True)
+        msg["Message-ID"] = make_msgid()
+        if in_reply_to:
+            msg["In-Reply-To"] = in_reply_to
+            msg["References"] = references or in_reply_to
+        msg.attach(MIMEText(body or "", "plain", "utf-8"))
+
+        parts, skipped = self._collect_attachments(attachments)
+        for name, data in parts:
+            msg.attach(self._attach_part(name, data))
+
+        envelope = list(dict.fromkeys(to_list + cc_list + bcc_list))
+        return msg, envelope, skipped
+
+    def send(self, to: str, subject: str, body: str, *,
+             cc: str = "", bcc: str = "", attachments=None,
+             in_reply_to: str = "", references: str = "",
+             smtp_port: int = 994, timeout: int = 120) -> dict:
+        """发送邮件(向后兼容: 老调用方 `send(to, subject, body)` 照旧能用)。
+
+        新增全部是**关键字参数**: `cc` / `bcc` / `attachments` 都是可选的,
+        `attachments` 见 `_collect_attachments` 的三种写法说明。
+        返回 `{"sent": True, "envelope": [...], "skipped": [...]}`。
+        """
+        import smtplib
+
+        sender = (self.cfg.mail_email or "").strip()
+        if not sender:
+            raise PingheError("还没配置发件邮箱: 请先在设置页填写邮箱并保存")
+        host = (self.cfg.mail_smtp_host or "").strip()
+        if not host:
+            raise PingheError("还没配置 SMTP 服务器: 请先在设置页填写 SMTP 服务器")
+
+        msg, envelope, skipped = self.build_message(
+            to, subject, body, cc=cc, bcc=bcc, attachments=attachments,
+            in_reply_to=in_reply_to, references=references)
+
+        try:
+            with smtplib.SMTP_SSL(host, int(smtp_port), timeout=timeout) as smtp:
+                smtp.login(sender, self._smtp_password())
+                # 信封收件人含 Bcc, 但 msg 头部里没有 Bcc
+                smtp.sendmail(sender, envelope, msg.as_string())
+        except smtplib.SMTPAuthenticationError as exc:
+            raise PingheError(
+                "SMTP 登录失败: 网易企业邮发信要用「客户端授权码」而不是网页登录密码。"
+                "请到 mail.shphschool.com → 设置 → 客户端设置 生成授权码后填进设置页。"
+                f"(服务器消息: {exc})") from exc
+        except (smtplib.SMTPRecipientsRefused, smtplib.SMTPSenderRefused) as exc:
+            raise PingheError(f"服务器拒收: 请检查收件人地址是否正确。({exc})") from exc
+        except (smtplib.SMTPConnectError, smtplib.SMTPServerDisconnected) as exc:
+            raise PingheError(f"连不上 SMTP 服务器 {host}:{smtp_port}: {exc}") from exc
+        except TimeoutError as exc:
+            raise PingheError(f"连接 SMTP 服务器 {host}:{smtp_port} 超时: {exc}") from exc
+        except (smtplib.SMTPException, OSError) as exc:
+            raise PingheError(f"发信失败: {exc}") from exc
+
+        if skipped:
+            reasons = "; ".join(f"{s['name']}({s['reason']})" for s in skipped)
+            return {"sent": True, "envelope": envelope, "skipped": skipped,
+                    "message": f"已发送, 但有 {len(skipped)} 个附件没带上: {reasons}"}
+        return {"sent": True, "envelope": envelope, "skipped": []}
+
+    # ------------------------------------------------- 回复 / 转发(界面预填)
+    @staticmethod
+    def _prefix_subject(subject: str, prefix: str) -> str:
+        """`Re: `/`Fwd: ` 前缀: 已经有同名前缀(不分大小写)就不再叠一层."""
+        subj = (subject or "").strip()
+        if subj.lower().startswith(prefix.strip().lower()):
+            return subj
+        return f"{prefix}{subj}"
+
+    @staticmethod
+    def _reply_target(msg) -> tuple[str, str]:
+        """回复对象: 有 `Reply-To` 就用它, 没有才用 `From`(照抄 CipherCore 语义).
+
+        返回 `(纯地址, 原始头文本)` —— 地址进收件人框, 头文本进引用块。
+        """
+        from email.utils import parseaddr
+
+        from_raw = str(msg.get("From") or "").strip()
+        reply_to_raw = str(msg.get("Reply-To") or "").strip()
+        enc = MailService._decode
+        if reply_to_raw:
+            addr = parseaddr(enc(reply_to_raw))[1].strip()
+            if addr:
+                return addr, enc(reply_to_raw)
+        return parseaddr(enc(from_raw))[1].strip(), enc(from_raw)
+
+    def reply_prefill(self, msg) -> dict:
+        """回复的预填内容: 收件人(Reply-To 优先)、`Re: ` 主题、引用块."""
+        addr, sender_text = self._reply_target(msg)
+        subject = self._decode(msg.get("Subject") or "")
+        date_text = self._decode(msg.get("Date") or "")
+        quote = mail_quote_text(date_text, sender_text, mail_plain_body(msg))
+        return {
+            "mode": "reply",
+            "to": addr,
+            "cc": "",
+            "bcc": "",
+            "subject": self._prefix_subject(subject, "Re: "),
+            "quote": quote,
+            "body": quote,              # 撰写框初始内容 = 引用块, 光标落其上方
+            "original_subject": subject,
+            "original_from": sender_text,
+            "original_date": date_text,
+            # 回复**不**自动带原附件(CipherCore 语义, 也是邮件礼仪)
+            "attachments": [],
+            "in_reply_to": (str(msg.get("Message-ID") or "").strip()),
+            "references": (str(msg.get("References") or "").strip()),
+        }
+
+    def forward_prefill(self, msg, *, attachments=None,
+                        with_attachments: bool = True) -> dict:
+        """转发的预填内容: 收件人**留空**、`Fwd: ` 主题、引用块 + 原附件.
+
+        `attachments` 不传就从 `msg` 里现取(比 CipherCore 强的地方: 参考实现
+        只留了个 TODO, 转发时原附件会丢)。附件超限只记录在 `skipped` 里,
+        由界面如实提示, 不静默丢弃。
+        """
+        subject = self._decode(msg.get("Subject") or "")
+        sender_text = self._decode(msg.get("From") or "")
+        date_text = self._decode(msg.get("Date") or "")
+        quote = mail_quote_text(date_text, sender_text, mail_plain_body(msg))
+
+        specs: list[dict] = []
+        skipped: list[dict] = []
+        if with_attachments:
+            if attachments is None:
+                raw = self._attachment_parts(msg)
+            else:
+                raw = list(attachments or [])
+            total = 0
+            for item in raw:
+                data = item.get("data") or b""
+                name = str(item.get("filename") or item.get("name") or "未命名文件")
+                if len(data) > MAIL_ATTACH_MAX_ONE:
+                    skipped.append({"name": name, "reason":
+                                    f"超过单个附件上限 {mail_size_str(MAIL_ATTACH_MAX_ONE)}"})
+                    continue
+                if total + len(data) > MAIL_ATTACH_MAX_TOTAL:
+                    skipped.append({"name": name, "reason":
+                                    f"加进来会超过附件总上限 {mail_size_str(MAIL_ATTACH_MAX_TOTAL)}"})
+                    continue
+                total += len(data)
+                specs.append({"name": name, "size": len(data),
+                              "data_base64": _b64(data)})
+        return {
+            "mode": "forward",
+            "to": "",                   # 转发不预填收件人, 焦点落在收件人框
+            "cc": "",
+            "bcc": "",
+            "subject": self._prefix_subject(subject, "Fwd: "),
+            "quote": quote,
+            "body": quote,
+            "original_subject": subject,
+            "original_from": sender_text,
+            "original_date": date_text,
+            "attachments": specs,
+            "skipped": skipped,
+            "in_reply_to": "",
+            "references": "",
+        }
 
 
 # ================================================================ 日程
