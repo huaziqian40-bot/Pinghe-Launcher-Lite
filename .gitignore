@@ -21,6 +21,10 @@ msi_extract
 _crosscheck*.py
 _cleanup/
 *.bak-*
+
+# 隐私扫描用的"已知机密"清单：每行一个值，供 scripts/privacy_scan.py 精确匹配。
+# **绝不能入库**（它装的就是机密本身）；不建也行，用 PHIX_SCAN_SECRETS 环境变量代替。
+.secrets-scan.txt
 *.bak-*.*
 启动 Pinghe Launcher Lite.bat.bak*
 
