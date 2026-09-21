@@ -317,6 +317,39 @@ class ManageBacClient:
         out["url"] = "/student/ib/pbl/778"
         return out
 
+    # ---- 核心课程(CAS / EE)的写操作 ----
+    #
+    # CAS 的"新增经历 / 写反思"是标准 Rails 表单，字段随学校配置而变，所以这里
+    # **不写死任何路由或字段名**：先把页面读下来，由界面把页面上真实存在的字段
+    # 渲染成表单，提交时再把值填回去。路由白名单只允许 /student/ib/activity/cas
+    # 与 /student/ib/pbl/<数字> 之下，避免"填错一个 action 就往别处 POST"。
+    CORE_PATHS = {"cas": "/student/ib/activity/cas", "ee": "/student/ib/pbl/778"}
+
+    def core_path(self, kind: str = "cas") -> str:
+        return self.CORE_PATHS.get(kind) or self.CORE_PATHS["cas"]
+
+    def get_core_page(self, kind: str = "cas") -> str:
+        """核心课程页面的**原始 HTML**（只读；给"页面上有哪些表单"用）。"""
+        return self._get(self.core_path(kind)).text
+
+    def post_core_form(self, page_path: str, action_path: str, data: dict,
+                       files=None):
+        """Rails 表单提交：X-CSRF-Token + X-Requested-With，**不跟随重定向**。
+
+        `allow_redirects=False` 是刻意的：跟了就只剩最终的 200 或登录页，
+        没法判断中途是不是被踢去登录了 —— 那正是"以为交了、其实没交"的来源。
+        """
+        page = self._get(page_path)
+        meta = _soup(page.text).find("meta", attrs={"name": "csrf-token"})
+        headers = {
+            "X-CSRF-Token": meta["content"] if meta else "",
+            "X-Requested-With": "XMLHttpRequest",
+            "Accept": "text/javascript, application/javascript, */*; q=0.01",
+        }
+        return self.session.post(
+            self._url(action_path), data=data, files=files, headers=headers,
+            timeout=180, allow_redirects=False)
+
 
 def _soup(html: str):
     from bs4 import BeautifulSoup

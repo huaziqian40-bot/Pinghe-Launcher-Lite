@@ -50,6 +50,83 @@ def is_native_science(name: str) -> bool:
     return any(k in fam for k in _NATIVE_SCIENCE_KEYS)
 
 
+def _split_joined(value) -> list[str]:
+    """把合并卡里存过的 "A · B" / "X 等3位" 这类压缩串拆回干净的名字。"""
+    text = str(value or "").strip()
+    if not text:
+        return []
+    parts = [p.strip() for p in text.replace("，", " · ").split("·")]
+    return [p for p in parts if p and not p.endswith("位") and "等" not in p]
+
+
+def merge_native_science(cards: list[dict]) -> list[dict]:
+    """把**同一时段**的国家物理/化学/生物合成一条「国家理科」。
+
+    为什么必须有这一步（2026-09-21 用户报的现象）：共用课表(`data/School` 的 edupage 段、
+    `data/Timetable`)是**多个程序写入的并集** —— 云端已经有一条合并好的「国家理科」，
+    本地或对方又写来了三张轮换课卡，不经合并直接显示，同一格就会冒出**四张卡**：
+    国家物理、国家化学、国家生物、国家理科。
+
+    规则（按 `(start, end)` 分组；同一时段才合并，不同时段各留一条）：
+      * 组里已经有合并好的「国家理科」→ **只留它**，丢掉那几张原始轮换卡；
+      * 否则把多张轮换卡合成一条，房间/老师去重后压缩展示（1 位报名字，多位报"X 等N位"）。
+    不是国家理科的卡片原样返回，顺序保持。
+    """
+    grouped: dict[tuple[str, str], list[dict]] = {}
+    out: list[dict] = []
+    for card in cards or []:
+        if not isinstance(card, dict):
+            continue
+        if not is_native_science(str(card.get("subject") or "")):
+            out.append(card)
+            continue
+        key = (str(card.get("start") or ""), str(card.get("end") or ""))
+        grouped.setdefault(key, []).append(card)
+
+    for (start, end), group in grouped.items():
+        if len(group) == 1:
+            out.append(group[0])
+            continue
+        merged_already = [c for c in group
+                          if str(c.get("subject") or "").strip() == NATIVE_SCIENCE_LABEL]
+        if merged_already:
+            # 云端那条是"整格"的记录（房间/老师已经压好），它为准，三张原始卡丢掉
+            out.append(merged_already[0])
+            continue
+        rooms: list[str] = []
+        teachers: list[str] = []
+        classes: list[str] = []
+        for card in group:
+            for room in _split_joined(card.get("room")):
+                if room not in rooms:
+                    rooms.append(room)
+            for teacher in _split_joined(card.get("teacher")):
+                if teacher not in teachers:
+                    teachers.append(teacher)
+            for name in (card.get("classes") or []):
+                if name and name not in classes:
+                    classes.append(name)
+        first = group[0]
+        merged = dict(first)
+        merged.update({
+            "start": start, "end": end,
+            "subject": NATIVE_SCIENCE_LABEL,
+            "teacher": (teachers[0] if len(teachers) == 1
+                        else (f"{teachers[0]} 等{len(teachers)}位" if teachers else "")),
+            "room": " · ".join(rooms),
+            "group": "",
+            "cancelled": all(bool(c.get("cancelled")) for c in group),
+        })
+        # 班级课表的卡片还带 groups / classes：合并后不该再显示"其中某一个组"的信息
+        if "groups" in first:
+            merged["groups"] = ""
+        if "classes" in first:
+            merged["classes"] = classes
+        out.append(merged)
+    out.sort(key=lambda card: (str(card.get("start") or ""), str(card.get("subject") or "")))
+    return out
+
+
 # ---------------------------------------------------------------- 密钥存储
 # Windows: DPAPI 加密 JSON 存数据目录(便携要求); 其他平台: keyring。
 # 统一从 secrets 模块走, 本文件保留旧名字供 bridge 等处引用。
@@ -475,8 +552,11 @@ class EdupageService:
         ).hexdigest()[:8]
         cid = self.my_class_id()
         cache_dir = fs.phll(fs.EDUPAGE_SUB)
+        #: 缓存版本：合并规则一改就必须换名字，否则**旧缓存**（比如"国家理科显示成 4 张卡"
+        #: 那一版算出来的结果）会在 2 小时内被原样读回来，改了等于没改。
+        #: v8 = 国家理科按 merge_native_science() 合并（2026-09-21）。
         cache_file = (cache_dir /
-                      f"personal_{day.isoformat()}_{cid or 'all'}_{sel_key}.json")
+                      f"personal_v8_{day.isoformat()}_{cid or 'all'}_{sel_key}.json")
         if cache_file.exists():
             age = _time.time() - cache_file.stat().st_mtime
             if age < 2 * 3600:
@@ -491,30 +571,30 @@ class EdupageService:
         try:
             shared_day = self._shared_day_cards(day.isoformat())
             if shared_day:
-                return [card for card in shared_day if self.card_selected(card)]
+                # 共用文件是多个程序写入的并集：合并好的"国家理科"和三张轮换卡可能并存，
+                # 必须过一遍合并，否则同一格显示成 4 张卡（用户 2026-09-21 报的）。
+                return merge_native_science(
+                    [card for card in shared_day if self.card_selected(card)])
         except Exception:  # noqa: BLE001
             pass
 
         out = []
-        native: dict[tuple, dict] = {}   # (start,end) → 合并中的国家理科
         for l in self.master_plan(day):
             if not self._for_my_class(l):
                 continue
             subject = (l.subject.name if l.subject else "").strip()
             if is_native_science(subject):
-                # 默认必选: 不看选课; 同一时段多张卡合并(房间/老师收集去重)
-                key = (l.start_time.strftime("%H:%M") if l.start_time else "",
-                       l.end_time.strftime("%H:%M") if l.end_time else "")
-                b = native.setdefault(key, {"rooms": [], "teachers": [],
-                                            "cancelled": True})
-                for c in (l.classrooms or []):
-                    if c.name and c.name not in b["rooms"]:
-                        b["rooms"].append(c.name)
-                for t in (l.teachers or []):
-                    nm = t.name.strip()
-                    if nm and nm not in b["teachers"]:
-                        b["teachers"].append(nm)
-                b["cancelled"] = b["cancelled"] and bool(l.is_cancelled)
+                # 默认必选: 不看选课; 合并交给 merge_native_science()（同一时段多张 → 一条）
+                out.append({
+                    "start": l.start_time.strftime("%H:%M") if l.start_time else "",
+                    "end": l.end_time.strftime("%H:%M") if l.end_time else "",
+                    "subject": subject,
+                    "teacher": l.teachers[0].name.strip() if l.teachers else "",
+                    "room": l.classrooms[0].name if l.classrooms else "",
+                    "group": "",
+                    "cancelled": bool(l.is_cancelled),
+                    "curriculum": getattr(l, "curriculum", None) or "",
+                })
                 continue
             card_teachers = {t.name.strip() for t in (l.teachers or [])}
             group = ",".join(l.groups) if l.groups else ""
@@ -538,28 +618,18 @@ class EdupageService:
                 "curriculum": getattr(l, "curriculum", None) or "",
             })
 
-        # 合并后的国家理科: 一条记录代表整格(老师/教室压缩展示)
-        for (start, end), b in native.items():
-            teachers, rooms = b["teachers"], b["rooms"]
-            out.append({
-                "start": start, "end": end,
-                "subject": NATIVE_SCIENCE_LABEL,
-                "teacher": (teachers[0] if len(teachers) == 1
-                            else (f"{teachers[0]} 等{len(teachers)}位" if teachers else "")),
-                "room": " · ".join(rooms),
-                "group": "",
-                "cancelled": b["cancelled"],
-                "curriculum": "",
-            })
-
-        out.sort(key=lambda x: (x["start"], x["subject"]))
+        # 合并后的国家理科: 一条记录代表整格(老师/教室压缩展示) —— 与共用文件那条路径同一套规则
+        out = merge_native_science(out)
         try:
             cache_dir.mkdir(parents=True, exist_ok=True)
             cache_file.write_text(json.dumps(out, ensure_ascii=False), encoding="utf-8")
-            # 选课一变, 同一天其他选课哈希的旧缓存就作废
-            for old in cache_dir.glob(f"personal_{day.isoformat()}_*.json"):
-                if old != cache_file:
-                    old.unlink(missing_ok=True)
+            # 选课一变, 同一天其他选课哈希的旧缓存就作废;
+            # 顺带把**上一个版本**的缓存(personal_<日期>_...)也清掉，别留着占地方。
+            for pattern in (f"personal_v8_{day.isoformat()}_*.json",
+                            f"personal_{day.isoformat()}_*.json"):
+                for old in cache_dir.glob(pattern):
+                    if old != cache_file:
+                        old.unlink(missing_ok=True)
         except Exception:  # noqa: BLE001
             pass
         # 写共享课表 data/Timetable(PH Launcher 直接使用, 键与课卡一致)
@@ -1715,6 +1785,240 @@ def _check_day(day: str) -> None:
         raise PingheError("日期格式应为 YYYY-MM-DD")
 
 
+# ---------------- ManageBac 写操作的公共纯函数（离线可单测） ----------------
+#
+# 这一段刻意放在模块级、而不是塞进 submit_task 的闭包里：表单解析和"到底算不算
+# 提交成功"是最容易出错的两件事，抽出来才能用 HTML 夹具离线验证 —— 学校一改版，
+# 靠人工点一遍才发现就太晚了（上游 PH-Launcher 也是这么分的）。
+
+def _mb_soup(html):
+    """接受 HTML 字符串或已经解析好的 BeautifulSoup。"""
+    from bs4 import BeautifulSoup
+    return BeautifulSoup(html, "html.parser") if isinstance(html, str) else html
+
+
+def _mb_csrf(soup) -> str:
+    tag = soup.find("input", attrs={"name": "authenticity_token"})
+    if tag and tag.get("value"):
+        return tag["value"]
+    meta = soup.find("meta", attrs={"name": "csrf-token"})
+    return (meta.get("content") or "") if meta else ""
+
+
+def parse_upload_form(html, action_keyword: str = "dropbox"):
+    """在页面里找可上传的表单 → `{"field","action","hidden"}`；没有则 `None`。
+
+    实测 shph 契约（2026-09-05 只读探测）：`method=post`、action 形如
+    `.../dropbox/upload`、文件字段 `dropbox[assets_attributes][0][file]`，
+    且必须**原样照抄表单里的全部隐藏域** —— 含 `_method=patch`
+    （路由只认 PATCH，自己拼 data 发纯 POST 会 404）与 `file_cache`。
+    """
+    soup = _mb_soup(html)
+    keyword = (action_keyword or "").lower()
+    for form in soup.find_all("form"):
+        action = form.get("action") or ""
+        if keyword and keyword not in action.lower():
+            continue
+        if (form.get("method") or "get").lower() != "post":
+            continue
+        fi = form.find("input", attrs={"type": "file"})
+        if fi is None:
+            continue
+        hidden: dict = {}
+        for inp in form.find_all("input", attrs={"type": "hidden"}):
+            name = inp.get("name")
+            if name:
+                hidden[name] = inp.get("value") or ""
+        # 提交按钮的 name/value 也是表单数据(如 commit=Upload Files)
+        btn = (form.find("input", attrs={"type": "submit"})
+               or form.find("button", attrs={"name": True}))
+        if btn is not None and btn.get("name"):
+            hidden[btn.get("name")] = btn.get("value") or ""
+        tok = hidden.get("authenticity_token") or _mb_csrf(soup)
+        if tok:
+            hidden["authenticity_token"] = tok
+        return {"field": fi.get("name") or "dropbox_assets_attributes_0_file",
+                "action": action, "hidden": hidden}
+    return None
+
+
+def parse_form_links(html, keyword: str, limit: int = 3) -> list:
+    """只从页面**已有的链接**里挑候选提交页，不猜路由。
+
+    上游 PH-Launcher 明确放弃过"猜路径"（`school-data.cjs` 的注释：
+    只有已经解析过的那张页面才知道文件字段名和隐藏域）。
+    """
+    soup = _mb_soup(html)
+    key = (keyword or "").lower()
+    out: list = []
+    for a in soup.find_all("a", href=True):
+        href = a["href"]
+        if not key or key not in href.lower():
+            continue
+        if href.startswith("#") or href.startswith("mailto:"):
+            continue
+        if href not in out:
+            out.append(href)
+        if len(out) >= limit:
+            break
+    return out
+
+
+_LOGIN_PATH_MARKS = ("/login", "/users/sign_in", "/session/new", "/auth/")
+
+
+def _looks_like_login_page(text: str) -> bool:
+    """正文是不是一张登录页（用于识破"200 + 登录页"这种伪成功）。"""
+    if not text or len(text) > 400000:
+        return False
+    low = text.lower()
+    marks = 0
+    if re.search(r"type\s*=\s*[\"']?password", low):
+        marks += 1
+    if "sign in" in low or "sign-in" in low or "登录" in text:
+        marks += 1
+    if "forgot" in low or "remember me" in low or "记住我" in text:
+        marks += 1
+    return marks >= 3
+
+
+def judge_submit_response(status: int, location: str = "", body: str = ""):
+    """判断一次写操作到底成没成功。返回 `(ok, code, message)`。
+
+    **只看状态码是不够的**：会话过期时 Rails 会 302 到登录页，而 requests 默认
+    跟随重定向，最终拿到的是 200 + 登录页正文 —— 旧代码把它当成"已提交"，
+    于是用户会以为交了、其实没交。规则（照上游 `school-data.cjs` 的判定）：
+      · 401 / 403                      → 登录过期
+      · 3xx 且 Location 指向登录页      → 登录过期
+      · 3xx（其它，Rails 成功常见形态）  → 成功
+      · 2xx 但正文像登录页              → 登录过期
+      · 2xx（其余）                     → 成功
+      · 其它                            → 失败
+    """
+    loc = str(location or "").lower()
+    if status in (401, 403):
+        return False, "login_required", "ManageBac 会话过期, 请重新登录后再提交"
+    if 300 <= status < 400:
+        if any(m in loc for m in _LOGIN_PATH_MARKS):
+            return False, "login_required", "ManageBac 会话过期, 请重新登录后再提交"
+        return True, "ok", "已提交"
+    if 200 <= status < 300:
+        if _looks_like_login_page(body):
+            return False, "login_required", "ManageBac 会话过期, 请重新登录后再提交"
+        return True, "ok", "已提交"
+    return False, "failed", f"提交失败: HTTP {status}"
+
+
+def _label_for(el, soup) -> str:
+    """给一个表单控件找个人话标签（label[for] → 包着它的 label → 前面的标签）。"""
+    def _clean(node):
+        return " ".join(node.get_text(" ", strip=True).split())[:60]
+
+    eid = el.get("id")
+    if eid:
+        lab = soup.find("label", attrs={"for": eid})
+        if lab is not None and _clean(lab):
+            return _clean(lab)
+    parent = el.find_parent("label")
+    if parent is not None and _clean(parent):
+        return _clean(parent)
+    for attr in ("aria-label", "placeholder", "title"):
+        if el.get(attr):
+            return str(el[attr])[:60]
+    return ""
+
+
+def parse_submittable_forms(html, keyword: str = "cas") -> list:
+    """把页面里**真实存在**的可提交 POST 表单拆成字段清单。
+
+    给界面渲染成真表单用。刻意不猜路由：只看页面上已有的 `<form>`。
+    隐藏域不进 `fields`（界面不用管），提交时由后端原样带回。
+    """
+    soup = _mb_soup(html)
+    key = (keyword or "").lower()
+    out: list = []
+    for idx, form in enumerate(soup.find_all("form")):
+        if (form.get("method") or "get").lower() != "post":
+            continue
+        action = form.get("action") or ""
+        # action 空 = 提交回当前页，也接受；否则要求路径里含关键词
+        if action and key and key not in action.lower():
+            continue
+        fields: list = []
+        has_file = False
+        for el in form.find_all(["input", "textarea", "select"]):
+            name = el.get("name")
+            if not name:
+                continue
+            typ = (el.get("type") or ("textarea" if el.name == "textarea"
+                                      else "text")).lower()
+            if typ in ("hidden", "submit", "button", "image", "reset"):
+                continue
+            if typ == "file":
+                has_file = True
+            item: dict = {"name": name, "type": typ,
+                          "label": _label_for(el, soup) or name,
+                          "value": el.get("value") or "",
+                          "required": el.has_attr("required")}
+            if el.name == "textarea":
+                item["value"] = el.get_text() or ""
+            if el.name == "select":
+                opts, sel_val = [], ""
+                for o in el.find_all("option"):
+                    v = o.get("value", o.get_text(strip=True))
+                    opts.append({"value": v, "label": o.get_text(strip=True) or v})
+                    if o.has_attr("selected"):
+                        sel_val = v
+                item["options"] = opts
+                item["value"] = sel_val or (opts[0]["value"] if opts else "")
+            fields.append(item)
+        if not fields and not has_file:
+            continue
+        btn = (form.find("input", attrs={"type": "submit"})
+               or form.find("button", attrs={"name": True})
+               or form.find("button"))
+        out.append({
+            "index": idx,
+            "action": action,
+            "fields": fields,
+            "has_file": has_file,
+            "submit_name": (btn.get("name") if btn is not None else "") or "",
+            "submit_value": ((btn.get("value") or btn.get_text(strip=True))
+                             if btn is not None else "") or "保存",
+        })
+    return out
+
+
+# CAS / EE 的写路径白名单：只允许 POST 到这两棵子树下，
+# 免得"页面被人塞了个 form action=https://别处"就把数据发出去了。
+_CORE_WRITE_RE = re.compile(
+    r"^/student/ib/(?:activity/cas|pbl/\d+)(?:/[A-Za-z0-9_\-/]*)?$")
+
+
+def core_action_allowed(action: str, page_path: str) -> bool:
+    """校验一次 CAS/EE 写操作的 action 是不是落在白名单里。"""
+    act = (action or "").strip()
+    if not act:
+        return True                      # 空 action = 提交回当前页
+    if "://" in act:                     # 绝对地址：必须同源
+        from urllib.parse import urlparse
+        p = urlparse(act)
+        if p.netloc and "managebac" not in p.netloc.lower():
+            return False
+        act = p.path
+    act = act.split("?")[0].split("#")[0]
+    if act.startswith("/"):
+        # 绝对路径：**必须**直接落在白名单子树里，不能再当相对路径拼一次
+        # （否则 `/student/classes/21/dropbox/upload` 会被拼成
+        #  `/student/ib/activity/cas/student/classes/21/dropbox/upload` 而蒙混过关）
+        return bool(_CORE_WRITE_RE.match(act))
+    if not act:
+        return True
+    # 相对当前页的子路径也接受（Rails 常见的 `action="reflections"`）
+    base = (page_path or "").rstrip("/")
+    return bool(_CORE_WRITE_RE.match(base + "/" + act))
+
+
 # ================================================================ ManageBac
 class CoursesService:
     def __init__(self, cfg: Config, conn_factory):
@@ -1883,6 +2187,118 @@ class CoursesService:
         self.ensure_login()
         return self._client_ready().get_ee_overview()
 
+    # ---- CAS / EE：软件内提交 ----
+    #
+    # CAS 的"新增经历 / 写反思"是标准 Rails 表单，**字段随学校配置而变**，
+    # 所以这里不写死路由与字段名：先把页面读下来，把页面上真实存在的表单字段
+    # 交给界面渲染，用户填完再原样提交回去。找不到表单时老老实实说找不到，
+    # 而不是猜一个路由去 POST。
+
+    def core_forms(self, kind: str = "cas") -> dict:
+        """读页面上**真实存在**的可提交表单（只读，不写任何东西）。"""
+        client = self._client_ready()
+        kind = "ee" if str(kind) == "ee" else "cas"
+        path = client.core_path(kind)
+        html = client.get_core_page(kind)
+        return {"kind": kind, "path": path,
+                "forms": parse_submittable_forms(html, kind)}
+
+    def core_submit(self, kind: str, payload_json: str) -> dict:
+        """在软件内提交一份 CAS / EE 记录。
+
+        `payload_json` = `{"form_index":0, "values":{字段名:值}, "file_path":"…"}`。
+        只接受**页面上确实存在**的字段名（白名单），action 必须落在 CAS/EE 子树内。
+        """
+        client = self._client_ready()
+        kind = "ee" if str(kind) == "ee" else "cas"
+        path = client.core_path(kind)
+        payload = json.loads(payload_json or "{}")
+
+        html = client.get_core_page(kind)
+        forms = parse_submittable_forms(html, kind)
+        if not forms:
+            raise PingheError(
+                "这个页面上没有找到可以提交的表单（CAS 的经历/反思可能要在"
+                "ManageBac 网页里填写）。可以点「在 ManageBac 打开」去网页完成。")
+        try:
+            form = forms[int(payload.get("form_index") or 0)]
+        except (IndexError, ValueError):
+            raise PingheError("表单序号不对，请点「刷新可填表单」重来一次") from None
+
+        action = form.get("action") or ""
+        if not core_action_allowed(action, path):
+            raise PingheError(f"拒绝提交：表单目标地址不在允许范围内（{action}）")
+
+        # 隐藏域由页面决定，原样照抄（含 authenticity_token / _method）
+        soup = _mb_soup(html)
+        data: dict = {}
+        raw_forms = soup.find_all("form")
+        raw = raw_forms[form["index"]] if form["index"] < len(raw_forms) else None
+        if raw is not None:
+            for inp in raw.find_all("input", attrs={"type": "hidden"}):
+                if inp.get("name"):
+                    data[inp["name"]] = inp.get("value") or ""
+        if not data.get("authenticity_token"):
+            tok = _mb_csrf(soup)
+            if tok:
+                data["authenticity_token"] = tok
+
+        values = payload.get("values") or {}
+        allowed = {f["name"]: f for f in form["fields"] if f["type"] != "file"}
+        for name, val in values.items():
+            if name not in allowed:
+                continue          # 白名单外的一律忽略，不往表单里塞东西
+            data[name] = "" if val is None else str(val)
+        # 必填校验放在本地，省得白跑一趟还把用户吓一跳
+        missing = [f["label"] for f in form["fields"]
+                   if f.get("required") and f["type"] != "file"
+                   and not str(data.get(f["name"]) or "").strip()]
+        if missing:
+            raise PingheError("还有必填项没填：" + "、".join(missing[:5]))
+        if form.get("submit_name"):
+            data[form["submit_name"]] = form.get("submit_value") or "保存"
+
+        files = None
+        file_path = str(payload.get("file_path") or "")
+        if form.get("has_file"):
+            if not file_path:
+                raise PingheError("这个表单需要先选一个文件（证据/附件）")
+            p = Path(file_path)
+            if not p.is_file():
+                raise PingheError(f"文件不存在：{file_path}")
+            if p.stat().st_size > 24 * 1024 * 1024:
+                raise PingheError("文件超过 24MB，ManageBac 传不上去")
+            fh = open(p, "rb")                      # noqa: SIM115  交给 requests 关
+            file_field = next((f["name"] for f in form["fields"]
+                               if f["type"] == "file"), "file")
+            files = {file_field: (p.name, fh)}
+
+        try:
+            resp = client.post_core_form(path, action, data, files=files)
+        finally:
+            if files:
+                try:
+                    next(iter(files.values()))[1].close()
+                except Exception:  # noqa: BLE001
+                    pass
+
+        ok, code, msg = judge_submit_response(
+            resp.status_code, resp.headers.get("Location", ""),
+            (resp.text or "")[:200000])
+        if not ok:
+            raise PingheError(f"{msg} (HTTP {resp.status_code}) — 没有写入任何东西"
+                              if code == "login_required" else
+                              f"{msg} (HTTP {resp.status_code})")
+        # 回读一次页面，把最新的概览一起带回去（用户立刻能看到变化）
+        out = {"ok": True, "message": f"{msg}（{kind.upper()} 记录已提交）",
+               "status_code": resp.status_code}
+        try:
+            out["overview"] = (self.cas_overview() if kind == "cas"
+                               else self.ee_overview())
+        except Exception:  # noqa: BLE001  回读失败不影响"已提交"这个结论
+            out["overview"] = None
+        return out
+
     def submit_task(self, class_id: str, task_id: str, file_path: str) -> str:
         """交作业: 从任务页动态解析提交入口再 multipart 上传.
 
@@ -1897,73 +2313,29 @@ class CoursesService:
         client = self._client_ready()
         from bs4 import BeautifulSoup
 
-        def _csrf(soup) -> str:
-            tag = soup.find("input", attrs={"name": "authenticity_token"})
-            if tag and tag.get("value"):
-                return tag["value"]
-            meta = soup.find("meta", attrs={"name": "csrf-token"})
-            return meta.get("content") if meta else ""
-
-        def _form_entry(form, soup):
-            """从单个 form 提取 (file字段名, action, 全部隐藏域 dict)."""
-            fi = form.find("input", attrs={"type": "file"})
-            if fi is None:
-                return None
-            hidden: dict = {}
-            for inp in form.find_all("input", attrs={"type": "hidden"}):
-                name = inp.get("name")
-                if name:
-                    hidden[name] = inp.get("value") or ""
-            # 提交按钮的 name/value 也是表单数据(如 commit=Upload Files)
-            btn = (form.find("input", attrs={"type": "submit"})
-                   or form.find("button", attrs={"name": True}))
-            if btn is not None and btn.get("name"):
-                hidden[btn.get("name")] = btn.get("value") or ""
-            # data-remote 表单的 token 在 meta csrf-token 里(浏览器走
-            # X-CSRF-Token 头); 复刻时表单域 + 请求头双保险
-            tok = hidden.get("authenticity_token") or _csrf(soup)
-            if tok:
-                hidden["authenticity_token"] = tok
-            return (fi.get("name") or "dropbox_assets_attributes_0_file",
-                    form.get("action") or "",
-                    hidden)
-
         def _find_entry(soup):
-            """找提交入口 → (file 字段名, action, 隐藏域 dict)."""
+            """找提交入口 → (file 字段名, action, 隐藏域 dict)。
+
+            解析逻辑在模块级 `parse_upload_form` 里（离线可单测）。
+            """
             # ① 当前页面里就有 dropbox 上传表单(必须 post + dropbox action)
-            for form in soup.find_all("form"):
-                action = form.get("action") or ""
-                if "dropbox" not in action.lower():
-                    continue
-                if (form.get("method") or "get").lower() != "post":
-                    continue
-                hit = _form_entry(form, soup)
-                if hit:
-                    return hit
+            hit = parse_upload_form(soup, "dropbox")
+            if hit:
+                return hit["field"], hit["action"], hit["hidden"]
             # ② 带本任务 id 的 dropbox 链接 → 打开子页面找上传表单
-            for a in soup.find_all("a", href=True):
-                href = a["href"]
-                if task_id not in href or "dropbox" not in href.lower():
+            for href in parse_form_links(soup, "dropbox", limit=6):
+                if str(task_id) not in href:
                     continue
                 try:
                     sub = client._get(href)
                 except Exception as exc:  # noqa: BLE001
                     raise PingheError(f"提交页打不开: {exc}") from exc
-                sub_soup = BeautifulSoup(sub.text, "html.parser")
-                for form in sub_soup.find_all("form"):
-                    action = form.get("action") or ""
-                    if "dropbox" not in action.lower():
-                        continue
-                    if (form.get("method") or "get").lower() != "post":
-                        continue
-                    hit = _form_entry(form, sub_soup)
-                    if hit:
-                        # 空 action = Rails 提交到当前页路径
-                        action = action or (
-                            str(sub.url).replace(client.base_url, "") or href)
-                        return (hit[0], action, hit[2])
-                raise PingheError(
-                    "提交页里没有找到上传表单, 请到 ManageBac 网页手动提交")
+                hit = parse_upload_form(sub.text, "dropbox")
+                if hit:
+                    # 空 action = Rails 提交到当前页路径
+                    action = hit["action"] or (
+                        str(sub.url).replace(client.base_url, "") or href)
+                    return hit["field"], action, hit["hidden"]
             return None, None, None
 
         task_path = f"/student/classes/{class_id}/core_tasks/{task_id}"
@@ -2018,21 +2390,58 @@ class CoursesService:
                 "网上提交, 或需要老师开放), 请到 ManageBac 网页手动提交")
 
         post_url = client._url(action)
-        headers = {"X-CSRF-Token": hidden["authenticity_token"]} \
-            if hidden.get("authenticity_token") else {}
+        headers = {"X-Requested-With": "XMLHttpRequest"}
+        if hidden.get("authenticity_token"):
+            headers["X-CSRF-Token"] = hidden["authenticity_token"]
+        filename = Path(file_path).name
         with open(file_path, "rb") as fh:
             resp = client.session.post(
                 post_url,
                 data=hidden,   # 含 _method=patch / file_cache / commit / token
-                files={field: (Path(file_path).name, fh)},
+                files={field: (filename, fh)},
                 headers=headers,
                 timeout=180,
+                # **不跟随重定向**：跟了就只能看到最终的 200 + 登录页正文，
+                # 没法判断中途是不是被踢去登录了（旧代码就是这么误报"已提交"的）。
+                allow_redirects=False,
             )
-        if resp.status_code >= 400:
+        ok, code, msg = judge_submit_response(
+            resp.status_code, resp.headers.get("Location", ""),
+            (resp.text or "")[:200000])
+        if not ok:
             raise PingheError(
-                f"提交失败: HTTP {resp.status_code} (POST {post_url}) — "
-                "请到 ManageBac 网页手动提交, 若反复出现请把此提示反馈给开发者")
-        return "已提交(请到 ManageBac 网页确认)"
+                f"{msg} (HTTP {resp.status_code}, POST {post_url}) — "
+                "若反复出现请把此提示反馈给开发者")
+        # 回读任务页确认：只有页面上真的能看见这次提交才算数。
+        # 只是"没报错"不等于"交上去了"，所以这里区分两种说法。
+        if self._confirm_submitted(client, task_path, filename):
+            return f"已提交：{filename}（ManageBac 页面已显示）"
+        return f"已提交：{filename}（ManageBac 页面暂未回显，建议到网页确认一下）"
+
+    def _confirm_submitted(self, client, task_path: str, filename: str,
+                           tries: int = 2) -> bool:
+        """提交后回读任务页，看状态徽章 / Dropbox 文案里有没有这次的文件名。"""
+        from ..managebac import parse as mbparse
+        name = (filename or "").lower()
+        for i in range(max(1, tries)):
+            try:
+                page = client._get(task_path)
+            except Exception:  # noqa: BLE001  回读失败不算提交失败
+                return False
+            try:
+                d = mbparse.extract_task_detail(page.text)
+            except Exception:  # noqa: BLE001
+                return False
+            blob = " ".join(str(d.get(k) or "") for k in
+                            ("status", "dropbox", "due_badge")).lower()
+            if name and name in blob:
+                return True
+            if any(w in blob for w in ("submitted", "uploaded", "received",
+                                       "已提交", "已上传")):
+                return True
+            if i + 1 < tries:
+                _time.sleep(1.0)
+        return False
 
 
 # ================================================================ 心履
