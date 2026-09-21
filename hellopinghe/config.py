@@ -39,6 +39,35 @@ class AgentProvider:
     notes: str = ""                # 备注:模型名以各家文档为准,可自行修改
 
 
+def _ai_content(ai: dict) -> str:
+    """ai 段里"算配置"的那部分(排除同步元信息), 用来判断配置到底动没动。"""
+    ai = ai if isinstance(ai, dict) else {}
+    return json.dumps({
+        "providers": ai.get("providers") or [],
+        "active_provider_id": ai.get("active_provider_id") or "",
+        "active_model": ai.get("active_model") or "",
+    }, ensure_ascii=False, sort_keys=True)
+
+
+def _stamp_ai(ai: dict, previous: dict | None) -> dict:
+    """给 ai 段盖 ``updated_at`` / ``updated_by``。
+
+    三端(网页端 / PLL / PHL)写同一个同步对象 ``settings.ai``, 合并时要靠"谁什么时候
+    改的"判断该听谁的 —— 所以**真正改动配置的那一次**必须记下来。配置内容没变就
+    **不刷新时间戳**: 否则每存一次设置都算"刚改过", 三端会互相追着改时间戳, 永远收敛
+    不了(PLL 的同步引擎也会每轮都以为本地变了而空推一份)。
+
+    ``updated_by`` 只在本地真的改了配置时写 ``pll``; 从云端拉下来的配置自带
+    ``updated_by``(例如 ``web``/``phl``), 原样保留。
+    """
+    out = dict(ai or {})
+    prev = previous if isinstance(previous, dict) else {}
+    if _ai_content(out) != _ai_content(prev) or not out.get("updated_at"):
+        out["updated_at"] = fs.now_iso()
+        out["updated_by"] = "pll"
+    return out
+
+
 #: 内置供应商预设。model 只是合理默认值,全部可改。
 PROVIDER_PRESETS: dict[str, AgentProvider] = {
     "deepseek": AgentProvider(
@@ -141,11 +170,17 @@ class Config:
         accounts.setdefault("xinlv", {})
         accounts["xinlv"]["username"] = self.xinlv_username
         doc["lessons"] = [dict(x) for x in (self.selected_lessons or [])]
-        doc["ai"] = {
+        # `ai` 段**除了本文档负责的三个字段之外的东西必须留住**(2026-09-13 三端统一):
+        # 同步对象 settings.ai 是规范形态, 落回本地时还会带 updated_at/updated_by
+        # 这类同步元信息 —— 一次"保存其它设置"就把它抹掉的话, 下一轮同步又会看到
+        # "本地变了"而空推一份配置。见 `_ai_raw`。
+        ai_doc = dict(getattr(self, "_ai_raw", None) or {})
+        ai_doc.update({
             "providers": [dict(p) for p in (self.ai_providers or [])],
             "active_provider_id": self.agent_provider_id,
             "active_model": self.agent_model,
-        }
+        })
+        doc["ai"] = ai_doc
         doc["agent"] = {
             "workspace": self.agent_workspace,
             "workspaces": list(self.agent_workspaces or []),
@@ -161,7 +196,24 @@ class Config:
 
     def save(self) -> None:
         def mutate(doc):
-            return self.to_doc(doc)
+            # **保险**: 云同步(PLL 自己的同步引擎, 或同步时被别的端写进来的配置)会
+            # 直接改磁盘上的 ai 段, 不会经过内存里这份 Config。若这时内存里
+            # ai_providers 还是空的(用户只是改了个工作区), to_doc 会把刚同步下来的
+            # 服务商列表清空 —— 那是**用户数据的静默丢失**。
+            # 所以落盘前先看一眼文档里现有的 ai 段: 内存里没有服务商时就以文档为准。
+            on_disk = doc.get("ai")
+            if isinstance(on_disk, dict) and on_disk.get("providers") and not self.ai_providers:
+                self.ai_providers = list(on_disk["providers"])
+                self.agent_provider_id = on_disk.get("active_provider_id") or ""
+                self.agent_model = on_disk.get("active_model") or ""
+                self._ai_raw = dict(on_disk)
+            out = self.to_doc(doc)
+            out["ai"] = _stamp_ai(out.get("ai"), getattr(self, "_ai_raw", None))
+            if isinstance(out.get("ai"), dict):
+                # 把刚落盘的 ai 段记下来, 供下一次 save() 复用(其它字段不能因为
+                # "保存别的设置"而消失)。
+                self._ai_raw = dict(out["ai"])
+            return out
 
         fs.update_settings(mutate)
 
@@ -189,7 +241,7 @@ class Config:
         ai = doc.get("ai") or {}
         ag = doc.get("agent") or {}
         ui = doc.get("ui") or {}
-        return cls(
+        cfg = cls(
             managebac_base_url=(mb.get("base_url") or "").strip(),
             managebac_email=(mb.get("email") or "").strip(),
             edupage_username=(ep.get("username") or "").strip(),
@@ -211,6 +263,10 @@ class Config:
             send_grades_to_llm=bool(ag.get("send_grades_to_llm")),
             ddl_notify_days=int(ag.get("ddl_notify_days") or 3),
         )
+        # 原样的 ai 段留一份: 同步元信息(updated_at/updated_by)与以后新增的字段
+        # 不该因为"保存其它设置"被 to_doc 重新拼装时丢掉。
+        cfg._ai_raw = dict(ai) if isinstance(ai, dict) else {}
+        return cfg
 
     def active_provider(self) -> dict:
         for p in self.ai_providers:

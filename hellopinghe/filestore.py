@@ -175,20 +175,21 @@ def settings_path() -> Path:
     return root() / SETTINGS
 
 
-def load_settings() -> dict:
-    return load_yaml(settings_path(), {}) or {}
+def load_settings_at(path) -> dict:
+    """按**显式路径**读 settings.yaml（云同步等要操作副本/其它数据根时用）。"""
+    return load_yaml(Path(path), {}) or {}
 
 
-def update_settings(mutate) -> dict:
-    """settings.yaml 的读-改-写(加锁); ``mutate(doc)`` 直接改并返回/返回 None."""
-    path = settings_path()
+def update_settings_at(path, mutate) -> dict:
+    """按**显式路径**读-改-写 settings.yaml（加锁 + 原子替换 + 收紧权限）。"""
+    import yaml
+
+    path = Path(path)
     with _lock_for(path):
         doc = load_yaml(path, {}) or {}
         out = mutate(doc)
         if out is None:
             out = doc
-        import yaml
-
         text = yaml.safe_dump(out, allow_unicode=True, sort_keys=False,
                               default_flow_style=False)
         _atomic_write(path, text)
@@ -197,6 +198,15 @@ def update_settings(mutate) -> dict:
         except Exception:  # noqa: BLE001
             pass
         return out
+
+
+def load_settings() -> dict:
+    return load_settings_at(settings_path())
+
+
+def update_settings(mutate) -> dict:
+    """settings.yaml 的读-改-写(加锁); ``mutate(doc)`` 直接改并返回/返回 None."""
+    return update_settings_at(settings_path(), mutate)
 
 
 # ---------------------------------------------------------------- 旧数据搬迁
