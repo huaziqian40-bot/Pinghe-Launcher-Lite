@@ -97,6 +97,30 @@ def _ensure_webview2() -> None:
             "https://developer.microsoft.com/microsoft-edge/webview2/")
 
 
+def _tune_window_soon(*_args: object) -> None:
+    """窗口出现后把"无边框窗口"调成能缩放、任务栏正常的状态。
+
+    用户 2026-09-21：「那个窗口控件很别扭，能不能不要是一个单独的框，而是像 PHL 一样
+    是软件的一部分」—— 于是窗口改成 `frameless=True`（系统不画标题栏），
+    最小化/最大化/关闭三个按钮改由界面自己画（见 ui/index.html 的 .titlebar）。
+    无边框窗口默认**不能拉边缩放**，所以要在这里补 `WS_THICKFRAME`。
+
+    pywebview 在**新线程**里回调这个函数，所以先等窗口真的出现；任何一步失败都安静放过
+    （窗口观感问题绝不该影响启动）。
+    """
+    if sys.platform != "win32":
+        return
+    try:
+        import time
+
+        from . import window_chrome
+
+        time.sleep(0.4)
+        window_chrome.apply(None)
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def main() -> None:
     smoke = "--smoke" in sys.argv
 
@@ -153,8 +177,15 @@ def main() -> None:
             width=1340,
             height=860,
             min_size=(1080, 720),
-            background_color="#fbfaf6",
+            # 无边框：窗口控件由界面自己画（用户 2026-09-21 要求，像 PHL 那样是软件的一部分）。
+            # 缩放能力由 window_chrome.apply() 补 WS_THICKFRAME 找回来。
+            frameless=True,
+            # 开机画面是墨绿的（2026-09-20 用户要求，三端统一）：窗口底色也用同一个墨绿，
+            # 否则 WebView2 把 HTML 画出来之前会先闪一下白屏。
+            background_color="#102d25",
         )
+        # 窗口控件（自绘的最小化/最大化/关闭）需要窗口对象
+        api.attach_window(window)
     except Exception as exc:  # noqa: BLE001
         _log_error("启动失败", exc)
         sys.exit(1)
@@ -214,6 +245,19 @@ def main() -> None:
 
         threading.Thread(target=_backup_soon, name="auto-backup", daemon=True).start()
 
+    # 自动化专用：启动 N 秒后自己优雅退出（`--quit-after 90`）。
+    # 为什么要它：脚本用强制杀进程收尾时，pystray 来不及注销托盘图标，
+    # Windows 会把图标当成"幽灵"留在通知区域 —— 用户看到的就是"一大堆同一个软件
+    # 的图标，点开之后一个个消失"（2026-09-20 实测）。让程序自己退，托盘才干净。
+    quit_after = 0
+    if "--quit-after" in sys.argv:
+        try:
+            quit_after = max(0, int(float(sys.argv[sys.argv.index("--quit-after") + 1])))
+        except (IndexError, ValueError):
+            quit_after = 0
+    if quit_after:
+        threading.Timer(quit_after, _quit).start()
+
     if smoke:
         def close_later():
             time.sleep(5)
@@ -236,7 +280,7 @@ def main() -> None:
         threading.Thread(target=close_later, daemon=True).start()
 
     try:
-        webview.start()
+        webview.start(_tune_window_soon)
     except Exception as exc:  # noqa: BLE001
         _log_error("运行时崩溃", exc)
         sys.exit(1)

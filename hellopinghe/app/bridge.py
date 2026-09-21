@@ -15,8 +15,24 @@ from ..config import Config
 from ..exceptions import LoginRequiredError, PingheError
 from ..logutil import warn as _log_warn, error as _log_error
 from .. import sharedschool as _sharedschool
+from .. import cloudsync as _cs
+from .. import filestore as fs
+from .. import phixsession as _phix
 from .agent import AgentEngine, detect_ai_environment
 from .services import Services, secret_set, secret_get
+
+
+def _phix_call(fn, *args, **kwargs) -> dict:
+    """phix 系列方法的错误包装：把 PhixError 翻成带 code 的友好中文。"""
+    try:
+        data = fn(*args, **kwargs)
+        return {"ok": True, "data": data}
+    except _cs.PhixError as exc:
+        _log_warn(f"phix: {exc.code}: {exc.message}")
+        return {"ok": False, "error": exc.message, "code": exc.code}
+    except Exception as exc:  # noqa: BLE001
+        _log_error(f"phix error: {type(exc).__name__}: {exc}")
+        return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
 
 # ---------------------------------------------------------------- 数据快照缓存
 # 进程内 TTL 缓存: 同一份数据(首页/课表/课程/邮件列表)短时间重复请求零等待,
@@ -129,10 +145,79 @@ def _wrap(fn, *args, **kwargs) -> dict:
 
 
 class Api:
+    #: phix 登录态只从本机令牌恢复一次（见 `phix_status`）
+    _phix_restored = False
+
     def __init__(self):
         self.cfg = Config.load()
         self.svc = Services(self.cfg)
         self.agent = AgentEngine(self.cfg, self.svc)
+        #: 主窗口引用（`__main__` 创建好后通过 attach_window 挂进来）——窗口控件要用它。
+        #: **必须是下划线开头**：pywebview 会把 js_api 对象的公开属性递归展开成 JS 接口，
+        #: 公开一个 Window 对象会让它去遍历 `window.native.*` 直接爆栈（实测踩过）。
+        self._window = None
+
+    def attach_window(self, window) -> None:
+        """把 pywebview 的窗口对象挂进来（最小化/最大化/关闭按钮要用）。"""
+        self._window = window
+
+    # ================================================================ 窗口控件
+    # 无边框窗口（用户 2026-09-21 要求：窗口控件要是软件自己的一部分）：
+    # 界面自己画那三个按钮，动作全落到下面这几个方法上。
+    def win_minimize(self) -> dict:
+        try:
+            if self._window is not None:
+                self._window.minimize()
+        except Exception as exc:  # noqa: BLE001
+            return {"ok": False, "error": str(exc)}
+        return {"ok": True}
+
+    def win_maximize_toggle(self) -> dict:
+        try:
+            from . import window_chrome
+
+            state = window_chrome.maximize_toggle(self._window)
+            return {"ok": True, "maximized": state}
+        except Exception as exc:  # noqa: BLE001
+            return {"ok": False, "error": str(exc), "maximized": False}
+
+    def win_state(self) -> dict:
+        try:
+            from . import window_chrome
+
+            return {"ok": True, "maximized": window_chrome.is_maximized()}
+        except Exception:  # noqa: BLE001
+            return {"ok": False, "maximized": False}
+
+    def win_drag_start(self) -> dict:
+        """自绘标题栏上按下鼠标 → 走系统原生拖动（带 Aero Snap）。"""
+        try:
+            from . import window_chrome
+
+            return {"ok": bool(window_chrome.drag_start())}
+        except Exception as exc:  # noqa: BLE001
+            return {"ok": False, "error": str(exc)}
+
+    def win_close(self) -> dict:
+        """✕ = 关窗进托盘（与窗口右上角原来的 × 行为一致，见 __main__ 的 _on_closing）。"""
+        try:
+            if self._window is not None:
+                self._window.hide()
+        except Exception as exc:  # noqa: BLE001
+            return {"ok": False, "error": str(exc)}
+        return {"ok": True}
+
+    def win_get_bounds(self) -> dict:
+        """界面开始拖边缘把手时取一次当前位置/大小。"""
+        from . import window_chrome
+
+        return window_chrome.get_bounds()
+
+    def win_set_bounds(self, x: int, y: int, width: int, height: int) -> dict:
+        """界面的边缘把手用它缩放（无边框 + 不加 THICKFRAME，所以自己实现缩放）。"""
+        from . import window_chrome
+
+        return window_chrome.set_bounds(x, y, width, height)
 
     def _save_cfg(self) -> None:
         self.cfg.save()
@@ -465,6 +550,7 @@ class Api:
             for l in lessons:
                 t = l.start_time.strftime("%H:%M") if l.start_time else "??"
                 slots.setdefault(t, []).append({
+                    "start": t, "end": (l.end_time.strftime("%H:%M") if l.end_time else ""),
                     "subject": l.subject.name if l.subject else "?",
                     "teacher": l.teachers[0].name if l.teachers else "-",
                     "room": l.classrooms[0].name if l.classrooms else "",
@@ -472,7 +558,11 @@ class Api:
                     "classes": [getattr(c, "name", "") for c in (l.classes or [])],
                     "cancelled": bool(l.is_cancelled),
                 })
-            ordered = [{"time": t, "lessons": slots[t]} for t in sorted(slots)]
+            # 国家理科：同一格里的国家物理/化学/生物是同一门课的轮换卡，班级课表也合并成一条
+            # （用户 2026-09-21：「就显示一个」）。其它卡片原样不动。
+            from .services import merge_native_science
+
+            ordered = [{"time": t, "lessons": merge_native_science(slots[t])} for t in sorted(slots)]
             out = {"day": day.isoformat(), "count": len(lessons), "slots": ordered}
             _snap_put(key, out)
             return out
@@ -548,6 +638,205 @@ class Api:
 
     def xinlv_profile(self) -> dict:
         return _wrap(lambda: self.svc.xinlv.profile())
+
+    # ================================================================ phix 统一账号 + 云同步
+    #
+    # 这一组方法与四平台无关：phix 是把「心履」和「PH Launcher / PLL」打通的**同一套账号**。
+    # 登录后 DEK 只留在内存里（进程退出就没了），云端只存密文，服务端解不开。
+    # 细节见 D:\phix\phix-协议规范.md。
+    def phix_status(self) -> dict:
+        def job():
+            # 第一次问状态时先把本机存着的令牌接回来 —— 否则程序重启后
+            # `logged_in` 恒为 False，设置页会**又显示登录框**（用户实测报的现象），
+            # 自动同步也永远不启动。恢复不发网络请求，很便宜。
+            if not Api._phix_restored:
+                Api._phix_restored = True
+                try:
+                    _phix.SESSION.restore()
+                except Exception as exc:  # noqa: BLE001  恢复失败不影响展示状态
+                    _log_warn(f"phix 登录状态恢复失败（会显示成未登录）：{exc}")
+            return _phix.SESSION.status()
+        return _phix_call(job)
+
+    def phix_ping(self, server: str = "") -> dict:
+        def job():
+            # 空地址 = 自动选择（内网自建 → phix.ing）——界面不让用户填服务器地址，
+            # 见 phixsession.resolve_server() 的注释。
+            client = _cs.PhixClient(_phix.resolve_server(server))
+            info = client.ping()
+            return {
+                "server": client.server,
+                "version": info.get("version"),
+                "server_time": info.get("server_time"),
+                "service_verify_enabled": info.get("service_verify_enabled"),
+                "limits": info.get("limits"),
+            }
+        return _phix_call(job)
+
+    def phix_resolve_server(self) -> dict:
+        """界面用：把"会自动连哪台服务器"报回去（探测失败也不抛异常）。"""
+        return _phix.server_probe()
+
+    def phix_register(self, server: str, username: str, password: str,
+                      key_mode: str = "password") -> dict:
+        return _phix_call(lambda: _phix.SESSION.register(
+            server, username, password, key_mode or "password"))
+
+    def phix_login(self, server: str, username: str, password: str,
+                   sync_passphrase: str = "") -> dict:
+        return _phix_call(lambda: _phix.SESSION.login(
+            server, username, password, (sync_passphrase or "").strip() or None))
+
+    def phix_unlock(self, sync_passphrase: str) -> dict:
+        return _phix_call(lambda: _phix.SESSION.unlock(sync_passphrase))
+
+    def phix_logout(self) -> dict:
+        return _phix_call(lambda: _phix.SESSION.logout())
+
+    def phix_sync(self, force: bool = False, prefer: str = "merge") -> dict:
+        """`prefer`：`merge` / `local`（本地覆盖云端）/ `remote`（云端覆盖本地）。"""
+        def job():
+            report = _phix.SESSION.sync(force=bool(force),
+                                        prefer=(prefer or "merge"))
+            return {"report": report, "summary": _phix._brief(report),
+                    "status": _phix.SESSION.status()}
+        return _phix_call(job)
+
+    def phix_sync_probe(self) -> dict:
+        """登录后判断要不要问用户"用本地覆盖云端 / 用云端覆盖本地"。
+
+        返回 `{needs_choice, both:[对象名], objects:{名:{local,remote}}}`。
+        只读，不写任何同步文件，登录成功后立刻调是安全的。
+        """
+        return _phix_call(lambda: _phix.SESSION.sync_probe())
+
+    def phix_sync_preview(self, prefer: str = "merge") -> dict:
+        """只算不写：让用户先看清楚这轮会拉什么、推什么。"""
+        def job():
+            report = _phix.SESSION.sync(force=True, dry_run=True,
+                                        prefer=(prefer or "merge"))
+            return {"report": report, "summary": _phix._brief(report)}
+        return _phix_call(job)
+
+    def phix_conflicts(self) -> dict:
+        def job():
+            st = _phix.SESSION.status()
+            return {"conflicts": (st.get("state") or {}).get("conflicts") or []}
+        return _phix_call(job)
+
+    def phix_settings_save(self, payload_json: str) -> dict:
+        def job():
+            payload = json.loads(payload_json or "{}")
+            changes = {}
+            if "auto_sync" in payload:
+                changes["auto_sync"] = bool(payload["auto_sync"])
+            if payload.get("sync_interval_minutes"):
+                changes["sync_interval_minutes"] = max(
+                    2, int(payload["sync_interval_minutes"]))
+            if isinstance(payload.get("objects"), list):
+                changes["objects"] = [str(x) for x in payload["objects"]]
+            if payload.get("device"):
+                changes["device"] = str(payload["device"])[:100]
+            if changes:
+                _phix.save_config(**changes)
+            if changes.get("auto_sync") is False:
+                _phix.SESSION.stop_auto_sync()
+            elif _phix.SESSION.dek is not None:
+                _phix.SESSION.start_auto_sync()
+            return _phix.SESSION.status()
+        return _phix_call(job)
+
+    def phix_devices(self) -> dict:
+        """本账号的登录设备（会话）列表 —— P3 的 `/auth/devices`。
+
+        返回 `{sessions, devices, access_ttl, refresh_ttl}`：
+        `sessions` 是正式形态（一次登录 = 一个会话），`devices` 是兼容期的老式令牌。
+        服务端**不下发** refresh 明文，这里只是转发。
+        """
+        return _phix_call(lambda: _phix.SESSION.devices())
+
+    def phix_revoke_device(self, session_id: int = 0,
+                           all_except_current: bool = False) -> dict:
+        """注销某一台设备（会话）；`all_except_current=True` = 注销本机以外的全部。
+
+        返回**注销后**的设备列表，界面直接重绘即可。
+        """
+        return _phix_call(lambda: _phix.SESSION.revoke_device(
+            session_id=int(session_id) if session_id else None,
+            all_except_current=bool(all_except_current)))
+
+    def phix_set_passphrase(self, login_password: str, sync_passphrase: str) -> dict:
+        """切到"独立同步口令"：以后连服务端都解不开你的数据。"""
+        return _phix_call(lambda: _phix.SESSION.set_sync_passphrase(
+            login_password, sync_passphrase))
+
+    def phix_change_password(self, old_password: str, new_password: str) -> dict:
+        return _phix_call(lambda: _phix.SESSION.change_password(
+            old_password, new_password))
+
+    def phix_use_login_password(self, login_password: str,
+                                new_login_password: str = "") -> dict:
+        """从"独立同步口令"切回"用登录密码包裹"。"""
+        return _phix_call(lambda: _phix.SESSION.use_login_password(
+            login_password, new_login_password))
+
+    def phix_recover(self, server: str, username: str, recovery_code: str,
+                     new_password: str) -> dict:
+        """忘记密码：用恢复码重设。不需要旧密码、不需要先登录。"""
+        return _phix_call(lambda: _phix.recover(
+            server, username, recovery_code, new_password))
+
+    def phix_open_data_dir(self) -> dict:
+        def job():
+            d = fs.root() / _cs.SYNC_DIR
+            target = d if d.exists() else fs.root()
+            try:
+                os.startfile(str(target))  # noqa: S606  Windows 打开资源管理器
+            except Exception as exc:  # noqa: BLE001
+                return {"path": str(target), "opened": False, "error": str(exc)}
+            return {"path": str(target), "opened": True}
+        return _wrap(job)
+
+    def phix_profile_get(self) -> dict:
+        """读取 profile 同步对象（头像 / 显示名）。"""
+        def job():
+            import json as _json
+            from datetime import datetime, timezone
+            p = fs.root() / "Profile"
+            doc = fs.load_json(p, None) or {}
+            return {
+                "display_name": doc.get("display_name") or "",
+                "avatar": doc.get("avatar") or "",
+                "updated_at": doc.get("updated_at") or "",
+            }
+        return _wrap(job)
+
+    def phix_profile_save(self, payload_json: str) -> dict:
+        """写入 profile 同步对象并推一次同步（若已登录）。"""
+        def job():
+            import json as _json
+            from datetime import datetime, timezone
+            payload = _json.loads(payload_json or "{}")
+            p = fs.root() / "Profile"
+            doc = fs.load_json(p, None) or {}
+            if "display_name" in payload:
+                doc["display_name"] = str(payload["display_name"])[:50]
+            if "avatar" in payload:
+                doc["avatar"] = str(payload["avatar"])
+            doc["updated_at"] = datetime.now(timezone.utc).isoformat()
+            fs.save_json(p, doc)
+            # 若已登录 phix，推一次同步让 profile 上云
+            if _phix.SESSION.dek is not None:
+                try:
+                    _phix.SESSION.sync(force=True, objects=["profile"])
+                except Exception:  # noqa: BLE001
+                    pass
+            return {
+                "display_name": doc.get("display_name") or "",
+                "avatar": doc.get("avatar") or "",
+                "updated_at": doc.get("updated_at") or "",
+            }
+        return _wrap(job)
 
     def xinlv_catalog(self, force: bool = False) -> dict:
         return _wrap(lambda: self.svc.xinlv.catalog(bool(force)))
@@ -786,6 +1075,36 @@ class Api:
             return out
         return _wrap(job)
 
+    # ---- CAS / EE：软件内提交（表单字段由页面自己决定，不猜路由） ----
+    def core_forms(self, kind: str = "cas") -> dict:
+        """页面上真实存在的可提交表单（只读）。界面据此渲染真表单。"""
+        return _wrap(lambda: self.svc.courses.core_forms(kind))
+
+    def core_submit(self, kind: str, payload_json: str) -> dict:
+        """提交一份 CAS / EE 记录；`payload_json` = {form_index, values, file_path}。"""
+        def job():
+            out = self.svc.courses.core_submit(kind, payload_json)
+            # 概览快照作废，回列表时是最新的
+            _snap_drop("cas" if kind != "ee" else "ee")
+            return out
+        return _wrap(job)
+
+    def core_pick_file(self) -> dict:
+        """为 CAS / EE 表单挑一个附件（只挑，不提交）。
+
+        取消选择同样走 `{"ok": True, ...}` 信封 —— 前端 `call()` 只认 `ok===true`，
+        否则"点了取消"会显示成"调用失败"。
+        """
+        import webview
+
+        picked = webview.windows[0].create_file_dialog(
+            webview.OPEN_DIALOG, allow_multiple=False)
+        if not picked:
+            return {"ok": True, "data": {"cancelled": True}}
+        path = str(picked[0])
+        return {"ok": True, "data": {"cancelled": False, "path": path,
+                                     "name": os.path.basename(path)}}
+
     def open_external(self, url: str) -> dict:
         """用系统默认浏览器打开 ManageBac 页面/文件下载链接(只放行 http/https)."""
         def job():
@@ -806,7 +1125,10 @@ class Api:
         picked = webview.windows[0].create_file_dialog(
             webview.OPEN_DIALOG, allow_multiple=False)
         if not picked:
-            return {"cancelled": True}
+            # 必须是 `{"ok": True, ...}` 完整信封：前端 `call()` 只认 `ok===true`，
+            # 之前直接返回 `{"cancelled": True}` 会让"用户点了取消"显示成
+            # "调用失败"，前端那句 `if (r.cancelled)` 是永远走不到的死代码。
+            return {"ok": True, "data": {"cancelled": True}}
         path = str(picked[0])
 
         def job():
@@ -814,7 +1136,8 @@ class Api:
             # 详情/列表缓存作废, 下次打开看到最新提交状态
             _snap_drop(f"tdetail|{class_id}|{task_id}")
             _snap_drop("courses", "home")
-            return {"submitted": True, "message": msg, "path": path}
+            return {"cancelled": False, "submitted": True, "message": msg,
+                    "path": path}
         return _wrap(job)
 
     def refresh_tasks(self) -> dict:
@@ -1003,6 +1326,18 @@ class Api:
 
     def ai_get(self) -> dict:
         def job():
+            # 供应商配置可能刚被**云同步**从别的端(网页端 / PHL)写进 settings.yaml。
+            # 不重读的话界面显示的还是启动时那一份, 用户会以为"同步没生效"。
+            # 只重读磁盘上这份文档, 不碰任何凭据。
+            try:
+                fresh = Config.load()
+                self.cfg.ai_providers = fresh.ai_providers
+                self.cfg.agent_provider_id = fresh.agent_provider_id
+                self.cfg.agent_model = fresh.agent_model
+                if isinstance(getattr(fresh, "_ai_raw", None), dict):
+                    self.cfg._ai_raw = dict(fresh._ai_raw)
+            except Exception:  # noqa: BLE001  读不到就用内存里这份, 绝不阻塞界面
+                pass
             providers = []
             for p in self.cfg.ai_providers:
                 providers.append({
@@ -1081,7 +1416,8 @@ class Api:
         picked = webview.windows[0].create_file_dialog(
             webview.FOLDER_DIALOG)
         if not picked:
-            return {"cancelled": True}
+            # 同 task_pick_and_submit：取消也要走 `ok` 信封，否则前端报"调用失败"
+            return {"ok": True, "data": {"cancelled": True}}
 
         def job():
             path = str(picked[0])
