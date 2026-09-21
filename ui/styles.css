@@ -31,6 +31,38 @@ a{color:var(--green-700)}
 .chk{display:flex;align-items:center;gap:6px;color:var(--ink-2)}
 
 /* ---------- 布局 ---------- */
+/* 窗口是 frameless 的：右上角那三个按钮由界面自己画（用户 2026-09-21 要求）。
+   **不占布局**（fixed + 只盖住右上角），所以侧栏能一直顶到窗口最上面，不留空条；
+   也不给左边涂色 —— 之前那条"墨绿块 + 38px 让位"就是用户说的"上面空着一块"。 */
+.titlebar{position:fixed;top:0;right:0;z-index:300;display:flex;background:transparent}
+.win-buttons{display:flex;align-items:stretch}
+.win-btn{width:46px;height:38px;display:grid;place-items:center;background:transparent;border:none;
+  border-radius:0;color:var(--ink-2);transition:background .12s ease,color .12s ease}
+.win-btn svg{width:10px;height:10px;fill:none;stroke:currentColor;stroke-width:1.1;
+  stroke-linecap:round}
+.win-btn:hover{background:rgba(24,35,30,.08);color:var(--ink)}
+.win-btn.close:hover{background:#e81123;color:#fff}
+/* 开机画面期间按钮转浅色（墨绿底上才看得见） */
+body.booting .win-btn{color:var(--ivory-50);opacity:.8}
+body.booting .win-btn:hover{background:rgba(255,255,255,.16);opacity:1}
+body.booting .win-btn.close:hover{background:#e81123;opacity:1}
+
+/* 缩放把手：无边框窗口不加 WS_THICKFRAME（它会围出一圈白边），所以四周自己放 8 个透明条。
+   只有 5px 宽、压在内容之上但不挡点击以外的操作（拖动时才吞事件）。 */
+.rz{position:fixed;z-index:290}
+.rz-n{top:0;left:8px;right:8px;height:5px;cursor:n-resize}
+.rz-s{bottom:0;left:8px;right:8px;height:5px;cursor:s-resize}
+.rz-w{left:0;top:8px;bottom:8px;width:5px;cursor:w-resize}
+.rz-e{right:0;top:8px;bottom:8px;width:5px;cursor:e-resize}
+.rz-nw{left:0;top:0;width:10px;height:10px;cursor:nw-resize}
+.rz-ne{right:0;top:0;width:10px;height:10px;cursor:ne-resize}
+.rz-sw{left:0;bottom:0;width:10px;height:10px;cursor:sw-resize}
+.rz-se{right:0;bottom:0;width:10px;height:10px;cursor:se-resize}
+body.resizing,body.resizing *{cursor:inherit!important;user-select:none!important}
+
+/* 可拖动区域（侧栏空白处 + 页面标题那一行）：按下走系统原生拖动，见 app.js 的 bindWindowControls */
+.drag-zone{-webkit-user-select:none;user-select:none}
+
 #app{display:flex;height:100%}
 .sidebar{width:var(--side-w);background:linear-gradient(180deg,var(--green-900),var(--green-950));
   color:var(--ivory-50);display:flex;flex-direction:column;padding:18px 12px}
@@ -47,6 +79,8 @@ a{color:var(--green-700)}
 #nav button:hover{background:rgba(255,255,255,.08)}
 #nav button.active{background:var(--ivory-50);color:var(--green-900);font-weight:600}
 .side-foot{font-size:11px;opacity:.55;text-align:center}
+/* 数据时间那行小字（刷新/同步全自动，界面上没有按钮，只留这一行不起眼的提示） */
+.data-stamp{margin-top:3px;font-size:10.5px;opacity:.85;font-variant-numeric:tabular-nums}
 
 .main{flex:1;overflow:auto;padding:22px 28px 40px}
 .topbar{display:flex;align-items:center;justify-content:space-between;margin-bottom:18px}
@@ -108,6 +142,9 @@ a{color:var(--green-700)}
 .move-btn:hover{opacity:1;color:var(--green-800);background:var(--green-50);transform:none}
 
 /* ---------- 课程列表(课程+总评合并)与课程详情弹卡 ---------- */
+/* 课程栏 / 作业栏: 垂直方向更紧凑(只作用于这两个列表, 不影响其它页面的 .item) */
+#co-classes .item, #co-tasks .item{padding:5px 11px}
+#co-classes.list, #co-tasks.list{gap:5px}
 .course-row{cursor:pointer}
 .course-row:hover{border-color:var(--green-700);transform:translateY(-1px)}
 .course-row.dragging{background:var(--green-900);color:var(--white);
@@ -167,7 +204,7 @@ a{color:var(--green-700)}
 .danger{background:var(--wine-100);color:var(--wine-700);padding:6px 12px}
 
 /* ---------- 课表(按节次对齐: 行=时段, 列=星期) ---------- */
-.tt-grid{display:grid;grid-template-columns:62px repeat(7,1fr);gap:5px;align-items:stretch;
+.tt-grid{display:grid;grid-template-columns:62px repeat(7,1fr);gap:4px;align-items:stretch;
   position:relative}
 .tt-head{font-size:12.5px;font-weight:650;color:var(--ink-2);text-align:center;padding:4px 0}
 .tt-head.today{color:var(--gold-600)}
@@ -181,15 +218,15 @@ a{color:var(--green-700)}
   padding-right:6px;font-size:11px;color:var(--ink-3);font-variant-numeric:tabular-nums}
 .tt-time b{font-size:12px;color:var(--ink-2)}
 .tt-cell{background:var(--white);border:1px solid var(--border);border-radius:8px;
-  min-height:46px;padding:3px;display:flex;flex-direction:column;gap:3px;
+  min-height:30px;padding:2px;display:flex;flex-direction:column;gap:2px;
   animation:rise .25s ease both}
 .tt-cell.rest{background:var(--ivory-100)}
 .tt-restbar{background:var(--ivory-100);border:1px dashed var(--border);border-radius:8px;
   padding:6px 12px;font-size:12px;color:var(--ink-3);display:flex;align-items:center;gap:8px}
 .tt-lesson{background:var(--tbg,var(--green-50));border-left:3px solid var(--tfg,var(--green-700));
-  color:var(--tfg,var(--ink));border-radius:6px;padding:4px 6px;font-size:11.5px;
+  color:var(--tfg,var(--ink));border-radius:6px;padding:2px 6px;font-size:11px;line-height:1.25;
   flex:1;min-height:0;overflow:hidden;cursor:pointer}
-.tt-lesson b{display:block;font-size:12px}
+.tt-lesson b{display:block;font-size:11.5px;line-height:1.25}
 .tt-lesson.cancelled{opacity:.5;text-decoration:line-through}
 .tt-lesson .rm{color:inherit;opacity:.72;font-size:10.5px}
 .tt-lesson.tt-hl{outline:2px solid var(--tfg,var(--green-700));outline-offset:-2px;
@@ -233,7 +270,10 @@ a{color:var(--green-700)}
   animation:pop .18s cubic-bezier(.2,.7,.3,1)}
 
 /* ---------- 邮件 ---------- */
-.mail-split{display:grid;grid-template-columns:380px 1fr;gap:16px;height:calc((100vh - 220px) / var(--ap-zoom,1))}
+/* 左右两栏按**黄金比**分宽：正文占 61.8%、列表占 38.2%（用户 2026-09-21 要求，
+   不再是一比一）。`minmax(280px,…)` 给列表一个下限：窗口很窄时先保住列表可读，
+   比例自动向列表倾斜，而不是把它压成一条缝。 */
+.mail-split{display:grid;grid-template-columns:minmax(280px,1fr) 1.618fr;gap:16px;height:calc((100vh - 220px) / var(--ap-zoom,1))}
 .mail-list{overflow:auto;margin:0;padding:8px}
 .mail-item{padding:9px 10px;border-radius:var(--radius-sm);cursor:pointer}
 .mail-item:hover{background:var(--ivory-100)}
@@ -352,12 +392,16 @@ textarea{width:100%;resize:vertical}
 .composer{position:sticky;bottom:0;margin-top:12px;box-shadow:var(--shadow-md)}
 .composer textarea{width:100%;resize:vertical}
 /* ---------- 启动连接页 ---------- */
-.splash-row{display:flex;align-items:center;gap:10px;padding:10px 4px;border-bottom:1px dashed var(--border)}
-.splash-row .sp-name{width:190px;font-weight:600}
-.splash-row .sp-status{flex:1;font-size:12.5px}
-.splash-row .sp-status.ok{color:var(--green-700)}
-.splash-row .sp-status.fail{color:var(--wine-700)}
-.splash-row button{padding:4px 10px;font-size:12px}
+/* 开机画面（2026-09-20 用户要求，三端统一）：墨绿底 + 中间 logo + 一根细进度条，
+   没有任何文字，像 Mac 开机。 */
+.splash-screen{position:fixed;inset:0;z-index:200;display:flex;flex-direction:column;
+  align-items:center;justify-content:center;gap:30px;background:#102d25}
+.splash-screen.hidden{display:none}
+.splash-logo{width:96px;height:96px;object-fit:contain;display:block;animation:splashIn .5s ease-out .1s both}
+.splash-bar{width:220px;height:4px;border-radius:999px;background:rgba(251,250,246,.16);overflow:hidden}
+.splash-bar>i{display:block;height:100%;width:0;border-radius:999px;background:var(--ivory-50);
+  transition:width .35s cubic-bezier(.22,.61,.36,1)}
+@keyframes splashIn{from{opacity:0;transform:scale(.94)}to{opacity:1;transform:scale(1)}}
 
 /* ---------- DDL 加粗 + 左滑删除 ---------- */
 .ddl-item{transition:transform .12s ease;touch-action:pan-y}
@@ -465,16 +509,6 @@ button,.chip,.item,.mail-item,.session-item,.file-item,.tt-lesson,.gt-lesson{
 #tt-wait{font-size:12px;color:var(--green-700);background:var(--green-50);
   border:1px solid var(--green-100);padding:2px 10px;border-radius:999px;animation:pulse 1.2s ease infinite}
 @keyframes pulse{50%{opacity:.45}}
-
-/* 启动连接页: 工作中行底部流光 */
-.splash-row{position:relative}
-.splash-row.working::after{content:"";position:absolute;left:0;bottom:-1px;height:2px;width:100%;
-  border-radius:2px;overflow:hidden;
-  background:linear-gradient(90deg,transparent,var(--green-700),transparent);
-  background-size:50% 100%;animation:slide 1.2s infinite linear}
-@keyframes slide{from{background-position:120% 0}to{background-position:-80% 0}}
-.splash-row .sp-status.working{color:var(--green-700)}
-.sp-status.ok,.sp-status.fail{animation:rise .2s ease}
 
 /* Agent 气泡浮入 */
 .bubble{animation:pop .18s cubic-bezier(.2,.7,.3,1)}
@@ -591,8 +625,32 @@ button,.chip,.item,.mail-item,.session-item,.file-item,.tt-lesson,.gt-lesson{
   font-weight:700;margin:8px 0;user-select:all;word-break:break-all}
 .phix-more{margin-top:12px}
 .phix-more>summary{cursor:pointer;font-weight:650;font-size:13px;color:var(--ink-2, #555)}
+/* 折叠块：「同步内容」与「登录设备」默认收起（用户 2026-09-21 要求）。
+   观感与「高级与安全设置」那条 summary 保持一致，标题前一个会转的小箭头，
+   标题后面括号里的数量在收起状态下也看得见。 */
+.phix-fold{margin:10px 0 4px}
+.phix-fold>summary{cursor:pointer;font-weight:650;font-size:13px;color:var(--ink-2,#555);
+  list-style:none;user-select:none;display:flex;align-items:center;gap:6px;padding:2px 0}
+.phix-fold>summary::-webkit-details-marker{display:none}
+.phix-fold>summary::before{content:"▸";font-size:11px;color:var(--ink-3,#888);
+  display:inline-block;transition:transform .15s ease}
+.phix-fold[open]>summary::before{transform:rotate(90deg)}
+.phix-fold>summary .muted{font-weight:400}
+.phix-fold>.phix-objs{margin:6px 0 4px 17px}
+.phix-fold>.form-row{margin-left:17px}
+.phix-fold>#phix-sessions-list{margin-left:17px}
 .phix-conflicts{margin-top:10px}
 .phix-conflicts .item{padding:6px 0;border-bottom:1px solid var(--border)}
+/* 冲突行：左边是说明，右边两个"哪边覆盖哪边"的按钮 */
+.phix-conflict{display:flex;align-items:center;gap:8px;flex-wrap:wrap;
+  padding:7px 0;border-bottom:1px solid var(--border);font-size:12.5px}
+.phix-conflict .grow{flex:1;min-width:160px}
+.phix-conflict .phix-cf-vals{display:block;color:var(--ink-3);font-size:11.5px;
+  margin-top:2px;word-break:break-all}
+.phix-conflict .danger{padding:2px 8px;font-size:11.5px}
+.phix-choice-btns{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}
+/* 方向选择要压在首次引导层之上（引导里也会登录，登录后就可能问方向） */
+#phix-choice{z-index:80}
 
 /* ---------- phix：网线加密状态徽标 ---------- */
 .phix-wire{border-radius:6px;padding:1px 8px;font-size:12px;white-space:nowrap}
@@ -608,6 +666,18 @@ button,.chip,.item,.mail-item,.session-item,.file-item,.tt-lesson,.gt-lesson{
   justify-content:center;font-size:22px;color:var(--ink-3)}
 .phix-avatar-info{flex:1;min-width:0}
 .phix-avatar-info .phix-avatar-name{font-weight:600;font-size:13px;color:var(--ink)}
+.phix-account-id{margin-top:2px;font-size:12px;color:var(--ink-3);
+  font-family:ui-monospace,Consolas,monospace;word-break:break-all}
+
+/* ---------- CAS / EE：软件内提交表单 ---------- */
+.core-forms{margin:6px 0 4px}
+.core-form-field{display:flex;gap:8px;align-items:flex-start;margin:5px 0}
+.core-form-field>label{width:120px;flex-shrink:0;font-size:12.5px;color:var(--ink-2);
+  padding-top:5px;word-break:break-word}
+.core-form-field>input[type="text"],.core-form-field>textarea,
+.core-form-field>select{flex:1;min-width:0}
+.core-form-field>textarea{min-height:64px;font-family:inherit}
+.core-form-req{color:#c0392b;margin-left:2px}
 
 /* ---------- phix：登录设备（会话）列表 ---------- */
 .phix-sessions{margin:10px 0 4px}

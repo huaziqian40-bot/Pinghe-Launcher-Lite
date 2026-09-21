@@ -7,8 +7,29 @@
 <link rel="stylesheet" href="styles.css">
 </head>
 <body>
+<!-- 窗口控件（用户 2026-09-21：不要系统那条单独的标题栏框，要像 PHL 一样是软件的一部分）。
+     窗口是 frameless 的：三个按钮由这里画、**浮在右上角**（不占布局，所以侧栏能顶到最上面）；
+     四周那 8 个透明把手负责缩放 —— 无边框窗口不加 WS_THICKFRAME，因为它会围出一圈白边。
+     拖动区用 .drag-zone 标出来（侧栏空白处 + 页面标题那一行），按下走系统原生拖动（带 Aero Snap）。 -->
+<div class="titlebar" id="titlebar">
+  <div class="win-buttons">
+    <button class="win-btn" type="button" id="win-min" title="最小化" aria-label="最小化">
+      <svg viewBox="0 0 10 10"><path d="M0 5h10"/></svg>
+    </button>
+    <button class="win-btn" type="button" id="win-max" title="最大化" aria-label="最大化">
+      <svg viewBox="0 0 10 10" id="win-max-icon"><rect x=".6" y=".6" width="8.8" height="8.8" rx="1.2"/></svg>
+    </button>
+    <button class="win-btn close" type="button" id="win-close" title="关闭（收进托盘）" aria-label="关闭">
+      <svg viewBox="0 0 10 10"><path d="M0 0l10 10M10 0L0 10"/></svg>
+    </button>
+  </div>
+</div>
+<div class="rz rz-n" data-rz="n"></div><div class="rz rz-s" data-rz="s"></div>
+<div class="rz rz-e" data-rz="e"></div><div class="rz rz-w" data-rz="w"></div>
+<div class="rz rz-ne" data-rz="ne"></div><div class="rz rz-nw" data-rz="nw"></div>
+<div class="rz rz-se" data-rz="se"></div><div class="rz rz-sw" data-rz="sw"></div>
 <div id="app">
-  <aside class="sidebar">
+  <aside class="sidebar drag-zone">
     <div class="logo" id="logo" title="回到首页"><span class="logo-mark"><img src="logo.png" alt="Pinghe Launcher Lite!"></span><div><b>Pinghe Launcher Lite</b><small>平和 · 本地学习助手</small></div></div>
     <nav id="nav">
       <button data-go="home" class="active">🏠 首页</button>
@@ -21,11 +42,16 @@
       <button data-go="agent">🤖 Agent 助手</button>
       <button data-go="settings">⚙️ 设置</button>
     </nav>
-    <div class="side-foot">本地运行 · 数据不出机器</div>
+    <div class="side-foot">
+        <div>本地运行 · 数据不出机器</div>
+        <div class="data-stamp" id="data-stamp" role="status" title="数据在后台自动更新，不用手动刷新"></div>
+      </div>
   </aside>
 
   <main class="main">
-    <div class="topbar"><h1 id="view-title">首页</h1><div class="top-actions"><button id="btn-refresh" class="ghost">↻ 刷新</button></div></div>
+    <!-- 顶栏不摆按钮（用户 2026-09-21：右上角那个刷新按钮和窗口控件重叠了，直接删掉）。
+             刷新与同步全部在后台自动做，只在侧栏底部留一行不起眼的小字。 -->
+      <div class="topbar drag-zone"><h1 id="view-title">首页</h1></div>
 
     <!-- ================= 首页 ================= -->
     <section class="view active" id="view-home">
@@ -106,8 +132,6 @@
     <section class="view" id="view-courses">
       <div class="row-tools">
         <b>我的课程</b><span class="muted small">点课程/作业看详情 · ▲▼ 调顺序</span>
-        <span class="flex1"></span>
-        <button class="ghost" id="co-refresh">↻ 同步 ManageBac</button>
       </div>
       <div class="grid-2 co-core">
         <div class="card core-card" data-core="cas">
@@ -174,8 +198,8 @@
           <button class="chip" data-xtab="rec">💡 推荐</button>
           <button class="chip" data-xtab="me">👤 我的</button>
           <span class="flex1"></span>
+          <!-- 不放同步按钮（用户 2026-09-21：逻辑和 PHL 一样，全部自动）；只留一行状态小字 -->
           <span id="xl-sync-state" class="muted small"></span>
-          <button class="ghost" id="xl-sync-now">↻ 同步</button>
         </div>
 
         <!-- 记录 -->
@@ -298,29 +322,25 @@
     <!-- ================= 设置 ================= -->
     <section class="view" id="view-settings">
       <div class="card phix-card" id="phix-card">
-        <div class="card-title">phix 统一账号 · 云同步
+        <div class="card-title">phix 账号
           <span class="muted small">一套账号打通心履与 PH Launcher · 数据端到端加密，服务器只存密文</span>
         </div>
 
         <div class="phix-warn" id="phix-transport-warn" hidden></div>
 
         <div id="phix-login-box">
-          <div class="form-row">
-            <input type="text" id="phix-server" placeholder="服务器地址（如 http://127.0.0.1:8931）" class="flex1">
-            <button class="ghost" id="phix-test">测试连接</button>
-          </div>
+          <!-- 服务器地址**不让用户填**（用户 2026-09-21 再次要求，与 PH Launcher 一致）：
+               界面自己探测（内网自建 → phix.ing），下面这行只如实显示探测结果。 -->
           <div class="form-row">
             <input type="text" id="phix-username" placeholder="账号" class="flex1">
             <input type="password" id="phix-password" placeholder="密码" class="flex1">
-          </div>
-          <div class="form-row">
-            <input type="password" id="phix-syncphrase" placeholder="独立同步口令（仅强模式账号需要）" class="flex1">
           </div>
           <div class="form-row">
             <button class="primary" id="phix-login">登录</button>
             <button class="ghost" id="phix-register">注册新账号</button>
             <span id="phix-login-msg" class="muted small"></span>
           </div>
+          <div class="muted small" id="phix-server-line">服务器：自动选择（内网自建 → phix.ing）</div>
         </div>
 
         <div id="phix-main-box" hidden>
@@ -330,9 +350,14 @@
               <input type="file" id="phix-avatar-file" accept="image/*" style="display:none">
             </div>
             <div class="phix-avatar-info">
-              <div id="phix-avatar-name" class="muted small">未设置</div>
-              <div class="muted small">头像 · 点击更换（≤200KB）</div>
+              <div class="phix-avatar-name" id="phix-avatar-name">未设置</div>
+              <div class="muted small">点左上头像可更换（≤200KB）</div>
+              <div class="phix-account-id" id="phix-account-id"></div>
             </div>
+          </div>
+          <div class="form-row">
+            <input type="text" id="phix-display-name" placeholder="显示名（留空=用账号名）" class="flex1">
+            <button class="ghost" id="phix-save-name">保存显示名</button>
           </div>
           <div class="phix-status" id="phix-status-line"></div>
           <div class="form-row">
@@ -348,22 +373,33 @@
             <span class="muted small">分钟</span>
             <button class="ghost" id="phix-save-opts">保存</button>
           </div>
-          <div class="phix-objs" id="phix-objs"></div>
+          <!-- 同步内容：默认折叠（用户 2026-09-21 要求）。数量直接写在标题上，
+               不展开也知道当前选了几项；勾选逻辑不变，容器仍是 #phix-objs。 -->
+          <details class="phix-fold">
+            <summary>同步内容<span class="muted small" id="phix-objs-sum"></span></summary>
+            <div class="phix-objs" id="phix-objs"></div>
+          </details>
 
-          <!-- 登录设备（P3）：一次登录 = 一个会话，注销后那台机器立刻掉线 -->
-          <div class="phix-sessions">
+          <!-- 登录设备（P3）：一次登录 = 一个会话，注销后那台机器立刻掉线。
+               默认折叠（用户 2026-09-21 要求）；同一个设备名合并成一行 ——
+               尤其网页端每次登录都留下一条 "website"，这里算作同一台。 -->
+          <details class="phix-fold phix-sessions">
+            <summary>登录设备<span class="muted small" id="phix-sess-sum"></span></summary>
             <div class="form-row">
-              <span class="muted small">登录设备（一次登录 = 一个会话）</span>
               <button class="ghost" id="phix-sess-refresh">刷新列表</button>
               <button class="ghost" id="phix-sess-revoke-others">注销其它设备</button>
             </div>
             <div id="phix-sessions-list"></div>
-          </div>
+          </details>
+
+          <!-- 冲突不再藏在折叠区：本地和云端同一个对象都有内容时，用户必须看得见、
+               并且能一键决定"哪边覆盖哪边" -->
+          <div id="phix-conflicts" class="phix-conflicts"></div>
 
           <div id="phix-locked" hidden class="phix-warn">
-            <b>数据是锁着的</b>：这个账号用的是独立同步口令，服务端解不开你的数据。
+            <b id="phix-locked-title">数据是锁着的</b><span id="phix-locked-desc"></span>
             <div class="form-row">
-              <input type="password" id="phix-unlock-pass" placeholder="同步口令" class="flex1">
+              <input type="password" id="phix-unlock-pass" placeholder="口令" class="flex1">
               <button class="primary" id="phix-unlock">解锁</button>
             </div>
           </div>
@@ -402,7 +438,6 @@
               <input type="password" id="phix-rc-newpass" placeholder="新的登录密码" class="flex1">
               <button class="ghost" id="phix-recover">用恢复码重设</button>
             </div>
-            <div id="phix-conflicts" class="phix-conflicts"></div>
             <div class="form-row">
               <button class="ghost" id="phix-open-dir">打开同步状态目录</button>
             </div>
@@ -515,9 +550,6 @@
     </div>
     <div id="ob-login" class="hidden">
       <div class="form-row">
-        <input type="text" id="ob-server" placeholder="服务器地址" class="flex1" value="http://192.168.5.41:8931">
-      </div>
-      <div class="form-row">
         <input type="text" id="ob-username" placeholder="账号" class="flex1">
         <input type="password" id="ob-password" placeholder="密码" class="flex1">
       </div>
@@ -526,12 +558,10 @@
         <button class="ghost" id="ob-back-ask">← 返回</button>
         <span id="ob-msg" class="muted small"></span>
       </div>
+      <div class="muted small" id="ob-server-line" style="text-align:center">服务器：自动选择（内网自建 → phix.ing）</div>
     </div>
     <div id="ob-register" class="hidden">
-      <p class="muted small" style="margin:8px 0">注册新账号后即可使用云同步功能。也可以直接跳过，在设置里随时注册。</p>
-      <div class="form-row">
-        <input type="text" id="ob-reg-server" placeholder="服务器地址" class="flex1" value="http://192.168.5.41:8931">
-      </div>
+      <p class="muted small" style="margin:8px 0">注册新账号后即可使用云同步功能（设置里的「phix 账号」）。也可以直接跳过，随时在设置里注册。</p>
       <div class="form-row">
         <input type="text" id="ob-reg-user" placeholder="账号" class="flex1">
         <input type="password" id="ob-reg-pass" placeholder="密码（至少 6 位）" class="flex1">
@@ -625,27 +655,12 @@
   </div>
 </div>
 
-<!-- ================= 启动连接页(每次打开, 向导完成后显示) ================= -->
-<div id="splash" class="overlay hidden">
-  <div class="wizard card" style="width:480px">
-    <div class="wizard-head"><b>正在连接你的账号</b><span class="muted small">完成后自动进入</span></div>
-    <div class="splash-row" id="sp-row-edupage">
-      <span class="sp-name">Edupage(课表)</span><span class="sp-status muted">等待中…</span>
-      <button class="ghost" data-skip="edupage">跳过</button>
-    </div>
-    <div class="splash-row" id="sp-row-managebac">
-      <span class="sp-name">ManageBac(课程/DDL)</span><span class="sp-status muted">等待中…</span>
-      <button class="ghost" data-skip="managebac">跳过</button>
-    </div>
-    <div class="splash-row" id="sp-row-mail">
-      <span class="sp-name">平和邮箱</span><span class="sp-status muted">等待中…</span>
-      <button class="ghost" data-skip="mail">跳过</button>
-    </div>
-    <div class="wizard-foot">
-      <span class="muted small">某项失败不影响进入, 对应页面会再提示</span>
-      <button class="primary hidden" id="sp-enter">进入软件</button>
-    </div>
-  </div>
+<!-- ================= 开机画面（2026-09-20 用户要求，三端统一） =================
+     墨绿底 + 中间 logo + 一根细进度条，**一个字都没有**，像 Mac 开机。
+     真实连接/预载还在后台跑（app.js 的 runSplash），只是不再往屏幕上写字。 -->
+<div id="splash" class="splash-screen">
+  <img class="splash-logo" src="logo.png" alt="" aria-hidden="true">
+  <div class="splash-bar" role="progressbar" aria-label="启动进度"><i id="splash-fill"></i></div>
 </div>
 
 <!-- ================= 选课修改弹窗 ================= -->
@@ -776,9 +791,42 @@
       <button class="ghost" id="core-close">✕</button>
     </div>
     <div id="core-body" class="cd-body list"><div class="empty">加载中…</div></div>
+    <div id="core-forms-wrap" hidden>
+      <div class="card-title" style="margin-top:8px">在软件内提交
+        <span class="muted small">字段来自 ManageBac 页面本身，不写死</span>
+      </div>
+      <div id="core-forms" class="core-forms"></div>
+      <div class="form-row">
+        <button class="ghost" id="core-forms-refresh">刷新可填表单</button>
+        <span class="flex1"></span>
+        <button class="ghost" id="core-file-btn" hidden>选择附件…</button>
+        <span class="muted small" id="core-file-name"></span>
+        <button class="primary" id="core-submit" hidden>提交</button>
+      </div>
+      <div class="muted small" id="core-msg"></div>
+    </div>
     <div class="wizard-foot">
       <button class="ghost" id="core-open-mb">在 ManageBac 打开 ↗</button>
       <button class="ghost" id="core-close2">关闭</button>
+    </div>
+  </div>
+</div>
+
+<!-- ================= phix：登录后选「哪边覆盖哪边」 ================= -->
+<div id="phix-choice" class="overlay hidden">
+  <div class="mail-card tt-card">
+    <div class="wizard-head">
+      <b>本地和 phix 账号里都有数据</b>
+    </div>
+    <div class="muted small" id="phix-choice-what"></div>
+    <div class="phix-warn" style="margin-top:8px">
+      请选一个方向。<b>选哪边，另一边同名的数据就会被它替换</b>；
+      拿不准就选「自动合并」——它会把两边的数据合到一起，谁都不丢。
+    </div>
+    <div class="wizard-foot" style="flex-wrap:wrap;gap:6px">
+      <button class="primary" id="phix-choice-merge">自动合并（推荐）</button>
+      <button class="danger" id="phix-choice-local">用本地覆盖账号</button>
+      <button class="danger" id="phix-choice-remote">用账号覆盖本地</button>
     </div>
   </div>
 </div>

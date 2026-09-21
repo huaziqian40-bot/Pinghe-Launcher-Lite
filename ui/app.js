@@ -110,18 +110,22 @@ let currentView = "home";
 let ttOffset = 0;
 let mailMode = 0;
 
+/*: 每个页面的加载器。自动刷新用的是**同一张表**——
+ * 所以"自动"和"用户切页"走的是完全一样的代码路径（swr 自己会判断数据够不够新）。 */
+const LOADERS = {
+  home: () => loadHome(), timetable: () => loadTimetable(), schedule: () => loadSchedule(),
+  gradett: () => loadGradett(), courses: () => loadCourses(), mail: () => loadMail(),
+  xinlv: () => loadXinlv(), agent: () => loadAgent(), settings: () => loadSettings(),
+};
+
 function show(view) {
   currentView = view;
   $$(".view").forEach((v) => v.classList.remove("active"));
   $(`#view-${view}`).classList.add("active");
   $$("#nav button").forEach((b) => b.classList.toggle("active", b.dataset.go === view));
   $("#view-title").textContent = TITLES[view] || view;
-  const loaders = {
-    home: loadHome, timetable: loadTimetable, schedule: loadSchedule,
-    gradett: loadGradett, courses: loadCourses, mail: loadMail,
-    xinlv: loadXinlv, agent: loadAgent, settings: loadSettings,
-  };
-  (loaders[view] || (() => {}))().catch((e) => toast(e.message));
+  (LOADERS[view] || (() => Promise.resolve()))().catch((e) => toast(e.message));
+  paintDataStamp();
 }
 
 $("#nav").addEventListener("click", (e) => {
@@ -133,9 +137,92 @@ document.addEventListener("click", (e) => {
   const card = e.target.closest(".go-card[data-go]");
   if (card && currentView === "home") show(card.dataset.go);
 });
-$("#btn-refresh").addEventListener("click", () => show(currentView));
 /* 点左上角软件名/logo 回首页 */
 $("#logo").addEventListener("click", () => show("home"));
+
+/* ================= 自动刷新 / 自动同步（界面没有刷新按钮） =================
+ * 用户 2026-09-21：「右上角那个刷新按钮和窗口控件重叠了，直接删掉好了，
+ * 软件自动刷新，自动更新同步数据，逻辑和 phl 一样」。照 PHL 的做法：
+ *
+ *   · 界面上**一个刷新/同步按钮都没有**；
+ *   · 每 20 秒醒一次，但每一页有自己的节拍（下面 AUTO_EVERY）：没到自己的节拍就什么都不做，
+ *     到了就跑一遍该页的加载器 —— 数据新不新由 swr 判断，新的时候一个请求都不发；
+ *     过期就后台悄悄重取，取到后无感替换（用户永远看到的是内容，不是转圈）；
+ *   · 窗口重新拿到焦点 / 从托盘里恢复出来时立刻查一次；
+ *   · 任何写操作之后（加日程、发邮件、记心情、改选课…）相关页的缓存本来就会被
+ *     `Store.drop(...)` 作废，下一次查就顺手补上；
+ *   · 只在侧栏底部留一行不起眼的小字「当前数据：几月几日几点几分」。
+ */
+/*: 每一页自己的自动刷新节拍（毫秒）。和 swr 的 TTL 对齐；没有缓存层的页面靠这里节流，
+ * 免得每分钟去敲学校网站或心履服务器。agent / settings 是操作面板，不自动刷。 */
+const AUTO_EVERY = {
+  home: 60e3, timetable: 120e3, schedule: 60e3, gradett: 300e3,
+  courses: 180e3, mail: 45e3, xinlv: 120e3,
+};
+const AUTO_TICK_MS = 20 * 1000;
+const lastAutoAt = {};
+
+/** 当前这一页的数据是什么时候取回来的（没有缓存返回 0）。
+ *  缓存 key 是带参数的（`tt|周偏移`、`gt|日期`、`mail|模式|条数`），
+ *  所以这里按**前缀**去 localStorage 里找，而不是猜一个完整 key —— 猜错就会一直显示空。 */
+const VIEW_CACHE_PREFIX = {
+  home: ["home"], timetable: ["tt|"], gradett: ["gt|"],
+  courses: ["courses"], mail: ["mail|"], schedule: ["schedule"],
+};
+
+function viewDataAt(view) {
+  const prefixes = VIEW_CACHE_PREFIX[view] || [];
+  let newest = 0;
+  try {
+    Object.keys(localStorage).forEach((key) => {
+      if (!key.startsWith("sh_")) return;
+      const name = key.slice(3);
+      if (!prefixes.some((prefix) => name === prefix || name.startsWith(prefix))) return;
+      const cached = Store.get(name);
+      if (cached && cached.t > newest) newest = cached.t;
+    });
+  } catch (e) { /* localStorage 读不到就当没有 */ }
+  return newest;
+}
+
+/** 侧栏底部那行小字：当前数据的时间（读不到就留空，绝不显示骗人的假时间）。 */
+function paintDataStamp() {
+  const el = $("#data-stamp");
+  if (!el) return;
+  const at = viewDataAt(currentView);
+  if (!at) { el.textContent = "当前数据：读取中…"; return; }
+  const d = new Date(at);
+  const hhmm = `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+  const sameDay = d.toDateString() === new Date().toDateString();
+  el.textContent = `当前数据：${sameDay ? hhmm : `${d.getMonth() + 1}/${d.getDate()} ${hhmm}`}`;
+}
+
+/** 走一遍当前页的加载器：新不新鲜由 swr 判断，这里只负责"想起来要去看一眼"。 */
+function autoRefreshCurrent(force) {
+  const view = currentView;
+  const every = AUTO_EVERY[view];
+  if (!every || document.hidden) return;               // 收进托盘时不打扰
+  paintDataStamp();                                    // 小字每个节拍都跟着走一次
+  if (!force && Date.now() - (lastAutoAt[view] || 0) < every) return;
+  lastAutoAt[view] = Date.now();
+  const loader = AUTO_LOADERS[view];
+  if (!loader) return;
+  Promise.resolve(loader())
+    .then(() => { if (currentView === view) paintDataStamp(); })
+    .catch(() => { /* 自动刷新失败不出声：下一次节拍再试，界面上也没有按钮可点 */ });
+}
+
+/*: 后台自动刷新专用的"温和版"加载器。
+ * 有些页面的加载器是为"用户点进来"写的（会重置表单、切回第一个标签），
+ * 在后台定时跑就会打扰用户正在输入的东西 —— 这里逐个换成不打扰的做法。 */
+const AUTO_LOADERS = Object.assign({}, LOADERS, {
+  /* 心履：只做一次静默同步（内部会自己刷新日历与最近记录），不动填写中的表单 */
+  xinlv: () => call("xinlv_status").then((st) => (st.logged_in ? xlSyncQuiet() : null)),
+});
+
+setInterval(() => autoRefreshCurrent(false), AUTO_TICK_MS);
+window.addEventListener("focus", () => autoRefreshCurrent(true));
+document.addEventListener("visibilitychange", () => { if (!document.hidden) autoRefreshCurrent(true); });
 
 /* ================= 首页 ================= */
 function lessonLine(l) {
@@ -1198,15 +1285,7 @@ function moveTask(d, visible, t, dir) {
   Store.set("courses", d);   /* 本地缓存同步, 秒开不回跳旧顺序 */
   renderCourseTasks(d);
 }
-$("#co-refresh").onclick = async () => {
-  toast("正在同步 ManageBac…");
-  try {
-    await call("refresh_tasks");
-    Store.drop("courses"); Store.drop("home");
-    toast("同步完成");
-    show("courses");
-  } catch (e) { toast(e.message); }
-};
+
 
 /* ---------------- 课程详情弹卡(仿 ManageBac: 作业/单元/文件/日历) ---------------- */
 let cdState = { cid: null, name: "", grade: null, tab: "tasks" };
@@ -1384,6 +1463,7 @@ function openTaskModal(t) {
   $("#td-dropbox-row").classList.add("hidden");
   $("#td-desc").textContent = "加载详情中…";
   $("#td-modal").classList.remove("hidden");
+  tdSyncSubmitBtn(t, null);
   $("#td-open-mb").onclick = () => {
     call("open_external",
       `https://shph.managebac.cn/student/classes/${t.class_id}/core_tasks/${t.task_id}`)
@@ -1406,7 +1486,63 @@ function openTaskModal(t) {
       $("#td-dropbox-row").classList.remove("hidden");
     }
     $("#td-desc").textContent = d.description || "(这个作业没有详细说明)";
+    /* 详情比列表准（dropbox 段会写"已提交/待提交"）→ 用详情再校正一次按钮 */
+    tdSyncSubmitBtn(t, d);
   }).catch((e) => { $("#td-desc").textContent = `详情加载失败: ${e.message}`; });
+}
+
+/* 提交按钮按实际情况显示，而不是永远挂着一个"提交作业"。
+   列表里的 can_submit 来自卡片上有没有 Submit Coursework 按钮；
+   详情里的 dropbox 文案更准（会写"已提交"）。
+   注意：`can_submit` 缺失时**不要藏按钮** —— 老缓存里没这个字段，
+   藏了就变成"作业交不了"。只有明确 false 才降级。 */
+function tdSyncSubmitBtn(t, detail) {
+  const btn = $("#td-submit");
+  if (!btn) return;
+  const blob = ((detail && (detail.dropbox || "")) + " " +
+                (t.status || "") + " " + ((detail && detail.status) || "")).toLowerCase();
+  const done = /submitted|已提交|已上传|uploaded|received|graded|已评分/.test(blob);
+  const closed = t.can_submit === false
+    || (t.can_submit === undefined && t.past_due === true && !!t.status && t.status !== "Pending");
+  if (done) {
+    btn.textContent = "✓ 已提交";
+    btn.disabled = true;
+    btn.classList.remove("primary");
+    btn.classList.add("ghost");
+    btn.title = "ManageBac 上显示这次作业已经交过了";
+    return;
+  }
+  if (closed) {
+    btn.textContent = "🚫 未开放网上提交";
+    btn.disabled = true;
+    btn.classList.remove("primary");
+    btn.classList.add("ghost");
+    btn.title = "ManageBac 的作业卡上没有提交入口（可能已截止或要老师开放）";
+    return;
+  }
+  btn.textContent = "📤 提交作业";
+  btn.disabled = false;
+  btn.classList.remove("ghost");
+  btn.classList.add("primary");
+  btn.title = "";
+}
+
+/* 提交成功后：回读详情 + 让课程页缓存失效，列表徽章随之变成 Submitted */
+async function tdRefreshAfterSubmit(t) {
+  Store.drop("courses");
+  try {
+    const d = await call("task_detail", t.class_id, t.task_id);
+    $("#td-status").textContent = d.status || $("#td-status").textContent;
+    if (d.dropbox) {
+      /* 别把刚拿到的"已提交：xxx"覆盖掉 —— 它比页面文案更直接 */
+      const keep = ($("#td-dropbox").textContent || "").trim();
+      $("#td-dropbox").textContent = (keep && !keep.includes(d.dropbox))
+        ? `${keep}（当前页面：${d.dropbox}）` : d.dropbox;
+      $("#td-dropbox-row").classList.remove("hidden");
+    }
+    tdSyncSubmitBtn(t, d);
+  } catch (e) { /* 回读失败不影响"已提交"这个结论，按钮状态下一次打开会刷新 */ }
+  try { await loadCourses(); } catch (e) { /* 课程页没打开时不强求 */ }
 }
 $("#td-close").onclick = () => $("#td-modal").classList.add("hidden");
 $("#td-close2").onclick = () => $("#td-modal").classList.add("hidden");
@@ -1417,14 +1553,14 @@ $("#td-submit").onclick = async () => {
   toast("请在弹出的窗口里选择要提交的文件…");
   try {
     const r = await call("task_pick_and_submit", tdTask.class_id, tdTask.task_id);
-    if (r.cancelled) { toast("已取消提交"); return; }
+    if (r.cancelled) { toast("已取消提交"); tdSyncSubmitBtn(tdTask, null); return; }
     toast(r.message || "已提交, 请到 ManageBac 网页确认");
     $("#td-dropbox").textContent = r.message || "已提交";
     $("#td-dropbox-row").classList.remove("hidden");
+    await tdRefreshAfterSubmit(tdTask);
   } catch (e) {
     toast(e.message);
-  } finally {
-    $("#td-submit").disabled = false;
+    tdSyncSubmitBtn(tdTask, null);
   }
 };
 
@@ -1433,7 +1569,12 @@ const CORE_TITLES = {
   cas: "🎨 CAS 创意 · 行动 · 服务",
   ee: "📄 EE 拓展论文",
 };
+let coreKind = "cas";
+let coreForms = [];      /* 页面上真实存在的可提交表单 */
+let coreFilePicked = ""; /* 需要附件时用户选的文件路径 */
+
 async function openCoreModal(kind) {
+  coreKind = kind;
   $("#core-title").textContent = CORE_TITLES[kind] || "IB Core";
   const body = $("#core-body");
   body.innerHTML = `<div class="empty">加载中…</div>`;
@@ -1441,6 +1582,7 @@ async function openCoreModal(kind) {
   $("#core-open-mb").onclick = () => {
     call("open_external", CORE_URLS[kind]).catch((e) => toast(e.message));
   };
+  await coreLoadForms();
   try {
     const d = await call(kind === "cas" ? "cas_overview" : "ee_overview");
     body.innerHTML = "";
@@ -1460,11 +1602,139 @@ async function openCoreModal(kind) {
     body.innerHTML = `<div class="empty">${esc(e.message)}</div>`;
   }
 }
+
+/* 把 ManageBac 页面上**真实存在**的表单渲染出来 —— 字段名、下拉选项、
+   必填与否全部来自页面本身，不写死任何路由或字段，学校改版也不用改代码。 */
+async function coreLoadForms() {
+  const wrap = $("#core-forms-wrap");
+  const box = $("#core-forms");
+  if (!wrap || !box) return;
+  coreFilePicked = "";
+  const fn = $("#core-file-name"); if (fn) fn.textContent = "";
+  try {
+    const d = await call("core_forms", coreKind);
+    coreForms = (d && d.forms) || [];
+  } catch (e) {
+    coreForms = [];
+    wrap.hidden = false;
+    box.innerHTML = `<div class="muted small">表单探测失败：${esc(e.message)}</div>`;
+    coreUpdateSubmitRow();
+    return;
+  }
+  if (!coreForms.length) {
+    wrap.hidden = false;
+    box.innerHTML = `<div class="muted small">这个页面上没有可以直接提交的表单。`
+      + `CAS 的经历 / 反思可能要在 ManageBac 网页里填写 —— 点左下角按钮去网页完成。</div>`;
+    coreUpdateSubmitRow();
+    return;
+  }
+  wrap.hidden = false;
+  box.innerHTML = coreForms.map((f, i) =>
+    `<div class="core-form-block" data-form="${i}">
+       <div class="muted small">${coreForms.length > 1 ? `表单 ${i + 1}` : "可填提交表单"}${f.has_file ? " · 需要附件" : ""}</div>`
+       + f.fields.filter((x) => x.type !== "file").map((x) => coreFieldHtml(x)).join("")
+     + `</div>`).join("");
+  coreUpdateSubmitRow();
+}
+
+function coreFieldHtml(x) {
+  const req = x.required ? `<span class="core-form-req">*</span>` : "";
+  const attrs = `data-field="${esc(x.name)}" data-type="${esc(x.type)}"`;
+  let input;
+  if (Array.isArray(x.options) && x.options.length) {
+    input = `<select ${attrs}>` + x.options.map((o) =>
+      `<option value="${esc(o.value)}"${String(o.value) === String(x.value) ? " selected" : ""}>${esc(o.label)}</option>`).join("") + `</select>`;
+  } else if (x.type === "textarea") {
+    input = `<textarea ${attrs}>${esc(x.value)}</textarea>`;
+  } else {
+    const t = x.type === "checkbox" ? "checkbox" : (x.type === "date" ? "date" : "text");
+    input = `<input type="${t}" ${attrs} value="${esc(x.value)}"${x.type === "checkbox" && x.value ? " checked" : ""}>`;
+  }
+  return `<div class="core-form-field"><label>${esc(x.label)}${req}</label>${input}</div>`;
+}
+
+function coreUpdateSubmitRow() {
+  const btn = $("#core-submit");
+  const fileBtn = $("#core-file-btn");
+  if (!btn || !fileBtn) return;
+  const hasFields = coreForms.some((f) => f.fields.some((x) => x.type !== "file"));
+  const needsFile = coreForms.some((f) => f.has_file);
+  const canDo = hasFields || needsFile;
+  btn.hidden = !canDo;
+  fileBtn.hidden = !needsFile;
+  btn.disabled = !canDo;
+}
+
+function coreCollectValues() {
+  const out = {};
+  $$("#core-forms [data-field]").forEach((el) => {
+    out[el.dataset.field] = el.dataset.type === "checkbox"
+      ? (el.checked ? (el.value || "1") : "") : el.value;
+  });
+  return out;
+}
+
+async function coreSubmit() {
+  const btn = $("#core-submit");
+  if (!btn || btn.disabled) return;
+  const msg = $("#core-msg");
+  const payload = { form_index: 0, values: coreCollectValues(), file_path: coreFilePicked };
+  btn.disabled = true;
+  if (msg) { msg.style.color = ""; msg.textContent = "正在提交…"; }
+  try {
+    const r = await call("core_submit", coreKind, JSON.stringify(payload));
+    if (r && r.cancelled) { if (msg) msg.textContent = "已取消"; return; }
+    if (msg) msg.textContent = (r && r.message) || "已提交";
+    toast("已提交");
+    if (r && r.overview) {
+      const body = $("#core-body");
+      const secs = r.overview.sections || [];
+      if (secs.length) {
+        body.innerHTML = "";
+        secs.forEach((s) => {
+          const el = document.createElement("div");
+          el.className = "core-sec";
+          el.innerHTML = `<b>${esc(s.h)}</b><div class="td-desc">${esc(s.text)}</div>`;
+          body.appendChild(el);
+        });
+      }
+    }
+    await coreLoadForms();
+  } catch (e) {
+    if (msg) { msg.style.color = "#c0392b"; msg.textContent = e.message; }
+    toast(e.message);
+  } finally {
+    btn.disabled = false;
+    coreUpdateSubmitRow();
+  }
+}
+
 $("#core-close").onclick = () => $("#core-modal").classList.add("hidden");
 $("#core-close2").onclick = () => $("#core-modal").classList.add("hidden");
+$("#core-forms-refresh").onclick = async (e) => {
+  e.target.disabled = true;
+  try { await coreLoadForms(); } finally { e.target.disabled = false; }
+};
+$("#core-file-btn").onclick = async (e) => {
+  e.target.disabled = true;
+  try {
+    const r = await call("core_pick_file");
+    if (r && r.cancelled) return;
+    coreFilePicked = r.path || "";
+    $("#core-file-name").textContent = r.name || "";
+  } catch (err) {
+    $("#core-msg").style.color = "#c0392b";
+    $("#core-msg").textContent = err.message;
+  } finally {
+    e.target.disabled = false;
+  }
+};
+$("#core-submit").onclick = () => coreSubmit();
 /* 点遮罩 / Escape 关闭新弹卡(ml-modal 的遮罩点击在邮箱那一节自己处理) */
-["cd-modal", "td-modal", "core-modal"].forEach((id) => {
+["cd-modal", "td-modal", "core-modal", "phix-choice"].forEach((id) => {
   $("#" + id).addEventListener("click", (e) => {
+    /* phix-choice 是"必须选一个"的确认框：点遮罩不关，只能点按钮决定 */
+    if (id === "phix-choice") return;
     if (e.target.id === id) $("#" + id).classList.add("hidden");
   });
 });
@@ -2542,36 +2812,68 @@ function obBind() {
   $("#ob-back-ask").onclick = () => obShow("ob-ask");
   $("#ob-back-ask2").onclick = () => obShow("ob-ask");
   $("#ob-login-btn").onclick = async () => {
-    const server = $("#ob-server").value.trim();
     const user = $("#ob-username").value.trim();
     const pass = $("#ob-password").value;
-    if (!server || !user || !pass) { $("#ob-msg").textContent = "服务器、账号、密码都要填"; return; }
+    if (!user || !pass) { $("#ob-msg").textContent = "账号、密码都要填"; return; }
     $("#ob-msg").textContent = "登录中…";
     try {
-      await call("phix_login", server, user, pass);
-      $("#ob-msg").textContent = "登录成功，正在同步…";
-      await call("phix_sync");
+      /* 服务器由程序自己探测（内网自建 → phix.ing），口令也不在登录页问：
+         强模式账号登录成功后是**锁着**的，界面会放人进主界面并在设置里解锁
+         （见 obFail / phixRenderLocked）。这也是 PHL 的做法，用户 2026-09-21 要求对齐。 */
+      const st = await call("phix_login", "", user, pass, "");
+      const r = await phixOnboardSync($("#ob-msg"));
+      $("#ob-msg").textContent = "登录成功：" + phixSummary(r.summary);
       phixDone();
-    } catch (e) { $("#ob-msg").textContent = e.message; }
+    } catch (e) { obFail(e, $("#ob-msg")); }
   };
   $("#ob-reg-btn").onclick = async () => {
-    const server = $("#ob-reg-server").value.trim();
     const user = $("#ob-reg-user").value.trim();
     const pass = $("#ob-reg-pass").value;
-    if (!server || !user || pass.length < 6) {
-      $("#ob-msg2").textContent = "服务器、账号都要填，密码至少 6 位"; return;
+    if (!user || pass.length < 6) {
+      $("#ob-msg2").textContent = "账号要填，密码至少 6 位"; return;
     }
     $("#ob-msg2").textContent = "注册中…";
     try {
-      await call("phix_register", server, user, pass, "password");
+      await call("phix_register", "", user, pass, "password");
       $("#ob-msg2").textContent = "注册成功！请抄下恢复码。";
       // 注册后自动登录并同步
-      await call("phix_login", server, user, pass);
-      await call("phix_sync");
+      await call("phix_login", "", user, pass, "");
+      const r = await phixOnboardSync($("#ob-msg2"));
+      $("#ob-msg2").textContent = "注册成功，已登录：" + phixSummary(r.summary);
       phixDone();
-    } catch (e) { $("#ob-msg2").textContent = e.message; }
+    } catch (e) { obFail(e, $("#ob-msg2")); }
   };
+  phixShowResolvedServer();
   $("#ob-skip").onclick = () => phixDone();
+}
+
+/* 引导层里登录/同步失败时**绝不能把用户卡在引导页**：
+   "数据是锁着的"这种要去设置里解锁，其它错误也要放人进去。 */
+function obFail(e, msgEl) {
+  const text = (e && e.message) || String(e);
+  if (msgEl) {
+    msgEl.textContent = /锁着|locked/.test(text)
+      ? text + "（马上进入主界面，请在 设置 → phix 账号 里解锁）"
+      : text;
+  }
+  if (/锁着|locked/.test(text)) setTimeout(phixDone, 1500);
+}
+
+/* 引导层用的同步：与设置页同款（先探测 → 必要时问方向 → 再同步），
+   只是消息写到引导页自己的提示位上。 */
+async function phixOnboardSync(msgEl) {
+  let prefer = "merge";
+  try {
+    const probe = await call("phix_sync_probe");
+    if (probe && probe.needs_choice) {
+      if (msgEl) msgEl.textContent = "本地和账号里都有数据，请选一下以哪边为准…";
+      prefer = await phixAskDirection(probe);
+    }
+  } catch (e) { prefer = "merge"; }
+  if (msgEl) msgEl.textContent = "正在同步…";
+  const r = await call("phix_sync", false, prefer);
+  Store.drop("home"); Store.drop("courses"); Store.drop("mail");
+  return r;
 }
 let _obDone = false;
 function phixDone() {
@@ -2686,10 +2988,25 @@ $("#wz-skip").onclick = async () => {
 };
 
 /* ================= 启动 ================= */
+/** 开机画面收起来（首次启动要走向导/引导时用）。 */
+function hideSplash() {
+  const splash = document.getElementById("splash");
+  if (splash) splash.classList.add("hidden");
+  setBooting(false);
+}
+
+/** 开机画面期间给 body 挂 `booting`：自绘标题栏会据此"融进"墨绿底（见 styles.css）。 */
+function setBooting(on) {
+  document.body.classList.toggle("booting", !!on);
+}
+
 async function boot() {
+  // 服务器地址不让用户填：启动时就把"会自动连哪台"问出来写在那行小字上（不阻塞界面）。
+  phixShowResolvedServer().catch(() => {});
   const st = await call("wizard_status");
   if (!st.done) {
     // 首次启动：先检查 phix 会话
+    hideSplash();   // 开机画面先收起来，让向导露出来（boot 时它是盖在最上面的）
     try {
       const phix = await call("phix_status");
       const hasSession = phix.has_access_token || phix.has_refresh_token || phix.has_token;
@@ -2716,33 +3033,36 @@ async function boot() {
   runSplash();
 }
 
-/* 启动连接页: Edupage / ManageBac / 邮箱 并行连接,
- * 每行连接成功后立即预载"自己负责的页面"数据进本地缓存 ——
- * 进主界面后每个页面秒开, 之后仅后台静默刷新。 */
+/* 启动画面（2026-09-20 用户要求，三端统一）：墨绿底 + 中间 logo + 一根细进度条，
+   **一个字都没有**，像 Mac 开机。三件真实工作（Edupage / ManageBac / 邮箱）各自
+   连接 + 预载自己负责的页面数据；进度取三者平均，全部落定（成功/失败/超时）才进主界面。 */
 function runSplash() {
   const splash = $("#splash");
   splash.classList.remove("hidden");
+  setBooting(true);      // 这一刻起自绘标题栏"融进"墨绿底
   const state = { edupage: "pending", managebac: "pending", mail: "pending" };
-  const setRow = (k, cls, text) => {
-    const s = $(`#sp-row-${k} .sp-status`);
-    if (!s) return;
-    s.className = `sp-status ${cls}`;
-    s.textContent = text;
-    const row = $(`#sp-row-${k}`);
-    row.classList.toggle("working", cls === "working");
+  const fill = () => document.getElementById("splash-fill");
+  const paint = () => {
+    const done = Object.values(state).filter((v) => v !== "pending").length;
+    const el = fill();
+    if (el) el.style.width = Math.round((done / 3) * 100) + "%";
   };
+  /* 用户 2026-09-21：「进度条走完以后等个半秒，然后再渐渐消失，不要一下子没掉，
+     让用户能看到进度条走完」。所以：三件都落定 → 进度条到 100% → 停 500ms →
+     淡出 450ms → 才真正收起。 */
+  const HOLD_AFTER_DONE_MS = 500;
+  const FADE_MS = 450;
+  let entered = false;
   const checkAll = () => {
-    if (Object.values(state).every((v) => v !== "pending")) {
-      $("#sp-enter").classList.remove("hidden");
-      setTimeout(() => enterApp(), 700);
-    }
+    paint();
+    if (Object.values(state).every((v) => v !== "pending")) setTimeout(() => enterApp(), HOLD_AFTER_DONE_MS);
   };
+  paint();
 
   /* 每行 = 连接 + 预载各自的页面数据(失败不阻塞进入) */
   const chains = {
     edupage: async () => {
       const r = await call("connect_edupage");
-      setRow("edupage", "working", "✓ 已连接 · 预载课表/班级课表…");
       const warm = [];
       warm.push(preload(`tt|0`, () => call("timetable_week", 0))());      // 我的课表
       warm.push(preload(`gt|${new Date().toISOString().slice(0, 10)}`,
@@ -2752,13 +3072,11 @@ function runSplash() {
     },
     managebac: async () => {
       const r = await call("connect_managebac");
-      setRow("managebac", "working", "✓ 已连接 · 预载课程/DDL…");
       await preload("courses", () => call("courses_data"))();            // 我的课程
       return r;
     },
     mail: async () => {
       const r = await call("connect_mail");
-      setRow("mail", "working", "✓ 已连接 · 预载邮件/首页…");
       await Promise.allSettled([
         preload(`mail|0|40`, () => call("mail_list", false, 40))(),      // 邮箱
         preload("home", () => call("home_data"))(),                      // 首页
@@ -2768,38 +3086,25 @@ function runSplash() {
   };
 
   Object.entries(chains).forEach(([k, chain]) => {
-    setRow(k, "working", "连接中…");
     chain()
-      .then((r) => {
-        if (state[k] === "skip") { checkAll(); return; }
-        state[k] = "done";
-        const d = r && typeof r === "object"
-          ? Object.entries(r).map(([a, b]) => `${a}:${b}`).join("  ") : "";
-        setRow(k, "ok", `✓ ${d} · 页面已就绪`);
-        checkAll();
-      })
-      .catch((e) => {
-        if (state[k] === "skip") { checkAll(); return; }
-        state[k] = "fail";
-        setRow(k, "fail", `✗ ${String(e.message).slice(0, 60)}`);
-        checkAll();
-      });
+      .then(() => { if (state[k] === "pending") state[k] = "done"; checkAll(); })
+      .catch(() => { if (state[k] === "pending") state[k] = "fail"; checkAll(); });
   });
 
-  $$("#splash [data-skip]").forEach((b) => {
-    b.onclick = () => {
-      const k = b.dataset.skip;
-      state[k] = "skip";
-      setRow(k, "muted", "已跳过");
-      b.disabled = true;
-      checkAll();
-    };
-  });
+  /* 硬上限：45 秒还没齐就直接进主界面（原来靠「跳过」按钮，现在不摆按钮了）。 */
+  setTimeout(() => enterApp(), 45000);
+  /* 点一下画面也能直接进。 */
+  splash.onclick = () => enterApp();
+
   function enterApp() {
-    splash.classList.add("hidden");
+    if (entered) return;
+    entered = true;
+    // 先把主界面摆好（它就在开机画面背后），再把开机画面淡出 —— 不然会看到一片空白。
     show("home");
+    splash.style.transition = `opacity ${FADE_MS}ms ease`;
+    splash.style.opacity = "0";
+    setTimeout(() => { splash.classList.add("hidden"); setBooting(false); }, FADE_MS + 60);
   }
-  $("#sp-enter").onclick = enterApp;
 }
 window.addEventListener("pywebviewready", () => {
   boot().catch((e) => toast(e.message, 5000));
@@ -3031,7 +3336,6 @@ $("#xl-save").onclick = async () => {
   } catch (e) { msg.textContent = e.message; }
 };
 
-$("#xl-sync-now").onclick = () => xlSyncQuiet();
 $("#xl-cal-prev").onclick = () => { xlShiftMonth(-1); };
 $("#xl-cal-next").onclick = () => { xlShiftMonth(1); };
 function xlShiftMonth(delta) {
@@ -3147,6 +3451,26 @@ const PHIX_DEFAULT_OBJECTS = ["settings.accounts", "settings.lessons",
   "settings.ui", "schedule", "timetable", "school", "profile", "mood"];
 
 let phixState = null;
+/*: 自动选中的 phix 服务器地址（界面不让用户填，见 phixShowResolvedServer）。 */
+let phixResolvedServer = "";
+
+/** 把"会自动连哪台服务器"问出来显示在界面上（不让用户填，但要让他看得见）。
+ *  探测只在第一次做（结果缓存住）—— 内网那台 0.1s 就答，不通时才回落到 phix.ing。 */
+async function phixShowResolvedServer() {
+  if (!phixResolvedServer) {
+    try {
+      const r = await call("phix_resolve_server");
+      phixResolvedServer = (r && r.server) || "";
+    } catch (e) { phixResolvedServer = ""; }
+  }
+  const text = phixResolvedServer
+    ? `服务器：${phixResolvedServer}`
+    : "服务器：自动选择（内网自建 → phix.ing）";
+  ["#phix-server-line", "#ob-server-line"].forEach((id) => {
+    const el = $(id); if (el) el.textContent = text;
+  });
+  return phixResolvedServer;
+}
 
 async function phixBusy(btn, fn) {
   const old = btn ? btn.textContent : "";
@@ -3172,10 +3496,22 @@ async function phixRefresh() {
   $("#phix-login-box").hidden = !!st.logged_in;
   $("#phix-main-box").hidden = !st.logged_in;
   if (!st.logged_in) {
-    $("#phix-server").value = st.server || "";
+    /* 服务器地址不让用户填（2026-09-21 用户要求，与 PHL 一致）：这里只把**探测结果**
+       如实显示出来；没探测到就显示"自动选择中…"。 */
+    const line = $("#phix-server-line");
+    if (line) {
+      line.textContent = st.server
+        ? `服务器：${st.server}`
+        : "服务器：自动选择（内网自建 → phix.ing）";
+    }
+    phixShowResolvedServer();
     $("#phix-username").value = st.username || "";
     const sl = $("#phix-sessions-list");
     if (sl) sl.innerHTML = "";               // 登出后别留着上一份设备列表
+    phixRenderConflicts([]);                 // 也别留着上一个人的冲突记录
+    phixRenderAccountId();
+    const dn = $("#phix-display-name");
+    if (dn) dn.value = "";
     phixRenderTransportWarning(st);
     return st;
   }
@@ -3187,31 +3523,159 @@ async function phixRefresh() {
     : (st.e2e ? `<span class="phix-wire off">网线加密：未生效</span>`
               : `<span class="phix-wire off">网线加密：已关闭</span>`);
   $("#phix-status-line").innerHTML =
-    `<b>${esc(st.username)}</b> <span class="muted small">· ${esc(st.server)} · 设备「${esc(st.device)}」`
+    `<b>${esc(st.username)}</b>`
+    + (st.user_id ? ` <span class="muted small">ID ${esc(st.user_id)}</span>` : "")
+    + ` <span class="muted small">· ${esc(st.server)} · 设备「${esc(st.device)}」`
     + ` · 加密方式：${esc(mode)} · 上次同步：${esc(when)}</span> `
     + wire
     + (st.unlocked ? "" : ` <span class="phix-lock">🔒 未解锁</span>`);
   $("#phix-locked").hidden = !!st.unlocked;
+  if (!st.unlocked) phixRenderLocked(st);
   $("#phix-auto").checked = !!st.auto_sync;
   $("#phix-interval").value = st.sync_interval_minutes || 10;
   const objs = st.objects && st.objects.length ? st.objects : PHIX_DEFAULT_OBJECTS;
-  $("#phix-objs").innerHTML = `<span class="muted small">同步内容：</span>` +
-    Object.keys(PHIX_OBJECT_LABELS).map((k) =>
-      `<label class="chk phix-obj"><input type="checkbox" data-obj="${esc(k)}"${objs.includes(k) ? " checked" : ""}> ${esc(PHIX_OBJECT_LABELS[k])}</label>`).join("");
+  /* 标题（含已选数量）在 <summary> 上，容器里只放勾选框 —— 折叠时也能一眼看到选了几项。
+     计数只认 PHIX_OBJECT_LABELS 里有的名字，避免把界面没列出的对象算进"已选"。 */
+  const objKeys = Object.keys(PHIX_OBJECT_LABELS);
+  const objSel = objKeys.filter((k) => objs.includes(k));
+  $("#phix-objs").innerHTML = objKeys.map((k) =>
+    `<label class="chk phix-obj"><input type="checkbox" data-obj="${esc(k)}"${objs.includes(k) ? " checked" : ""}> ${esc(PHIX_OBJECT_LABELS[k])}</label>`).join("");
+  const objSum = $("#phix-objs-sum");
+  if (objSum) objSum.textContent = `（已选 ${objSel.length} / ${objKeys.length}）`;
   if (st.recovery_code) {
     $("#phix-recovery").hidden = false;
     $("#phix-recovery-code").textContent = st.recovery_code;
   }
-  const conf = ((st.state || {}).conflicts) || [];
-  $("#phix-conflicts").innerHTML = conf.length
-    ? `<div class="card-title" style="margin-top:10px">需要你留意的冲突（数据都还在，没有被丢）</div>` +
-      conf.map((c) => `<div class="item"><span class="grow">${esc(c.object || c.path || "")}
-        <span class="dim">${esc(c.note || "")}</span></span></div>`).join("")
-    : "";
+  phixRenderConflicts(((st.state || {}).conflicts) || []);
   phixRenderTransportWarning(st);
+  phixRenderAccountId();
   phixLoadSessions();      // 设备列表异步补上，不挡着状态渲染
   phixLoadProfile();       // 异步加载头像
   return st;
+}
+
+/* 冲突不再只是"提一句"：每条给出两边各有多少内容，并允许一键定方向。
+   冲突数据来自 `phix_status().state.conflicts`（后端每轮记末 50 条、这里回末 10 条）。 */
+function phixRenderConflicts(conf) {
+  const box = $("#phix-conflicts");
+  if (!box) return;
+  if (!conf.length) { box.innerHTML = ""; return; }
+  const rows = conf.map((c) => {
+    const vals = [];
+    if (c.local !== undefined && c.local !== null) vals.push("本地：" + c.local);
+    if (c.remote !== undefined && c.remote !== null) vals.push("账号：" + c.remote);
+    return `<div class="phix-conflict"><span class="grow">${esc(c.object || c.path || "")}
+      <span class="dim">${esc(c.note || "")}</span>`
+      + (vals.length ? `<span class="phix-cf-vals">${esc(vals.join(" · "))}</span>` : "")
+      + `</span></div>`;
+  }).join("");
+  box.innerHTML =
+    `<div class="card-title" style="margin-top:10px">需要你留意的冲突（数据都还在，没有被丢）</div>`
+    + rows
+    + `<div class="phix-choice-btns">
+         <button class="ghost" id="phix-cf-local">用本地覆盖账号</button>
+         <button class="ghost" id="phix-cf-remote">用账号覆盖本地</button>
+         <span class="muted small">整体定一次方向，两边就不再来回吵</span>
+       </div>`;
+  const l = $("#phix-cf-local"), r = $("#phix-cf-remote");
+  if (l) l.onclick = (e) => phixBusy(e.target, () => phixApplyDirection("local"));
+  if (r) r.onclick = (e) => phixBusy(e.target, () => phixApplyDirection("remote"));
+}
+
+/* 按选定的方向真同步一轮（会写本地文件、也会推云端）。
+
+   注意**不传 force**：`SyncManager` 的并发护栏会在「另一个程序（PHL）正在运行」
+   时跳过这一轮，避免两边抢写同一份 `data/Schedule`。跳过了也照样报出来。 */
+async function phixApplyDirection(prefer) {
+  const label = prefer === "local" ? "用本地覆盖 phix 账号" : "用 phix 账号覆盖本地";
+  if (!confirm(`${label}？\n\n两边同名的数据会以被选中的那一边为准，另一边的那些内容会被替换掉。`)) return;
+  try {
+    const r = await call("phix_sync", false, prefer);
+    await phixRefresh();
+    phixMsg(`已按「${label}」同步：` + phixSummary(r.summary));
+    Store.drop("home"); Store.drop("courses"); Store.drop("mail");
+  } catch (err) { phixMsg(err.message, true); }
+}
+
+/* 登录之后该不该问用户选方向：本地和账号里**同一个对象都有内容**时就要问。
+   不弹窗（用户可能不在）时一律退回最安全的"自动合并"。 */
+async function phixAskDirection(probe) {
+  const box = $("#phix-choice");
+  if (!box) return "merge";
+  const names = (probe.both || []).map((n) => PHIX_OBJECT_LABELS[n] || n);
+  const what = $("#phix-choice-what");
+  if (what) {
+    what.textContent = "本地有：" + names.join("、")
+      + "。这些内容在你的 phix 账号里也有 —— 要按哪边为准？";
+  }
+  box.classList.remove("hidden");
+  return await new Promise((resolve) => {
+    const finish = (v) => {
+      box.classList.add("hidden");
+      ["#phix-choice-merge", "#phix-choice-local", "#phix-choice-remote"]
+        .forEach((id) => { const el = $(id); if (el) el.onclick = null; });
+      resolve(v);
+    };
+    $("#phix-choice-merge").onclick = () => finish("merge");
+    $("#phix-choice-local").onclick = () => {
+      if (!confirm("用本地数据覆盖 phix 账号？\n\n账号里这些对象的内容会被本机版本替换。")) return;
+      finish("local");
+    };
+    $("#phix-choice-remote").onclick = () => {
+      if (!confirm("用 phix 账号的数据覆盖本地？\n\n本机这些对象的内容会被账号里的版本替换。")) return;
+      finish("remote");
+    };
+  });
+}
+
+/* 登录成功后统一的同步入口：先探测 → 必要时问方向 → 再同步 */
+async function phixLoginSync() {
+  let prefer = "merge";
+  try {
+    const probe = await call("phix_sync_probe");
+    if (probe && probe.needs_choice) {
+      phixMsg("本地和账号里都有数据，先选一下以哪边为准…");
+      prefer = await phixAskDirection(probe);
+    }
+  } catch (err) {
+    // 探测失败（后端版本旧 / 网络抖）绝不能挡住登录本身 → 退回安全的自动合并
+    prefer = "merge";
+  }
+  const r = await call("phix_sync", false, prefer);
+  await phixRefresh();
+  phixMsg(phixSummary(r.summary));
+  Store.drop("home"); Store.drop("courses"); Store.drop("mail");
+}
+
+/* 已登录但没解锁：**说清楚要输哪一个口令**。
+   - 简单模式：DEK 用登录密码包裹 → 输登录密码
+   - 强模式：DEK 用独立同步口令包裹 → 输同步口令
+   程序重启后密钥不在内存里了（这是有意的设计），所以重启后第一次同步前要输一次。 */
+function phixRenderLocked(st) {
+  const desc = $("#phix-locked-desc");
+  const inp = $("#phix-unlock-pass");
+  const strong = (st.key_mode === "syncphrase");
+  if (desc) {
+    desc.textContent = strong
+      ? "：这个账号用的是独立同步口令，连服务端都解不开你的数据。"
+        + "程序重启后要再输一次它才能同步（口令只在本机用来解密钥，不会外发）。"
+      : "：程序重启后密钥不在内存里了，输入一次你的登录密码即可继续同步"
+        + "（口令只在本机解密钥，不会外发；云端密文一个字节都不会动）。";
+  }
+  if (inp) inp.placeholder = strong ? "独立同步口令" : "登录密码";
+}
+
+/* 账号信息区：ID / 账号名 / 本机设备 / 加密方式 —— 登录后一眼看到"我是谁" */function phixRenderAccountId() {
+  const el = $("#phix-account-id");
+  if (!el) return;
+  const st = phixState || {};
+  if (!st.logged_in) { el.textContent = ""; return; }
+  const bits = [];
+  if (st.user_id) bits.push("ID " + st.user_id);
+  if (st.username) bits.push("@" + st.username);
+  if (st.device) bits.push("本机 " + st.device);
+  if (st.key_mode) bits.push(st.key_mode === "syncphrase" ? "独立同步口令" : "登录密码");
+  el.textContent = bits.join(" · ");
 }
 
 /* 明文 HTTP 到非本机 → 登录口令会明文过网线，必须显眼提示。
@@ -3236,18 +3700,19 @@ async function phixLoadProfile() {
   const img = $("#phix-avatar-img");
   const name = $("#phix-avatar-name");
   if (!wrap || !img || !name) return;
-  try {
-    const p = await call("phix_profile_get");
-    name.textContent = p.display_name || "未设置";
-    if (p.avatar) {
-      img.innerHTML = `<img src="${esc(p.avatar)}" style="width:100%;height:100%;object-fit:cover" alt="头像">`;
-    } else {
-      img.innerHTML = `<span>👤</span>`;
-    }
-  } catch (e) {
-    name.textContent = "未设置";
+  let p = { display_name: "", avatar: "" };
+  try { p = await call("phix_profile_get"); } catch (e) { /* 读不到就按空处理 */ }
+  /* 显示名没设过就**回落到账号名** —— 登录之后这里不该是一片"未设置" */
+  name.textContent = String(p.display_name || "").trim()
+    || (phixState && phixState.username) || "未设置";
+  if (p.avatar) {
+    img.innerHTML = `<img src="${esc(p.avatar)}" style="width:100%;height:100%;object-fit:cover" alt="头像">`;
+  } else {
     img.innerHTML = `<span>👤</span>`;
   }
+  const dn = $("#phix-display-name");
+  if (dn && document.activeElement !== dn) dn.value = p.display_name || "";
+  phixRenderAccountId();
 }
 
 function phixBindAvatar() {
@@ -3281,6 +3746,18 @@ function phixBindAvatar() {
    一次登录 = 一个服务端会话。列出设备名与最近活动时间，可以注销某一台
    （那台机器的访问令牌立刻失效）或一次注销其它全部。
    **拿不到列表就安静降级** —— 绝不能让设备列表拖垮整个 phix 面板。 */
+/* 同一个设备名算同一台（用户 2026-09-21 要求）。
+   网页端每次登录都会留下一条 device="website"（见 website/server.py 的登录 body），
+   官网侧另有 "官网" / "官网 SSO" / "官网迁移" / "官网 → 心履" 几种写法 ——
+   这些全部并成一行，否则列表会被浏览器的历史会话刷成一长串。 */
+const PHIX_WEBSITE_KEY = "__website__";
+const PHIX_WEBSITE_LABEL = "phix 官网（浏览器）";
+
+function sessGroupKey(s) {
+  const name = String((s && s.device) || "").trim();
+  return (/^(website|官网)/i.test(name)) ? PHIX_WEBSITE_KEY : (name || "未命名设备");
+}
+
 async function phixLoadSessions() {
   const box = $("#phix-sessions-list");
   if (!box) return;
@@ -3300,31 +3777,66 @@ async function phixLoadSessions() {
 function phixRenderSessions(d) {
   const box = $("#phix-sessions-list");
   if (!box) return;
+  const sum = $("#phix-sess-sum");
   const rows = (d && d.sessions) || [];
+  const stamp = (s) => String((s && (s.last_seen_at || s.created_at)) || "");
+  const when = (iso) => (iso.slice(0, 16).replace("T", " ") || "—");
   if (!rows.length) {
+    if (sum) sum.textContent = "";
     box.innerHTML = `<div class="muted small">这台服务器没报出会话列表。</div>`;
     return;
   }
-  const when = (s) => {
-    const t = String(s.last_seen_at || s.created_at || "").slice(0, 16).replace("T", " ");
-    return t || "—";
-  };
-  box.innerHTML = rows.map((s) => {
-    const tags = (s.current ? `<span class="phix-sess-tag on">本机</span>` : "")
-      + (s.revoked ? `<span class="phix-sess-tag off">已注销</span>` : "")
-      + (s.dpop_bound ? `<span class="phix-sess-tag">已绑密钥</span>` : "");
-    const btn = (!s.current && !s.revoked)
-      ? `<button class="ghost" data-revoke="${esc(s.id)}">注销</button>` : "";
-    return `<div class="phix-sess"><span class="grow">${esc(s.device || "未命名设备")}`
-      + `<span class="dim"> · 最近活动 ${esc(when(s))}</span></span>${tags}${btn}</div>`;
+
+  /* 归组：保持首次出现的顺序（服务端按时间倒序给，所以每组第一条就是最新的） */
+  const order = [];
+  const groups = new Map();
+  rows.forEach((s) => {
+    const key = sessGroupKey(s);
+    if (!groups.has(key)) { groups.set(key, []); order.push(key); }
+    groups.get(key).push(s);
+  });
+
+  box.innerHTML = order.map((key) => {
+    const list = groups.get(key);
+    const latest = list.reduce((a, s) => (stamp(s) > a ? stamp(s) : a), "");
+    const alive = list.filter((s) => !s.revoked);
+    const gone = list.length - alive.length;
+    const bits = [];
+    if (list.length > 1) bits.push(`${list.length} 个会话`);
+    if (gone) bits.push(`${gone} 个已注销`);
+    const tags = (list.some((s) => s.current) ? `<span class="phix-sess-tag on">本机</span>` : "")
+      + (alive.length === 0 ? `<span class="phix-sess-tag off">已注销</span>` : "")
+      + (list.some((s) => s.dpop_bound) ? `<span class="phix-sess-tag">已绑密钥</span>` : "");
+    /* 整组里「还能注销」的会话（非本机、未注销）一次全部注销 */
+    const ids = alive.filter((s) => !s.current && s.id !== undefined && s.id !== null)
+                     .map((s) => s.id);
+    const btn = ids.length
+      ? `<button class="ghost" data-revoke="${esc(ids.join(","))}">注销</button>` : "";
+    return `<div class="phix-sess"><span class="grow">`
+      + esc(key === PHIX_WEBSITE_KEY ? PHIX_WEBSITE_LABEL : key)
+      + (bits.length ? `<span class="dim"> · ${esc(bits.join(" · "))}</span>` : "")
+      + `<span class="dim"> · 最近活动 ${esc(when(latest))}</span></span>${tags}${btn}</div>`;
   }).join("");
+
+  if (sum) {
+    const live = rows.filter((s) => !s.revoked).length;
+    sum.textContent = `（${order.length} 台 · ${live} 个活跃会话 · 一次登录 = 一个会话）`;
+  }
+
   box.querySelectorAll("button[data-revoke]").forEach((b) => {
     b.onclick = (e) => phixBusy(e.target, async () => {
-      if (!confirm("注销这台设备？\n\n它那边的登录会立刻失效（不影响本机）。")) return;
-      try {
-        phixRenderSessions(await call("phix_revoke_device", Number(b.dataset.revoke), false));
-        phixMsg("那台设备已注销");
-      } catch (err) { phixMsg(err.message, true); }
+      const ids = String(b.dataset.revoke || "").split(",").filter((x) => x !== "").map(Number);
+      if (!ids.length) return;
+      if (!confirm(ids.length > 1
+        ? `注销这台设备上的 ${ids.length} 个会话？\n\n那边的登录会全部立刻失效（不影响本机）。`
+        : "注销这台设备？\n\n它那边的登录会立刻失效（不影响本机）。")) return;
+      let last = null, failed = false;
+      for (const id of ids) {
+        try { last = await call("phix_revoke_device", id, false); }
+        catch (err) { phixMsg(err.message, true); failed = true; break; }
+      }
+      if (last) phixRenderSessions(last);
+      if (!failed) phixMsg(ids.length > 1 ? `已注销 ${ids.length} 个会话` : "那台设备已注销");
     });
   });
 }
@@ -3332,40 +3844,44 @@ function phixRenderSessions(d) {
 function phixBind() {
   const on = (id, fn) => { const el = $(id); if (el) el.onclick = fn; };
 
-  on("#phix-test", (e) => phixBusy(e.target, async () => {
-    try {
-      const d = await call("phix_ping", $("#phix-server").value.trim());
-      phixMsg(`连上了：phix v${d.version}，服务器时间 ${String(d.server_time).slice(0, 19)}`);
-    } catch (err) { phixMsg("连不上：" + err.message, true); }
-  }));
-
   on("#phix-login", (e) => phixBusy(e.target, async () => {
-    const server = $("#phix-server").value.trim();
     const username = $("#phix-username").value.trim();
     const password = $("#phix-password").value;
-    if (!server || !username || !password) { phixMsg("服务器地址、账号、密码都要填", true); return; }
+    if (!username || !password) { phixMsg("账号、密码都要填", true); return; }
     try {
-      await call("phix_login", server, username, password, $("#phix-syncphrase").value);
-      $("#phix-password").value = ""; $("#phix-syncphrase").value = "";
+      /* 服务器自动选择、口令不在登录页问（用户 2026-09-21 要求）。
+         强模式账号登录后是锁着的 → 下面的"未解锁"面板负责解锁。 */
+      await call("phix_login", "", username, password, "");
+      $("#phix-password").value = "";
       await phixRefresh();
-      phixMsg("登录成功，正在同步…");
-      const r = await call("phix_sync");
-      await phixRefresh();
-      phixMsg(phixSummary(r.summary));
-      Store.drop("home"); Store.drop("courses");
+      phixMsg("登录成功，正在检查本地和账号里的数据…");
+      /* 本地有数据 + 账号里也有数据时，这里会先问用户"以哪边为准" */
+      await phixLoginSync();
+    } catch (err) { phixMsg(err.message, true); }
+  }));
+
+  on("#phix-save-name", (e) => phixBusy(e.target, async () => {
+    try {
+      const p = await call("phix_profile_save", JSON.stringify({
+        display_name: $("#phix-display-name").value.trim(),
+      }));
+      await phixLoadProfile();
+      phixMsg(p.display_name
+        ? `显示名已保存并推到账号：${p.display_name}`
+        : "显示名已清空（头像区回落到账号名）");
     } catch (err) { phixMsg(err.message, true); }
   }));
 
   on("#phix-register", (e) => phixBusy(e.target, async () => {
-    const server = $("#phix-server").value.trim();
     const username = $("#phix-username").value.trim();
     const password = $("#phix-password").value;
-    if (!server || !username || password.length < 6) {
-      phixMsg("注册需要：服务器地址、账号、密码（至少 6 位）", true); return;
+    if (!username || password.length < 6) {
+      phixMsg("注册需要：账号、密码（至少 6 位）", true); return;
     }
-    if (!confirm(`确定要在 ${server} 注册新账号「${username}」吗？\n\n注册后会出现一串恢复码，请立刻抄下来。`)) return;
+    const where = phixResolvedServer || "phix 服务器（自动选择）";
+    if (!confirm(`确定要在 ${where} 注册新账号「${username}」吗？\n\n注册后会出现一串恢复码，请立刻抄下来。`)) return;
     try {
-      await call("phix_register", server, username, password, "password");
+      await call("phix_register", "", username, password, "password");
       $("#phix-password").value = "";
       await phixRefresh();
       phixMsg("注册成功！请把上面的恢复码抄到安全的地方。");
@@ -3423,8 +3939,17 @@ function phixBind() {
     try {
       await call("phix_change_password", o, n);
       $("#phix-old-pass").value = ""; $("#phix-new-pass").value = "";
+      /* 改密码只换"包裹密钥的口令"，云端密文一个字节都不动；
+         再跑一轮同步确认新凭证在账号上真的能用（失败也不影响已经改成的密码）。 */
+      let extra = "";
+      try {
+        const r = await call("phix_sync", false);
+        extra = "，并已用新密码同步一次（" + phixSummary(r.summary) + "）";
+      } catch (err) {
+        extra = "。同步这一步没成功（" + err.message + "），但密码本身已经改好了";
+      }
       await phixRefresh();
-      phixMsg("密码已改。云端密文一个字节都没动，别的设备照常能同步。");
+      phixMsg("密码已在账号上改好，云端密文一个字节都没动，别的设备照常能同步" + extra);
     } catch (err) { phixMsg(err.message, true); }
   }));
 
@@ -3450,8 +3975,7 @@ function phixBind() {
       phixMsg("要填：账号、恢复码、新的登录密码（至少 6 位）", true); return;
     }
     if (!confirm("用恢复码重设密码？\n\n· 恢复码只在本机使用，不会上传\n· 云端数据一个字节都不会动")) return;
-    const server = $("#phix-server").value.trim() || (phixState && phixState.server) || "";
-    if (!server) { phixMsg("请先填服务器地址", true); return; }
+    const server = phixResolvedServer || (phixState && phixState.server) || "";
     try {
       await call("phix_recover", server, user, codeTxt, np);
       $("#phix-rc-code").value = ""; $("#phix-rc-newpass").value = "";
@@ -3487,5 +4011,109 @@ function phixSummary(s) {
   return parts.join("，");
 }
 
+/* ================= 自绘窗口控件（无边框窗口） =================
+ * 用户 2026-09-21：窗口控件不要系统那条单独的标题栏，要像 PHL 那样是软件的一部分；
+ * 并且「窗口四周有一圈白边，去掉」「侧边栏往上移，不要让上面有一块空着」。
+ *
+ * 所以：
+ *   · 右上角三个按钮浮在内容之上（不占布局 → 侧栏顶到最上面，没有空条）；
+ *   · 四周 8 个透明把手做缩放（不用 WS_THICKFRAME —— 它会围出一圈白边）；
+ *   · `.drag-zone`（侧栏空白处 + 页面标题那一行）按下 → 系统原生拖动，双击 → 最大化/还原。
+ * 任何一步失败都安静放过：窗口控件坏了也不能让界面崩。
+ */
+function bindWindowControls() {
+  const callWin = async (name, ...args) => {
+    try { return await call(name, ...args); } catch (e) { return { ok: false, error: e.message }; }
+  };
+
+  function paintMaxGlyph(maximized) {
+    const icon = $("#win-max-icon");
+    const btn = $("#win-max");
+    if (icon) {
+      // 最大化时画"两个叠起来的小方块"（还原图标），否则画一个方框
+      icon.innerHTML = maximized
+        ? '<rect x=".6" y="2.6" width="6.8" height="6.8" rx="1"/>'
+          + '<path d="M2.6 2.6V1.6a1 1 0 0 1 1-1h4.8a1 1 0 0 1 1 1v4.8a1 1 0 0 1-1 1h-1"/>'
+        : '<rect x=".6" y=".6" width="8.8" height="8.8" rx="1.2"/>';
+    }
+    if (btn) btn.title = maximized ? "还原" : "最大化";
+  }
+
+  async function toggleMax() {
+    const r = await callWin("win_maximize_toggle");
+    paintMaxGlyph(!!r.maximized);
+  }
+
+  const min = $("#win-min");
+  const max = $("#win-max");
+  const close = $("#win-close");
+  if (min) min.onclick = () => callWin("win_minimize");
+  if (max) max.onclick = () => toggleMax();
+  if (close) close.onclick = () => callWin("win_close");
+  callWin("win_state").then((r) => paintMaxGlyph(!!(r && r.maximized)));
+
+  /* ---- 拖动区：按下列表/按钮这些可交互的东西要让位，只有空白处才拖窗口 ---- */
+  const INTERACTIVE = "button,a,input,select,textarea,label,.logo,.go-card,[role=button],[data-go]";
+  document.addEventListener("mousedown", (ev) => {
+    if (ev.button !== 0) return;
+    const zone = ev.target.closest(".drag-zone");
+    if (!zone) return;
+    if (ev.target.closest(INTERACTIVE)) return;
+    callWin("win_drag_start");
+  });
+  document.addEventListener("dblclick", (ev) => {
+    const zone = ev.target.closest(".drag-zone");
+    if (!zone) return;
+    if (ev.target.closest(INTERACTIVE)) return;
+    toggleMax();
+  });
+
+  /* ---- 缩放把手：按下取一次窗口位置，之后按指针位移算新边界 ---- */
+  const MIN_W = 1000, MIN_H = 640;
+  document.querySelectorAll(".rz").forEach((handle) => {
+    handle.addEventListener("mousedown", async (ev) => {
+      if (ev.button !== 0) return;
+      ev.preventDefault();
+      const edge = handle.getAttribute("data-rz") || "";
+      const start = await callWin("win_get_bounds");
+      if (!start.ok || !start.bounds) return;
+      const [ox, oy, ow, oh] = start.bounds;
+      const sx = ev.screenX, sy = ev.screenY;
+      let busy = false, pending = null;
+      document.body.classList.add("resizing");
+
+      const push = (x, y, w, h) => {
+        pending = [x, y, w, h];
+        if (busy) return;
+        busy = true;
+        callWin("win_set_bounds", ...pending).then(() => {
+          busy = false;
+          const last = pending;
+          if (last && (last[0] !== x || last[1] !== y || last[2] !== w || last[3] !== h)) {
+            push(...last);
+          }
+        });
+      };
+      const onMove = (move) => {
+        const dx = move.screenX - sx, dy = move.screenY - sy;
+        let x = ox, y = oy, w = ow, h = oh;
+        if (edge.includes("e")) w = Math.max(MIN_W, ow + dx);
+        if (edge.includes("s")) h = Math.max(MIN_H, oh + dy);
+        if (edge.includes("w")) { w = Math.max(MIN_W, ow - dx); x = ox + (ow - w); }
+        if (edge.includes("n")) { h = Math.max(MIN_H, oh - dy); y = oy + (oh - h); }
+        push(x, y, w, h);
+      };
+      const onUp = () => {
+        document.removeEventListener("mousemove", onMove);
+        document.removeEventListener("mouseup", onUp);
+        document.body.classList.remove("resizing");
+      };
+      document.addEventListener("mousemove", onMove);
+      document.addEventListener("mouseup", onUp);
+    });
+  });
+}
+
 phixBind();
+bindWindowControls();
 phixBindAvatar();
