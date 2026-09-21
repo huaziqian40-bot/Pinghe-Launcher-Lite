@@ -18,6 +18,12 @@ from ..exceptions import PingheError
 
 MAX_ROUNDS = 8
 PROPOSAL_TTL = 600  # 10 分钟
+#: 单次模型调用的超时（秒）。**必须有**：`agent_chat` 是同步 RPC，
+#: 模型或网络卡住时界面会一直停在"正在思考…"，用户看到的就是"卡死"。
+#: 超时后抛错让用户重试，而不是无限期挂着（流式响应也受它约束）。
+AI_CALL_TIMEOUT = 180.0
+#: SDK 自带重试会把这个超时乘上次数 —— 只留 1 次，失败得干脆些。
+AI_MAX_RETRIES = 1
 from .. import filestore as _fs
 
 
@@ -165,8 +171,47 @@ def build_tools() -> list[dict]:
 
 # ---------------------------------------------------------------- 会话兼容
 # PH Launcher 的会话可能带有本程序不支持的高级消息(工具调用/提案/附件引用)。
-# 读取时把不认识的消息替换成提示行, 保证历史永远可以直接喂给模型。
+# 读取时把**真正读不懂**的消息替换成提示行, 保证历史永远可以直接喂给模型。
 _UNSUPPORTED_HINT = "（这一条消息使用了 PH Launcher 的高级格式，当前这一条消息格式不支持，请使用 PH Launcher 查看。）"
+
+
+def _text_of(content) -> str:
+    """把各种 content 形态尽量抽成纯文本；抽不出就返回空串。
+
+    认识的形态：字符串本体；内容块数组（取每块的 text / content 文本字段，
+    `tool_use` / `tool_result` 这类非文本块跳过）；单个 {text|content} 字典。
+    """
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = []
+        for b in content:
+            if isinstance(b, str):
+                parts.append(b)
+            elif isinstance(b, dict):
+                t = b.get("text")
+                if isinstance(t, str) and t:
+                    parts.append(t)
+                elif b.get("type") in (None, "text") and isinstance(b.get("content"), str):
+                    parts.append(b["content"])
+        return "\n".join(parts)
+    if isinstance(content, dict):
+        for k in ("text", "content"):
+            v = content.get(k)
+            if isinstance(v, str) and v:
+                return v
+    return ""
+
+
+def _is_placeholder(text: str) -> bool:
+    """这条内容是不是**我们自己**塞进去的占位提示（不是用户或模型真正说的话）。
+
+    旧版本在「assistant 正文为空」时会写进这条提示，于是**纯 PLL 的会话**也被说成
+    "PH Launcher 高级格式不支持"，而且它会被存回会话、越滚越多，模型还会照着它回答
+    （2026-09-21 用户实测：两个只聊了一句的会话，assistant 回复就是这串提示）。
+    这里把它当成"没有内容"，让被污染的旧会话能自愈。
+    """
+    return text.strip() == _UNSUPPORTED_HINT
 
 
 def _compatible_history(history):
@@ -176,19 +221,28 @@ def _compatible_history(history):
             continue
         role = msg.get("role")
         if role == "system":
-            content = msg.get("content")
-            if isinstance(content, str) and content.strip():
-                out.append({"role": "system", "content": content})
+            t = _text_of(msg.get("content"))
+            if t.strip() and not _is_placeholder(t):
+                out.append({"role": "system", "content": t})
             continue
         if role not in ("user", "assistant"):
             continue  # tool 等过程消息不是对话内容, 整条跳过
-        content = msg.get("content")
-        if isinstance(content, str) and content.strip() and not msg.get("tool_calls"):
-            out.append({"role": role, "content": content})
-        elif role == "user":
-            out.append({"role": "user", "content": _UNSUPPORTED_HINT})
-        else:
-            out.append({"role": "assistant", "content": _UNSUPPORTED_HINT})
+
+        raw = msg.get("content")
+        text = _text_of(raw)
+        if _is_placeholder(text):
+            continue  # 旧版本误写的占位提示 → 丢掉, 不让它继续污染会话
+        if text.strip():
+            out.append({"role": role, "content": text})
+            continue
+        if isinstance(raw, str) or raw is None:
+            # 正文为空：只是"这一轮没话说"（被中断、只调工具、模型没吐字），
+            # **不是**格式不支持 —— 静默跳过，绝不能吓唬用户
+            continue
+        if msg.get("tool_calls"):
+            continue  # 工具调用轮本来就没有正文
+        # content 是个我们抽不出文本的结构 → 这才算真的读不懂
+        out.append({"role": role, "content": _UNSUPPORTED_HINT})
     return out
 
 
@@ -572,6 +626,8 @@ class AgentEngine:
         client = OpenAI(
             api_key=provider.get("api_key") or "EMPTY",
             base_url=provider.get("base_url") or None,
+            timeout=AI_CALL_TIMEOUT,
+            max_retries=AI_MAX_RETRIES,
         )
         content_parts: list[str] = []
         tool_calls: dict[int, dict] = {}
@@ -616,6 +672,8 @@ class AgentEngine:
         client = anthropic.Anthropic(
             api_key=provider.get("api_key"),
             base_url=base_url,
+            timeout=AI_CALL_TIMEOUT,
+            max_retries=AI_MAX_RETRIES,
         )
         # 内部历史是 openai 风格, 转成 anthropic 风格
         conv, pending_tool_results = [], []
