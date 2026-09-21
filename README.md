@@ -19,8 +19,10 @@
 
 | 平台 | 状态 | 打包方式 |
 |---|---|---|
-| Windows 10/11 | ✅ 主力 | PyInstaller + 自研安装器 HPHLSetup.exe |
-| macOS 14+ (Apple Silicon) | ✅ 可构建 | PyInstaller(.app)+ hdiutil(DMG), 见 `scripts/macos/` |
+| Windows 10/11 | ✅ 主力 | PyInstaller 出 app exe，再用 **WiX 3.14** 打成 MSI（`installer/PingheLauncherLite.wxs`），按用户安装、无需管理员 |
+| macOS 11+ | ✅ 可构建 | PyInstaller(.app) + hdiutil(DMG)，见 `scripts/macos_build.py`（在 macOS 机器上跑，构建完拉回产物） |
+
+> Windows **只发安装版**（MSI），不再提供便携版（绿色版）exe。
 
 ## 快速开始(开发)
 
@@ -64,20 +66,48 @@ Agent 部分支持预设: deepseek / kimi / glm / qwen / ollama(本地) / custom
 
 ```bash
 python -m PyInstaller --noconfirm --clean PingheLauncherLite.spec   # 应用 exe
-python -m PyInstaller --noconfirm --clean installer/installer.spec   # 安装程序 HPHLSetup.exe
 ```
 
-> WiX/MSI 已弃用,改用自研安装器(自定义安装目录/桌面与任务栏快捷方式/注册卸载/数据目录随安装)。
-> 需要先把 WiX 换掉前的旧版 MSI 卸载干净再装新版。
+再打成 MSI（**WiX 3.14**，工具在 `tools/wix314/`）：
+
+```bash
+cd installer
+../tools/wix314/candle.exe PingheLauncherLite.wxs -nologo
+../tools/wix314/light.exe  PingheLauncherLite.wixobj -out PingheLauncherLite.msi -nologo
+```
+
+> **不要给 candle/light 加 `-ext WixUIExtension`** —— 那会把数据库代码页压回 1252，
+> 中文串直接报 `LGHT0311`。不加就正常。
+>
+> 安装包是**按用户安装**（`%LOCALAPPDATA%\Programs\PingheLauncherLite`），不需要管理员权限；
+> 会在「设置 → 应用」里注册，可正常覆盖升级与卸载。`portable.flag` 让数据目录留在**安装目录**里，
+> 所以卸载不会删除用户数据。
+>
+> 早先那版自研安装器（tkinter，`installer/installer.py` + `installer.spec`）**已不再出货**，
+> 源码保留仅供参考。
 
 ### macOS(在 Mac 上执行)
 
+推荐用仓库里的脚本：它会把源码同步到 Mac、建虚拟环境、打包 .app、生成 dmg，再把产物拉回来。
+
+```bash
+python -X utf8 scripts/macos_build.py --host <mac-ip> --user <mac-user>
+```
+
+手工做等价于：
+
 ```bash
 python3 -m venv venv && source venv/bin/activate
-pip install -e . pyinstaller
+pip install -e . pyinstaller pywebview pyobjc-core pyobjc-framework-Cocoa
 python -m PyInstaller --noconfirm --clean PingheLauncherLite-mac.spec
-hdiutil create -volname "Pinghe Launcher Lite" -srcfolder dist -ov -format UDZO PingheLauncherLite.dmg
+hdiutil create -volname "Pinghe Launcher Lite" -srcfolder "dist/Pinghe Launcher Lite.app" \
+  -ov -format UDZO PingheLauncherLite.dmg
 ```
+
+> 产物**未签名**（没有 Developer ID 证书），首次打开要右键 →「打开」。
+> 架构取决于构建机：Intel 机器出 x86_64（Apple Silicon 走 Rosetta），
+> Apple Silicon 机器出 arm64。仓库里的 GitHub Actions 工作流
+> （`.github/workflows/build-macos.yml`）在打 `v*` tag 时会自动为两种架构各出一份并挂到 Release。
 
 ## License
 
