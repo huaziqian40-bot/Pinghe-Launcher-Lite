@@ -15,6 +15,15 @@ _probe_*.py
 *.log
 msi_extract
 
+# 开发临时文件(续) —— 这些脚本里硬编码了**真实账号与口令**, 绝不能入库
+# (2026-09-21: `_crosscheck*.py` 曾被提交并推到公开仓库, 内含两位同学的真实邮箱与密码,
+#  已用 `git rm --cached` 取消跟踪; 历史里的旧版本仍需按 README 的说明轮换口令/清理历史。)
+_crosscheck*.py
+_cleanup/
+*.bak-*
+*.bak-*.*
+启动 Pinghe Launcher Lite.bat.bak*
+
 # 产品安装包走 GitHub Releases, 不入库
 PingheLauncherLite.exe
 HelloPingheLauncher.exe
