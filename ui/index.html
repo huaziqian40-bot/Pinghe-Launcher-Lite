@@ -496,8 +496,8 @@
         <div class="card-title">外观定制 <span class="muted small">实时生效 · 全局适用 · 自动保存</span></div>
         <div class="ap-row">
           <span class="ap-label">字体缩放</span>
-          <input type="range" id="ap-scale" min="100" max="150" step="any" value="120">
-          <b id="ap-scale-val" style="width:44px;text-align:right">120%</b>
+          <input type="range" id="ap-scale" min="100" max="150" step="any" value="110">
+          <b id="ap-scale-val" style="width:44px;text-align:right">110%</b>
         </div>
         <div class="ap-row">
           <span class="ap-label">主题预设</span>
@@ -885,6 +885,12 @@
 </div>
 
 <div id="toast" class="toast hidden"></div>
+<!-- 第三方库（随程序分发，离线可用；来源/版本/许可见 ui/vendor/README.md）
+     marked: 把 AI 回复的 Markdown 渲染成 HTML
+     DOMPurify: innerHTML 之前净化 —— 模型输出是外部输入，
+                而 js_api 桥能发邮件/交作业/写文件，不能直接吃它的 HTML -->
+<script src="vendor/marked.min.js"></script>
+<script src="vendor/purify.min.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

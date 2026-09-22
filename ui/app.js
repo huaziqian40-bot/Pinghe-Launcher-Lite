@@ -874,7 +874,13 @@ $("#schm-add").onclick = async () => {
 /* ================= 外观设置(参考 dsh-ui-appearance: 预设+颜色角色+实时生效) =================
  * 4 个颜色角色(主色/背景/面板/文字)驱动整套设计 token, 主色自动派生
  * 同系色阶; 字体缩放用 body zoom(WebView2=Chromium)。存 localStorage。 */
-const AP_DEFAULT = { accent: "#1f5a46", bg: "#fbfaf6", panel: "#ffffff", ink: "#18231e", scale: 120 };
+/* 字体缩放的默认值。2026-09-22 用户反馈 120% 太大，改为 110%。
+   注意：老机器上 localStorage 里存的正是**旧默认值 120**，只改这里看不到效果，
+   所以在 apLoad() 里做了一次性迁移（见下）。 */
+const AP_SCALE_DEFAULT = 110;
+const AP_SCALE_PREV_DEFAULT = 120;
+const AP_DEFAULT = { accent: "#1f5a46", bg: "#fbfaf6", panel: "#ffffff", ink: "#18231e",
+                     scale: AP_SCALE_DEFAULT };
 const AP_PRESETS = [
   { name: "默认", accent: "#1f5a46", bg: "#fbfaf6", panel: "#ffffff", ink: "#18231e" },
   { name: "午夜", accent: "#34506e", bg: "#f3f6fa", panel: "#ffffff", ink: "#1b2430" },
@@ -886,7 +892,16 @@ const AP_PRESETS = [
 function apLoad() {
   try {
     const raw = Store.get("appearance");   /* Store.get 返回 {t, v} 包装 */
-    return { ...AP_DEFAULT, ...((raw && raw.v) || {}) };
+    const v = { ...AP_DEFAULT, ...((raw && raw.v) || {}) };
+    /* 一次性迁移：旧默认值是 120%，现在改为 110%。老机器上存着的就是 120，
+       不迁移的话"改了默认"在界面上完全看不到。只认"正好等于旧默认值"这一种，
+       迁过一次就打标记 —— 用户之后自己调的值不会再被动。 */
+    if (!v.scaleMigrated110 && Number(v.scale) === AP_SCALE_PREV_DEFAULT) {
+      v.scale = AP_SCALE_DEFAULT;
+      v.scaleMigrated110 = true;
+      apSave(v);
+    }
+    return v;
   } catch { return { ...AP_DEFAULT }; }
 }
 function apSave(ap) { Store.set("appearance", ap); }
@@ -907,7 +922,7 @@ const AP_TOKENS = ["--green-800", "--green-900", "--green-950", "--green-700",
   "--white", "--ink", "--ink-2", "--ink-3", "--border"];
 function apApply(ap) {
   const r = document.documentElement.style;
-  const scale = Number(ap.scale) || 120;
+  const scale = Number(ap.scale) || AP_SCALE_DEFAULT;
   const z = scale / 100;
   /* zoom 系数暴露给 CSS: 所有视口相对尺寸(卡片/布局)都要除回它,
      否则 body zoom 会把 94vw/88vh 放大出窗口(实测 88vh→1.23 倍窗高) */
@@ -946,7 +961,7 @@ let apPendingScale = null;   /* 滑块拖出的待应用值(按"应用"才生效
 function apBindPanel() {
   const ap = apLoad();
   const scale = $("#ap-scale"), scaleVal = $("#ap-scale-val");
-  scale.value = apPendingScale ?? (ap.scale || 120);
+  scale.value = apPendingScale ?? (ap.scale || AP_SCALE_DEFAULT);
   scaleVal.textContent = `${Math.round(Number(scale.value))}%`;
   scale.oninput = () => {
     apPendingScale = Number(scale.value);   /* 无极调节: 只记数值, 不立即应用 */
@@ -958,7 +973,7 @@ function apBindPanel() {
     setTimeout(() => { document.body.style.transition = ""; }, 350);
   };
   $("#ap-apply").onclick = () => {
-    const next = { ...apLoad(), scale: Math.round(apPendingScale ?? (apLoad().scale || 120)) };
+    const next = { ...apLoad(), scale: Math.round(apPendingScale ?? (apLoad().scale || AP_SCALE_DEFAULT)) };
     apPendingScale = null;
     smoothApply(() => { apApply(next); apSave(next); apBindPanel(); });
     toast(`外观已应用: 字体缩放 ${next.scale}%`);
@@ -990,7 +1005,7 @@ function apBindPanel() {
   $$("#ap-presets .ap-preset").forEach((b) => {
     b.onclick = () => {
       const p = AP_PRESETS.find((x) => x.name === b.dataset.p);
-      const next = { ...p, scale: apLoad().scale || 120 };
+      const next = { ...p, scale: apLoad().scale || AP_SCALE_DEFAULT };
       apPendingScale = null;
       apApply(next); apSave(next); apBindPanel();   /* 重绑控件值 */
     };
@@ -2209,6 +2224,16 @@ function addBubble(text, who) {
   scrollChat();
   return div;
 }
+/* AI 的回复走 Markdown 渲染；用户自己打的字按纯文本原样显示
+   （用户写的就是他想看到的，别替他解释星号和井号） */
+function addMarkdownBubble(md, who = "bot") {
+  const div = document.createElement("div");
+  div.className = `bubble ${who}`;
+  div.innerHTML = mdToHtml(md);
+  $("#ag-chat").appendChild(div);
+  scrollChat();
+  return div;
+}
 /* 推理模型的"思考过程"。默认折叠 —— 用户要的是"能看见"，不是"每次都铺一屏"。
    流式过程中自动展开（不然转半天没动静像卡死），第一段正文到达后收起。 */
 let agentThinkingEl = null;
@@ -2290,16 +2315,63 @@ function updateToolCard(name, preview) {
   const body = lastToolCard.querySelector(".tc-body");
   if (body) body.textContent = preview || "(无输出)";
 }
+/* ---------------- Markdown 渲染 ----------------
+   AI 回复本来就是 Markdown（标题/表格/围栏代码块/有序列表/引用/链接），
+   以前用几个正则硬凑，只认得粗体和 `- ` 列表 —— 表格和代码块全成了糊在一起的纯文本。
+   现在交给 vendor/marked（MIT，v12.0.2），再过一遍 vendor/DOMPurify 净化。
+
+   **净化那一步不能省**：模型回复是外部输入，而本程序的 js_api 桥能发邮件、
+   交作业、写文件；回复里被塞一段 <img onerror=...> 就等于把桥交出去了。 */
 function mdToHtml(s) {
-  let t = esc(s ?? "");
-  t = t.replace(/```([\s\S]*?)```/g, (m, c) => `<pre class="mdcode">${c.trim()}</pre>`);
-  t = t.replace(/`([^`\n]+)`/g, "<code>$1</code>");
-  t = t.replace(/\*\*([^*]+)\*\*/g, "<b>$1</b>");
-  t = t.replace(/^### (.*)$/gm, "<h4>$1</h4>");
-  t = t.replace(/^## (.*)$/gm, "<h3>$1</h3>");
-  t = t.replace(/^- (.*)$/gm, "<li>$1</li>");
-  t = t.replace(/(<li>[\s\S]*?<\/li>)(?!\s*<li>)/g, "<ul>$1</ul>");
-  return t;
+  const src = String(s ?? "");
+  if (!src.trim()) return "";
+  const plain = () => `<p>${esc(src).replace(/\n/g, "<br>")}</p>`;
+  if (!window.marked || !window.DOMPurify) return plain();   // 兜底：别白屏
+  try {
+    const html = window.marked.parse(src, {
+      gfm: true,        // 表格 / 删除线 / 任务列表
+      breaks: true,     // 单个换行也当换行 —— 聊天里更符合直觉
+      async: false,
+    });
+    return window.DOMPurify.sanitize(html, {
+      FORBID_TAGS: ["style", "form", "input", "button", "iframe", "object", "embed"],
+      FORBID_ATTR: ["style", "srcset"],
+      ALLOW_DATA_ATTR: false,
+    });
+  } catch (e) {
+    return plain();
+  }
+}
+
+/* 回复里的链接：交给系统浏览器打开。
+   不拦的话 WebView 会**在应用窗口里**导航走，整个界面就没了（回不来）。 */
+document.addEventListener("click", (e) => {
+  const a = e.target && e.target.closest && e.target.closest("a[href]");
+  if (!a) return;
+  const href = a.getAttribute("href") || "";
+  if (!/^https?:\/\//i.test(href)) return;   // 站内锚点之类不动
+  e.preventDefault();
+  call("open_external", href)
+    .then(() => toast("已在浏览器中打开链接"))
+    .catch((err) => toast(err.message));
+});
+
+/* 流式渲染：增量先攒着，每 120ms 才整体重渲染一次。
+   每个字都重排 Markdown 会卡；只在结束时渲染又会让代码块/表格一直以原文示人。 */
+let agentStreamRaw = "";
+let agentStreamTimer = null;
+function scheduleStreamRender() {
+  if (agentStreamTimer) return;
+  agentStreamTimer = setTimeout(() => {
+    agentStreamTimer = null;
+    if (agentStreamingEl) {
+      agentStreamingEl.innerHTML = mdToHtml(agentStreamRaw);
+      scrollChat();
+    }
+  }, 120);
+}
+function flushStreamRender() {
+  if (agentStreamTimer) { clearTimeout(agentStreamTimer); agentStreamTimer = null; }
 }
 
 /* harness 式流式事件: python 侧 evaluate_js 推送 */
@@ -2316,14 +2388,17 @@ window.__agentEvent = (e) => {
     if (!agentStreamingEl) {
       agentStreamingEl = addBubble("", "bot streaming cursor");
       agentStreamed = true;
+      agentStreamRaw = "";
     }
-    agentStreamingEl.textContent += e.text;
-    scrollChat();
+    agentStreamRaw += e.text;
+    scheduleStreamRender();
   } else if (e.type === "tool") {
     // 先留住占位气泡再置空：工具卡要插在它前面，否则顺序变成
     // "…" → 工具卡，看起来像先出了回答再去调工具。
     const ph = agentStreamingEl;
     agentStreamingEl = null;
+    flushStreamRender();
+    agentStreamRaw = "";
     addToolCard(e.name, ph);
     // 占位气泡用完就删 —— 不删的话它会一直留在那里闪，
     // 而工具跑完后的正文会另起一个气泡（屏幕上多一个孤零零的"…"）。
@@ -2478,7 +2553,11 @@ async function refreshSessions() {
             if (m.role === "assistant" && m.reasoning) {
               renderThinking($("#ag-chat"), m.reasoning);
             }
-            addBubble(m.content, m.role === "user" ? "user" : "bot");
+            if (m.role === "user") {
+              addBubble(m.content, "user");
+            } else {
+              addMarkdownBubble(m.content, "bot");   // 回放也按 Markdown 渲染
+            }
           }
           if (!hist.length) {
             $("#ag-chat").innerHTML = `<div class="muted">这个会话还没有内容</div>`;
@@ -2571,6 +2650,8 @@ $("#ag-pick-ws").onclick = async () => {
    （占位气泡已随工具卡一起收掉），那时若只在 agentStreamingEl 上写字，
    **错误就永远显示不出来**，用户只看到一直转圈。 */
 function showAgentError(text) {
+  flushStreamRender();
+  agentStreamRaw = "";
   let el = agentStreamingEl;
   if (!el) {
     el = addBubble("", "bot");
@@ -2590,20 +2671,24 @@ async function agentSend() {
   addBubble(msg, "user");
   agentStreamed = false;
   agentThinkingEl = null;
+  agentStreamRaw = "";
+  flushStreamRender();
   agentStreamingEl = addBubble("…", "bot streaming cursor");
   try {
     const r = await call("agent_chat", msg);
+    flushStreamRender();
     if (agentStreamingEl) {
       if (r && r.ok === false) {
         showAgentError(`没能回答：${r.error || "未知原因"}`);
       } else {
-        agentStreamingEl.innerHTML = mdToHtml(r.reply || "(无回复)");
+        agentStreamingEl.innerHTML = mdToHtml(r.reply || agentStreamRaw || "(无回复)");
         agentStreamingEl.classList.remove("cursor");
         agentStreamingEl = null;
       }
     } else if (r && r.ok === false) {
       showAgentError(`没能回答：${r.error || "未知原因"}`);
     }
+    agentStreamRaw = "";
     refreshProposals();
     refreshFiles();
     // 新会话在列表里要立刻出现（列表读的是磁盘文件）

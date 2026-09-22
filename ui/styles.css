@@ -427,11 +427,60 @@ textarea{width:100%;resize:vertical}
 .ddl-item.swiping{transition:none}
 .ddl-item.reveal{background:var(--wine-100)}
 
+/* ---------- AI 回复里的 Markdown ----------
+   交给 vendor/marked 渲染后（见 app.js 的 mdToHtml），这里只管"长什么样"。
+   AI 最爱用的就是标题、表格、围栏代码块和列表，这几样以前全是糊在一起的纯文本。 */
 .mdcode{background:var(--green-950);color:var(--ivory-100);border-radius:8px;padding:10px 12px;
   overflow:auto;font-family:Consolas,monospace;font-size:12.5px;margin:6px 0}
 .bubble code{background:var(--ivory-200);border-radius:4px;padding:1px 5px}
 .bubble ul{margin:4px 0;padding-left:18px}
 .bubble h3,.bubble h4{margin:8px 0 4px}
+
+/* 块级元素不要顶到气泡边缘；最后一项别多出一截空白 */
+.bubble > :first-child{margin-top:0}
+.bubble > :last-child{margin-bottom:0}
+.bubble p{margin:6px 0}
+.bubble h1,.bubble h2,.bubble h3,.bubble h4,.bubble h5,.bubble h6{
+  margin:12px 0 6px;line-height:1.35;font-weight:750;color:var(--ink)}
+.bubble h1{font-size:19px}
+.bubble h2{font-size:17px}
+.bubble h3{font-size:15.5px}
+.bubble h4,.bubble h5,.bubble h6{font-size:14px}
+.bubble ul,.bubble ol{margin:6px 0;padding-left:22px}
+.bubble li{margin:2px 0}
+.bubble li > ul,.bubble li > ol{margin:2px 0}
+/* 有序列表要显式写，否则被上面的通用规则冲掉 */
+.bubble ol{list-style:decimal}
+.bubble ul{list-style:disc}
+.bubble li::marker{color:var(--ink-2)}
+
+/* 围栏代码块：深底浅字，横向可滚，长代码不至于撑破气泡 */
+.bubble pre{background:var(--green-950);color:var(--ivory-100);border-radius:8px;
+  padding:10px 12px;margin:8px 0;overflow:auto;max-height:420px}
+.bubble pre code{background:none;color:inherit;padding:0;font-size:12.5px;
+  font-family:Consolas,"Cascadia Mono",monospace;line-height:1.55;white-space:pre}
+.bubble :not(pre) > code{background:var(--ivory-200);color:var(--green-900);
+  border-radius:4px;padding:1px 5px;font-family:Consolas,"Cascadia Mono",monospace;
+  font-size:12.5px;word-break:break-word}
+
+/* 表格：AI 报课表/成绩基本都用它。外层可横滚，单元格不折行太狠 */
+.bubble table{border-collapse:collapse;margin:8px 0;font-size:12.5px;
+  display:block;max-width:100%;overflow-x:auto;white-space:nowrap}
+.bubble th,.bubble td{border:1px solid var(--border);padding:5px 10px;text-align:left}
+.bubble th{background:var(--ivory-100);font-weight:700;color:var(--ink)}
+.bubble tr:nth-child(even) td{background:rgba(0,0,0,.018)}
+
+.bubble blockquote{margin:8px 0;padding:2px 0 2px 12px;
+  border-left:3px solid var(--green-100);color:var(--ink-2)}
+.bubble hr{border:none;border-top:1px solid var(--border);margin:10px 0}
+.bubble a{color:var(--green-800);text-decoration:underline;text-underline-offset:2px;
+  cursor:pointer;word-break:break-all}
+.bubble a:hover{color:var(--green-900)}
+.bubble img{max-width:100%;border-radius:8px;margin:6px 0}
+.bubble strong{font-weight:750}
+.bubble del{color:var(--ink-2)}
+/* GFM 任务列表 */
+.bubble input[type="checkbox"]{margin-right:6px}
 
 /* ---------- 班级课表 + 外观设置 ---------- */
 .ap-row{display:flex;align-items:center;gap:12px;margin:10px 0;flex-wrap:wrap}
