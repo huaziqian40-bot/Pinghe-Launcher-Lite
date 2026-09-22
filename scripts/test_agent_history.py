@@ -28,7 +28,8 @@ sys.stdout.reconfigure(encoding="utf-8")
 
 from hellopinghe.app.agent import (  # noqa: E402
     AI_CALL_TIMEOUT, AI_MAX_RETRIES, AI_MAX_TOKENS, MAX_ROUNDS,
-    _UNSUPPORTED_HINT, _compatible_history, _for_api, _is_placeholder, _text_of,
+    _UNSUPPORTED_HINT, _compatible_history, _for_api, _is_placeholder,
+    _needs_reasoning_retry, _text_of,
 )
 
 
@@ -108,7 +109,7 @@ def main() -> int:
     check(isinstance(AI_MAX_TOKENS, int) and AI_MAX_TOKENS >= 4000,
           f"AI_MAX_TOKENS={AI_MAX_TOKENS} 够推理模型「思考 + 正文」共用")
 
-    print("\n[6b] 思考内容：要留在会话里，但**不能**发给 provider")
+    print("\n[6b] 思考内容：要留在会话里，但**不能**原样发给 provider")
     out = _compatible_history([
         {"role": "user", "content": "你好"},
         {"role": "assistant", "content": "在的", "reasoning": "用户打招呼"},
@@ -117,7 +118,44 @@ def main() -> int:
           "载入历史时保留 reasoning（重新打开会话能看到思考）")
     sent = _for_api([{"role": "assistant", "content": "在的", "reasoning": "用户打招呼"}])
     check("reasoning" not in sent[0],
-          "发给 provider 前过滤掉 reasoning（严格校验的 provider 会因此报错）")
+          "普通轮不带 reasoning（只有工具轮才需要回传，见 [6c]）")
+
+    print("\n[6c] 工具轮必须翻成 OpenAI 线格式 —— 否则**调了工具就再也走不下去**")
+    hist = [
+        {"role": "user", "content": "查看今天的课表"},
+        {"role": "assistant", "content": "", "reasoning": "先查课表",
+         "tool_calls": [{"id": "c1", "name": "get_timetable", "arguments": '{"days":1}'}]},
+        {"role": "tool", "tool_call_id": "c1", "name": "get_timetable", "content": "{}"},
+    ]
+    api = _for_api(hist, pass_reasoning=True)
+    asst = api[1]
+    check(isinstance(asst.get("tool_calls"), list) and asst["tool_calls"],
+          "assistant 轮保留了 tool_calls")
+    tc = asst["tool_calls"][0]
+    check(tc.get("type") == "function",
+          "tool_call 带上了 type=function（缺它会被 422: missing field `type`）")
+    check(isinstance(tc.get("function"), dict) and tc["function"].get("name") == "get_timetable",
+          "tool_call.function.name 就位（OpenAI 要的是嵌套结构，不是扁平的 name）")
+    check(tc["function"].get("arguments") == '{"days":1}', "arguments 原样保留")
+    check(asst.get("reasoning_content") == "先查课表",
+          "要求回传时带上 reasoning_content（DeepSeek 思考模式强制）")
+    check("name" not in api[2] and "tool_call_id" in api[2],
+          "tool 消息去掉内部 name 字段，只留 role/tool_call_id/content")
+
+    print("\n[6d] reasoning_content 必须是**字符串**：拿不到思考也要给空串")
+    api2 = _for_api([
+        {"role": "assistant", "content": "", "tool_calls": [{"id": "c", "name": "t", "arguments": "{}"}]},
+    ], pass_reasoning=True)
+    check(api2[0].get("reasoning_content") == "",
+          "没有思考时补空串（实测 null／缺字段都会被 400 拒，\"\" 可以）")
+
+    print("\n[6e] 自适应重试：只在报错提到 reasoning_content 时才重发")
+    check(_needs_reasoning_retry(Exception(
+        "Error code: 400 - The `reasoning_content` in the thinking mode must be passed back")),
+        "识别出「必须回传思考」这一类报错")
+    check(not _needs_reasoning_retry(Exception("Error code: 401 - invalid api key")),
+          "别的报错不重试（不能拿重试掩盖鉴权问题）")
+    check(not _needs_reasoning_retry(Exception("Connection error")), "网络错误不重试")
 
     print("\n[7] 新建会话要**立刻**出现在列表里")
     import tempfile

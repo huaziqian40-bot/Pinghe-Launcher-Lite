@@ -2221,7 +2221,14 @@ function addThinkingBlock() {
     `<summary><span class="think-dot">🧠</span> 思考过程` +
     `<span class="think-hint">（点击可折叠）</span></summary>` +
     `<div class="think-body"></div>`;
-  $("#ag-chat").appendChild(det);
+  const chat = $("#ag-chat");
+  // 发消息时会先放一个"…"占位气泡。思考必须排在它**前面**，
+  // 否则时间顺序就反了（用户看到"…"在思考上方，还以为是卡住）。
+  if (agentStreamingEl && agentStreamingEl.parentNode === chat) {
+    chat.insertBefore(det, agentStreamingEl);
+  } else {
+    chat.appendChild(det);
+  }
   agentThinkingEl = det;
   scrollChat();
   return det;
@@ -2230,6 +2237,20 @@ function appendThinking(text) {
   const det = addThinkingBlock();
   const body = det.querySelector(".think-body");
   if (body) body.textContent += text;
+  scrollChat();
+}
+/* 偶发的内部提示（例如"该模型要求回传思考，已自动适配并重试"）。
+   单独一行小字，不跟正文混在一起。 */
+function addInfoNote(text) {
+  const div = document.createElement("div");
+  div.className = "agent-note";
+  div.textContent = text;
+  const chat = $("#ag-chat");
+  if (agentStreamingEl && agentStreamingEl.parentNode === chat) {
+    chat.insertBefore(div, agentStreamingEl);
+  } else {
+    chat.appendChild(div);
+  }
   scrollChat();
 }
 function renderThinking(parent, text) {
@@ -2242,7 +2263,7 @@ function renderThinking(parent, text) {
   det.querySelector(".think-body").textContent = text;
   parent.appendChild(det);
 }
-function addToolCard(name) {
+function addToolCard(name, before) {
   lastToolCard = document.createElement("div");
   lastToolCard.className = "tool-card";
   lastToolCard.innerHTML =
@@ -2250,7 +2271,15 @@ function addToolCard(name) {
     `<pre class="tc-body hidden"></pre>`;
   lastToolCard.querySelector(".tc-head").onclick = () =>
     lastToolCard.querySelector(".tc-body").classList.toggle("hidden");
-  $("#ag-chat").appendChild(lastToolCard);
+  const chat = $("#ag-chat");
+  // 工具卡要排在"…"占位气泡前面，时间顺序才对。
+  // 注意：调用方会先把 agentStreamingEl 置空，所以占位气泡要**显式传进来**。
+  const anchor = before !== undefined ? before : agentStreamingEl;
+  if (anchor && anchor.parentNode === chat) {
+    chat.insertBefore(lastToolCard, anchor);
+  } else {
+    chat.appendChild(lastToolCard);
+  }
   scrollChat();
   return lastToolCard;
 }
@@ -2280,6 +2309,8 @@ window.__agentEvent = (e) => {
     // 推理模型的思考增量（deepseek-flash 等）。以前完全被丢掉 →
     // 用户只看到长时间没动静，以为卡住了。
     appendThinking(e.text || "");
+  } else if (e.type === "info") {
+    addInfoNote(e.text || "");
   } else if (e.type === "delta") {
     if (agentThinkingEl) agentThinkingEl.open = false;   // 正文开始了，收起思考
     if (!agentStreamingEl) {
@@ -2289,8 +2320,14 @@ window.__agentEvent = (e) => {
     agentStreamingEl.textContent += e.text;
     scrollChat();
   } else if (e.type === "tool") {
+    // 先留住占位气泡再置空：工具卡要插在它前面，否则顺序变成
+    // "…" → 工具卡，看起来像先出了回答再去调工具。
+    const ph = agentStreamingEl;
     agentStreamingEl = null;
-    addToolCard(e.name);
+    addToolCard(e.name, ph);
+    // 占位气泡用完就删 —— 不删的话它会一直留在那里闪，
+    // 而工具跑完后的正文会另起一个气泡（屏幕上多一个孤零零的"…"）。
+    if (ph && ph.parentNode) ph.remove();
   } else if (e.type === "tool_result") {
     updateToolCard(e.name, e.preview);
   } else if (e.type === "proposal") {
@@ -2529,6 +2566,22 @@ $("#ag-pick-ws").onclick = async () => {
     await loadAgent();
   } catch (e) { toast(e.message); }
 };
+/* 出错 / 没能回答时的统一显示。
+   不能假设 agentStreamingEl 还在 —— 走过工具轮之后它是 null
+   （占位气泡已随工具卡一起收掉），那时若只在 agentStreamingEl 上写字，
+   **错误就永远显示不出来**，用户只看到一直转圈。 */
+function showAgentError(text) {
+  let el = agentStreamingEl;
+  if (!el) {
+    el = addBubble("", "bot");
+  }
+  el.classList.remove("cursor");
+  el.classList.add("err");
+  el.textContent = text;
+  agentStreamingEl = null;
+  scrollChat();
+}
+
 async function agentSend() {
   const input = $("#ag-input");
   const msg = input.value.trim();
@@ -2542,25 +2595,21 @@ async function agentSend() {
     const r = await call("agent_chat", msg);
     if (agentStreamingEl) {
       if (r && r.ok === false) {
-        agentStreamingEl.classList.add("err");
-        agentStreamingEl.textContent = `没能回答：${r.error || "未知原因"}`;
+        showAgentError(`没能回答：${r.error || "未知原因"}`);
       } else {
         agentStreamingEl.innerHTML = mdToHtml(r.reply || "(无回复)");
+        agentStreamingEl.classList.remove("cursor");
+        agentStreamingEl = null;
       }
-      agentStreamingEl.classList.remove("cursor");
+    } else if (r && r.ok === false) {
+      showAgentError(`没能回答：${r.error || "未知原因"}`);
     }
-    agentStreamingEl = null;
     refreshProposals();
     refreshFiles();
     // 新会话在列表里要立刻出现（列表读的是磁盘文件）
     refreshSessions();
   } catch (e) {
-    if (agentStreamingEl) {
-      agentStreamingEl.classList.add("err");
-      agentStreamingEl.textContent = `出错: ${e.message}`;
-      agentStreamingEl.classList.remove("cursor");
-    }
-    agentStreamingEl = null;
+    showAgentError(`出错: ${e.message}`);
     refreshSessions();
   }
 }

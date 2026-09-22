@@ -262,13 +262,70 @@ def _compatible_history(history):
 _API_KEYS = ("role", "content", "tool_calls", "tool_call_id", "name")
 
 
-def _for_api(messages):
+def _for_api(messages, pass_reasoning: bool = False):
+    """把内部历史翻成 **OpenAI 线格式**再发出去。
+
+    内部历史里 tool_calls 是给自己用的简写 ``{id, name, arguments}``；
+    OpenAI 规范要的是 ``{id, type:"function", function:{name, arguments}}``。
+    不翻译就直接发，第二轮请求会被 422 拒掉：
+
+        messages[2]: missing field `type`
+
+    后果是**只要 AI 调用了工具就永远走不到第二轮** —— 用户看到的现象是
+    "工具跑完了、然后就一直转圈没反应"（2026-09-22 实测复现）。
+
+    `pass_reasoning=True` 时，工具轮的 assistant 消息会带上 ``reasoning_content``：
+    思考模式的 provider（DeepSeek 等）**强制要求回传**，否则同样是 400：
+
+        The `reasoning_content` in the thinking mode must be passed back to the API.
+
+    实测该字段**必须是字符串** —— ``""`` 可以，``null`` 与"字段缺失"都会被拒，
+    所以这里在拿不到思考时补空串，而不是省略字段。
+    """
     out = []
     for m in messages or []:
         if not isinstance(m, dict):
             continue
+        role = m.get("role")
+        if role == "assistant" and m.get("tool_calls"):
+            calls = []
+            for tc in m["tool_calls"]:
+                if not isinstance(tc, dict):
+                    continue
+                calls.append({
+                    "id": tc.get("id") or "",
+                    "type": "function",
+                    "function": {
+                        "name": tc.get("name") or "",
+                        "arguments": tc.get("arguments") or "{}",
+                    },
+                })
+            msg = {"role": "assistant",
+                   "content": m.get("content") or "",
+                   "tool_calls": calls}
+            if pass_reasoning:
+                think = m.get("reasoning")
+                msg["reasoning_content"] = think if isinstance(think, str) else ""
+            out.append(msg)
+            continue
+        if role == "tool":
+            # tool 消息只需要 role / tool_call_id / content；内部那层 `name`
+            # 不是规范字段，一并去掉
+            out.append({"role": "tool",
+                        "tool_call_id": m.get("tool_call_id") or "",
+                        "content": m.get("content") or ""})
+            continue
         out.append({k: v for k, v in m.items() if k in _API_KEYS})
     return out
+
+
+def _needs_reasoning_retry(exc: Exception) -> bool:
+    """这个报错是不是"必须把思考传回来"引起的？
+
+    只在第一次工具轮会被撞到；撞到就补上重发一次，并把结论记住，
+    后续不再多花一次请求。这样对不需要该字段的 provider 零影响。
+    """
+    return "reasoning_content" in str(exc)
 
 
 class AgentEngine:
@@ -279,6 +336,9 @@ class AgentEngine:
         self.history: list[dict] = []
         self.proposals: dict[str, dict] = {}
         self._pid = 0
+        #: 这个 provider 是否要求把思考内容回传给 API（DeepSeek 思考模式要求）。
+        #: None=还不知道（首次工具轮撞到 400 就自动开启），True/False=已确定。
+        self._reasoning_passthrough: bool | None = None
         self.on_event = None          # 流式回调: bridge 注入, 把增量推给前端
         self.session_id = datetime.now().strftime("%Y%m%d-%H%M%S")
 
@@ -671,6 +731,23 @@ class AgentEngine:
             timeout=AI_CALL_TIMEOUT,
             max_retries=AI_MAX_RETRIES,
         )
+        # 第一轮按常规发；若 provider 是思考模式且要求回传 reasoning_content，
+        # 会被 400 拒 —— 这时补上重发一次，并把结论记在本会话上（后续不再多花请求）。
+        for attempt in (0, 1):
+            pass_reasoning = bool(self._reasoning_passthrough) or attempt == 1
+            try:
+                return self._stream_openai(client, model, messages,
+                                           on_delta, on_reasoning, pass_reasoning)
+            except Exception as exc:  # noqa: BLE001
+                if attempt == 0 and _needs_reasoning_retry(exc):
+                    self._reasoning_passthrough = True
+                    self.emit({"type": "info",
+                               "text": "该模型要求回传思考内容，已自动适配并重试。"})
+                    continue
+                raise
+
+    def _stream_openai(self, client, model: str, messages: list[dict],
+                       on_delta, on_reasoning, pass_reasoning: bool):
         content_parts: list[str] = []
         think_parts: list[str] = []
         tool_calls: dict[int, dict] = {}
@@ -678,7 +755,7 @@ class AgentEngine:
 
         stream = client.chat.completions.create(
             model=model,
-            messages=_for_api(messages),
+            messages=_for_api(messages, pass_reasoning=pass_reasoning),
             tools=self.tools,
             max_tokens=AI_MAX_TOKENS,
             stream=True,
