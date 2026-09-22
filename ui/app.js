@@ -2209,6 +2209,39 @@ function addBubble(text, who) {
   scrollChat();
   return div;
 }
+/* 推理模型的"思考过程"。默认折叠 —— 用户要的是"能看见"，不是"每次都铺一屏"。
+   流式过程中自动展开（不然转半天没动静像卡死），第一段正文到达后收起。 */
+let agentThinkingEl = null;
+function addThinkingBlock() {
+  if (agentThinkingEl) return agentThinkingEl;
+  const det = document.createElement("details");
+  det.className = "think-block";
+  det.open = true;
+  det.innerHTML =
+    `<summary><span class="think-dot">🧠</span> 思考过程` +
+    `<span class="think-hint">（点击可折叠）</span></summary>` +
+    `<div class="think-body"></div>`;
+  $("#ag-chat").appendChild(det);
+  agentThinkingEl = det;
+  scrollChat();
+  return det;
+}
+function appendThinking(text) {
+  const det = addThinkingBlock();
+  const body = det.querySelector(".think-body");
+  if (body) body.textContent += text;
+  scrollChat();
+}
+function renderThinking(parent, text) {
+  const det = document.createElement("details");
+  det.className = "think-block";
+  det.innerHTML =
+    `<summary><span class="think-dot">🧠</span> 思考过程` +
+    `<span class="think-hint">（点击可折叠）</span></summary>` +
+    `<div class="think-body"></div>`;
+  det.querySelector(".think-body").textContent = text;
+  parent.appendChild(det);
+}
 function addToolCard(name) {
   lastToolCard = document.createElement("div");
   lastToolCard.className = "tool-card";
@@ -2243,7 +2276,12 @@ function mdToHtml(s) {
 /* harness 式流式事件: python 侧 evaluate_js 推送 */
 window.__agentEvent = (e) => {
   if (!e) return;
-  if (e.type === "delta") {
+  if (e.type === "thinking") {
+    // 推理模型的思考增量（deepseek-flash 等）。以前完全被丢掉 →
+    // 用户只看到长时间没动静，以为卡住了。
+    appendThinking(e.text || "");
+  } else if (e.type === "delta") {
+    if (agentThinkingEl) agentThinkingEl.open = false;   // 正文开始了，收起思考
     if (!agentStreamingEl) {
       agentStreamingEl = addBubble("", "bot streaming cursor");
       agentStreamed = true;
@@ -2398,7 +2436,16 @@ async function refreshSessions() {
           const hist = (r2.history || []).filter(
             (m) => m.role === "user" || m.role === "assistant");
           $("#ag-chat").innerHTML = "";
-          for (const m of hist) addBubble(m.content, m.role === "user" ? "user" : "bot");
+          agentThinkingEl = null;
+          for (const m of hist) {
+            if (m.role === "assistant" && m.reasoning) {
+              renderThinking($("#ag-chat"), m.reasoning);
+            }
+            addBubble(m.content, m.role === "user" ? "user" : "bot");
+          }
+          if (!hist.length) {
+            $("#ag-chat").innerHTML = `<div class="muted">这个会话还没有内容</div>`;
+          }
           renderProposals([]);
           toast(`已切换: ${r2.title || r2.session}`);
         } catch (e) { toast(e.message); }
@@ -2489,22 +2536,32 @@ async function agentSend() {
   input.value = "";
   addBubble(msg, "user");
   agentStreamed = false;
+  agentThinkingEl = null;
   agentStreamingEl = addBubble("…", "bot streaming cursor");
   try {
     const r = await call("agent_chat", msg);
     if (agentStreamingEl) {
-      agentStreamingEl.innerHTML = mdToHtml(r.reply || "(无回复)");
+      if (r && r.ok === false) {
+        agentStreamingEl.classList.add("err");
+        agentStreamingEl.textContent = `没能回答：${r.error || "未知原因"}`;
+      } else {
+        agentStreamingEl.innerHTML = mdToHtml(r.reply || "(无回复)");
+      }
       agentStreamingEl.classList.remove("cursor");
     }
     agentStreamingEl = null;
     refreshProposals();
     refreshFiles();
+    // 新会话在列表里要立刻出现（列表读的是磁盘文件）
+    refreshSessions();
   } catch (e) {
     if (agentStreamingEl) {
+      agentStreamingEl.classList.add("err");
       agentStreamingEl.textContent = `出错: ${e.message}`;
       agentStreamingEl.classList.remove("cursor");
     }
     agentStreamingEl = null;
+    refreshSessions();
   }
 }
 $("#ag-send").onclick = agentSend;

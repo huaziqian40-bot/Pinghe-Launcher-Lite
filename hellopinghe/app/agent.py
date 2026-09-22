@@ -24,6 +24,12 @@ PROPOSAL_TTL = 600  # 10 分钟
 AI_CALL_TIMEOUT = 180.0
 #: SDK 自带重试会把这个超时乘上次数 —— 只留 1 次，失败得干脆些。
 AI_MAX_RETRIES = 1
+#: 单次回复的 token 预算。**必须给足**：现在的默认模型（如 deepseek-flash）
+#: 是**推理模型**，思考 token 与正文共享这个预算；给太小会出现"思考吃光预算、
+#: 正文空、finish_reason=length"——用户看到的就是"AI 没回答"，而 API 却返回 200。
+AI_MAX_TOKENS = 8000
+#: 推理模型把思考过程放在这些字段里（各家命名不一），都读一下。
+_REASONING_FIELDS = ("reasoning_content", "reasoning")
 from .. import filestore as _fs
 
 
@@ -233,7 +239,12 @@ def _compatible_history(history):
         if _is_placeholder(text):
             continue  # 旧版本误写的占位提示 → 丢掉, 不让它继续污染会话
         if text.strip():
-            out.append({"role": role, "content": text})
+            kept: dict = {"role": role, "content": text}
+            # 思考过程也留着：重新打开会话时能一并回放（默认折叠，见前端）
+            think = _text_of(msg.get("reasoning"))
+            if think.strip():
+                kept["reasoning"] = think
+            out.append(kept)
             continue
         if isinstance(raw, str) or raw is None:
             # 正文为空：只是"这一轮没话说"（被中断、只调工具、模型没吐字），
@@ -243,6 +254,20 @@ def _compatible_history(history):
             continue  # 工具调用轮本来就没有正文
         # content 是个我们抽不出文本的结构 → 这才算真的读不懂
         out.append({"role": role, "content": _UNSUPPORTED_HINT})
+    return out
+
+
+#: 发给 provider 的字段白名单。历史里还带 `reasoning` 这类本程序自己的键，
+#: 直接塞过去可能被严格校验的 provider 拒掉，发之前统一过滤。
+_API_KEYS = ("role", "content", "tool_calls", "tool_call_id", "name")
+
+
+def _for_api(messages):
+    out = []
+    for m in messages or []:
+        if not isinstance(m, dict):
+            continue
+        out.append({k: v for k, v in m.items() if k in _API_KEYS})
     return out
 
 
@@ -319,8 +344,25 @@ class AgentEngine:
         self.save_session()
         self.history = []
         self.proposals.clear()
-        self.session_id = datetime.now().strftime("%Y%m%d-%H%M%S")
+        self.session_id = self._fresh_session_id()
+        # **立刻落盘**：否则新会话在列表里看不到 —— 列表读的是磁盘上的 *.json，
+        # 而原来只有"AI 回过一次话"才会写文件。用户看到的现象就是
+        # "新建会话不显示，要再新建一个才显示上一个"。
+        # 先放系统提示，这样即使一条都没问，文件也在、也能点进去。
+        self.history.append({
+            "role": "system", "content": _system_prompt(self.cfg, self.cfg.agent_workspace)
+        })
+        self.save_session()
         return {"session": self.session_id}
+
+    def _fresh_session_id(self) -> str:
+        """秒级时间戳做 id；同一秒内再建就加后缀，避免互相覆盖。"""
+        base = datetime.now().strftime("%Y%m%d-%H%M%S")
+        sid, n = base, 1
+        while (_sessions_dir() / f"{sid}.json").exists():
+            n += 1
+            sid = f"{base}-{n}"
+        return sid
 
     def emit(self, obj: dict) -> None:
         if self.on_event is None:
@@ -613,14 +655,14 @@ class AgentEngine:
         model = self.cfg.agent_model or (provider.get("models") or [""])[0]
         return provider, model
 
-    def _call_llm(self, messages: list[dict], on_delta=None):
+    def _call_llm(self, messages: list[dict], on_delta=None, on_reasoning=None):
         provider, model = self._active()
         if provider.get("protocol") == "anthropic":
-            return self._call_anthropic(provider, model, messages, on_delta)
-        return self._call_openai(provider, model, messages, on_delta)
+            return self._call_anthropic(provider, model, messages, on_delta, on_reasoning)
+        return self._call_openai(provider, model, messages, on_delta, on_reasoning)
 
     def _call_openai(self, provider: dict, model: str,
-                     messages: list[dict], on_delta=None):
+                     messages: list[dict], on_delta=None, on_reasoning=None):
         from openai import OpenAI
 
         client = OpenAI(
@@ -630,21 +672,35 @@ class AgentEngine:
             max_retries=AI_MAX_RETRIES,
         )
         content_parts: list[str] = []
+        think_parts: list[str] = []
         tool_calls: dict[int, dict] = {}
+        finish_reason = ""
 
         stream = client.chat.completions.create(
             model=model,
-            messages=messages,
+            messages=_for_api(messages),
             tools=self.tools,
-            max_tokens=4000,
+            max_tokens=AI_MAX_TOKENS,
             stream=True,
         )
         for chunk in stream:
             if not chunk.choices:
                 continue
-            delta = chunk.choices[0].delta
+            choice = chunk.choices[0]
+            if choice.finish_reason:
+                finish_reason = choice.finish_reason
+            delta = choice.delta
             if delta is None:
                 continue
+            # 推理模型（deepseek-flash 等）把"思考过程"放在 reasoning_content 里，
+            # 与正文分开。以前只取 content，于是**思考完全看不到**。
+            for field in _REASONING_FIELDS:
+                piece = getattr(delta, field, None)
+                if piece:
+                    think_parts.append(piece)
+                    if on_reasoning:
+                        on_reasoning(piece)
+                    break
             if delta.content:
                 content_parts.append(delta.content)
                 if on_delta:
@@ -662,10 +718,11 @@ class AgentEngine:
                             slot["arguments"] += tc.function.arguments
 
         calls = [tool_calls[i] for i in sorted(tool_calls)]
-        return {"content": "".join(content_parts), "tool_calls": calls}
+        return {"content": "".join(content_parts), "tool_calls": calls,
+                "reasoning": "".join(think_parts), "finish_reason": finish_reason}
 
     def _call_anthropic(self, provider: dict, model: str,
-                        messages: list[dict], on_delta=None):
+                        messages: list[dict], on_delta=None, on_reasoning=None):
         import anthropic
 
         base_url = (provider.get("base_url") or "").strip().rstrip("/") or None
@@ -713,7 +770,7 @@ class AgentEngine:
         ]
         content_parts: list[str] = []
         with client.messages.stream(
-            model=model, max_tokens=4000,
+            model=model, max_tokens=AI_MAX_TOKENS,
             system=_system_prompt(self.cfg, self.cfg.agent_workspace),
             messages=conv, tools=tools,
         ) as stream:
@@ -731,9 +788,36 @@ class AgentEngine:
             }
             for block in final.content if block.type == "tool_use"
         ]
-        return {"content": content, "tool_calls": calls}
+        # Anthropic 的扩展思考是 content 里 type="thinking" 的块（流式的 thinking
+        # 增量走 thinking_stream，这里从 final 里取全文即可）
+        think_parts = [
+            block.thinking for block in final.content
+            if getattr(block, "type", "") == "thinking" and getattr(block, "thinking", None)
+        ]
+        return {"content": content, "tool_calls": calls,
+                "reasoning": "".join(think_parts),
+                "finish_reason": getattr(final, "stop_reason", "") or ""}
 
     # ------------------------------------------------------------ 主循环
+    def _empty_reply_error(self, resp: dict) -> str:
+        """回复为空时给一句**能照着修**的话，而不是默默存下一条空消息。
+
+        为什么要有这个：模型名不对、或推理模型的思考把 max_tokens 吃光时，
+        API 会返回 **HTTP 200 + 空 content + finish_reason=length**，不抛异常。
+        以前会当成"正常回复"存下来，用户看到的就是"AI 没回答"。
+        """
+        reason = (resp.get("finish_reason") or "").lower()
+        provider, model = self._active()
+        if reason == "length":
+            return (f"模型把 {AI_MAX_TOKENS} token 的输出预算用完了，没能留下正文"
+                    f"（finish_reason=length）。当前模型「{model}」如果是推理模型，"
+                    f"思考会很占预算 —— 换个小一点的模型，或把问题问短一点再试。")
+        if reason == "content_filter":
+            return "模型判定这条请求被内容策略拦截了（finish_reason=content_filter），没有产出正文。"
+        return (f"模型「{model}」没有返回任何内容（finish_reason={reason or '未知'}）。"
+                f"常见原因：模型名写错、额度用尽、或该 provider 不支持流式。"
+                f"可在「设置 → AI」里核对模型名。")
+
     def chat(self, message: str) -> dict:
         if not self.history:
             self.history.append({
@@ -743,16 +827,36 @@ class AgentEngine:
 
         reply = ""
         for _ in range(MAX_ROUNDS):
-            resp = self._call_llm(self.history, on_delta=lambda t: self.emit({"type": "delta", "text": t}))
+            try:
+                resp = self._call_llm(
+                    self.history,
+                    on_delta=lambda t: self.emit({"type": "delta", "text": t}),
+                    on_reasoning=lambda t: self.emit({"type": "thinking", "text": t}),
+                )
+            except Exception:
+                # 报错也要把用户这句话存下来，否则整个会话凭空消失
+                self.save_session()
+                raise
             calls = resp["tool_calls"]
+            thinking = resp.get("reasoning") or ""
             if not calls:
                 reply = resp["content"]
-                self.history.append({"role": "assistant", "content": reply})
+                if not reply.strip():
+                    # 空回复：**不要**存成 assistant 消息（那会污染会话、
+                    # 也会被历史清洗逻辑当成占位符丢掉），只留用户提问
+                    self.save_session()
+                    return {"ok": False, "error": self._empty_reply_error(resp), "reply": ""}
+                assistant = {"role": "assistant", "content": reply}
+                if thinking:
+                    assistant["reasoning"] = thinking
+                self.history.append(assistant)
                 self.save_session()
-                return {"ok": True, "reply": reply}
+                return {"ok": True, "reply": reply, "reasoning": thinking}
 
             assistant = {"role": "assistant", "content": resp["content"],
                          "tool_calls": calls}
+            if thinking:
+                assistant["reasoning"] = thinking
             self.history.append(assistant)
             for call in calls:
                 try:
