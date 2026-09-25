@@ -11,8 +11,11 @@ from hellopinghe import updater
 
 
 class UpdateCheckTest(unittest.TestCase):
-    def test_current_version_is_1_2_1(self):
-        self.assertEqual(updater.current_version(), "1.2.1")
+    def test_current_version_matches_module_constant(self):
+        # 别在这里硬编码版本号：发版 bump APP_VERSION 时会漏改而误报失败
+        # （1.2.1 → 1.2.2 时就踩过一次）。只断言两者一致 + 是 semver。
+        self.assertEqual(updater.current_version(), updater.APP_VERSION)
+        self.assertRegex(updater.current_version(), r"^\d+\.\d+\.\d+$")
 
     def test_check_remote_parses_production_response(self):
         # 模拟生产 /api/v1/update/check 的返回
