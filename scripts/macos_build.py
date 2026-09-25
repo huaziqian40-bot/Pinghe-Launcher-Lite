@@ -139,20 +139,27 @@ def main():
     if code != 0:
         sys.exit(f"PyInstaller 失败, exit {code}")
 
-    print("[7/8] 打 DMG …")
+    print("[7/8] 打 DMG + 自更新 ZIP …")
     stamp = time.strftime("%Y%m%d")
     # 文件名带架构(与 Releases 里的命名一致: ...-arm64.dmg / ...-x86_64.dmg)
     dmg = f"PingheLauncherLite-mac-{stamp}-{arch}.dmg"
     sh(ssh, f"cd {remote_abs}/src/dist && rm -f {dmg} && "
             f"hdiutil create -volname 'Pinghe Launcher Lite' -srcfolder "
             f"'Pinghe Launcher Lite.app' -ov -format UDZO {dmg} | tail -2")
+    # zip 内含 .app，给应用内自动更新用（未签名也能下载→解压→替换自身，
+    # 用户只需右键打开一次；见 hellopinghe/updater.py 的 macOS 分支）
+    app_zip = f"PingheLauncherLite-mac-{stamp}-{arch}.zip"
+    sh(ssh, f"cd {remote_abs}/src/dist && rm -f {app_zip} && "
+            f"ditto -c -k --sequesterRsrc --keepParent "
+            f"'Pinghe Launcher Lite.app' {app_zip} && ls -la {app_zip}")
 
-    print("[8/8] 拉回 DMG …")
+    print("[8/8] 拉回 DMG + ZIP …")
     deliver = os.path.join(HERE, "deliver")
     os.makedirs(deliver, exist_ok=True)
-    local = os.path.join(deliver, dmg)
-    sftp.get(f"{remote_abs}/src/dist/{dmg}", local)
-    print(f"✅ 完成: {local} ({os.path.getsize(local) // 1048576} MB)")
+    for name in (dmg, app_zip):
+        local = os.path.join(deliver, name)
+        sftp.get(f"{remote_abs}/src/dist/{name}", local)
+        print(f"✅ 完成: {local} ({os.path.getsize(local) // 1048576} MB)")
     sftp.close()
     ssh.close()
 

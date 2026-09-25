@@ -21,6 +21,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 import urllib.parse
 import urllib.request
 from pathlib import Path
@@ -173,7 +174,15 @@ def check_for_update_async() -> None:
     threading.Thread(target=_run, name="auto-updater", daemon=True).start()
 
 
-# ---- macOS：未签名，半自动（提示打开下载页）----
+# ---- macOS：自动下载 zip → 替换 .app → 清 quarantine → ad-hoc 重签 → 重启 ----
+#
+# 未签名 .app 也能被自己替换：替换后清掉 com.apple.quarantine 再做 ad-hoc 重签，
+# 就不会显示"应用已损坏"；用户只需在新版本**首次启动时右键 →「打开」**一次
+# （Gatekeeper 对未签名应用的固有要求，无法绕过）。
+# 自动替换准备失败时降级：把新版放进「下载」并用 Finder 显示，用户拖一下即可。
+
+MAC_DOWNLOAD_URL = "https://phix.ing/download/"
+
 
 def _mac_notify(title: str, body: str) -> None:
     """macOS 用 osascript 发通知（未签名环境最省事，无需权限）。"""
@@ -187,19 +196,160 @@ def _mac_notify(title: str, body: str) -> None:
         pass
 
 
+def _current_app_bundle() -> str:
+    """当前 .app 路径（从 sys.executable 上溯找 .app）。非 .app 运行返回空串。"""
+    p = Path(sys.executable).resolve()
+    for _ in range(5):
+        if p.name.endswith(".app"):
+            return str(p)
+        if p.parent == p:
+            break
+        p = p.parent
+    return ""
+
+
+def _find_app_bundle(root: Path) -> str:
+    """在解压目录里找 .app（zip 顶层可能直接是 .app，也可能包一层目录）。"""
+    for cur, dirs, _files in os.walk(root):
+        for d in dirs:
+            if d.endswith(".app"):
+                return str(Path(cur) / d)
+    return ""
+
+
+def _download_file(url: str, dest: Path, timeout: float = 600.0) -> None:
+    req = urllib.request.Request(url, headers={"User-Agent": f"PHL-Lite-{APP_VERSION}"})
+    with urllib.request.urlopen(req, timeout=timeout) as resp, open(dest, "wb") as out:
+        while True:
+            chunk = resp.read(1 << 20)
+            if not chunk:
+                break
+            out.write(chunk)
+
+
+def _stage_mac_update(entry, latest: str) -> bool:
+    """下载 zip → 校验 → 解压 → 写替换脚本并启动。成功则调用方应退出主进程。"""
+    from . import paths
+
+    url = str(entry.get("url") or "")
+    sha = str(entry.get("sha256") or "").lower()
+    if not url.endswith(".zip") or not sha:
+        return False
+
+    app_path = _current_app_bundle()
+    if not app_path:
+        return False  # 开发模式（非 .app）不自动替换
+
+    staging = paths.data_dir() / ".update-staging"
+    zip_path = staging / "update.zip"
+    try:
+        if staging.exists():
+            import shutil as _sh
+
+            _sh.rmtree(staging, ignore_errors=True)
+        staging.mkdir(parents=True, exist_ok=True)
+        _download_file(url, zip_path)
+
+        if _sha256(zip_path) != sha:
+            import shutil as _sh
+
+            _sh.rmtree(staging, ignore_errors=True)
+            return False  # 坏包：丢弃
+
+        # macOS 自带 ditto：解 zip 时保留权限位与符号链接（用 zipfile 会丢）
+        subprocess.run(["/usr/bin/ditto", "-x", "-k", str(zip_path), str(staging)],
+                       check=True, timeout=600)
+        zip_path.unlink(missing_ok=True)
+
+        new_app = _find_app_bundle(staging)
+        if not new_app:
+            import shutil as _sh
+
+            _sh.rmtree(staging, ignore_errors=True)
+            return False
+
+        _write_and_launch_swap_script(app_path, new_app, staging, latest)
+        return True
+    except Exception:  # noqa: BLE001
+        import shutil as _sh
+
+        _sh.rmtree(staging, ignore_errors=True)
+        return False
+
+
+def _write_and_launch_swap_script(app_path: str, new_app: str, staging: Path, latest: str) -> None:
+    """写 bash 脚本：等本进程退出 → 旧 .app 进废纸篓 → 新 .app 就位 → 清隔离 → 重签 → 重启。"""
+    script = staging / "swap.sh"
+    trash_dir = Path.home() / ".Trash"
+    trash_target = trash_dir / f"{Path(app_path).name}.old-{int(time.time())}"
+    body = f"""#!/bin/bash
+# Pinghe Launcher Lite 自动更新替换脚本（生成的）
+set -u
+TARGET={_shq(app_path)}
+NEW={_shq(new_app)}
+STAGING={_shq(str(staging))}
+TRASH={_shq(str(trash_target))}
+PID={os.getpid()}
+
+for i in $(seq 1 60); do
+  if ! kill -0 "$PID" 2>/dev/null; then break; fi
+  sleep 1
+done
+sleep 1
+
+if [ -d "$TARGET" ]; then
+  mkdir -p {_shq(str(trash_dir))} 2>/dev/null || true
+  mv "$TARGET" "$TRASH" 2>/dev/null || rm -rf "$TARGET"
+fi
+
+/usr/bin/ditto "$NEW" "$TARGET" || exit 1
+/usr/bin/xattr -dr com.apple.quarantine "$TARGET" 2>/dev/null || true
+/usr/bin/codesign --sign - --deep --force "$TARGET" 2>/dev/null || true
+/usr/bin/open "$TARGET" 2>/dev/null || true
+rm -rf "$STAGING" 2>/dev/null || true
+"""
+    script.write_text(body, encoding="utf-8")
+    script.chmod(0o755)
+    subprocess.Popen(["/bin/bash", str(script)], start_new_session=True,
+                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    _mac_notify("Pinghe Launcher Lite 正在更新",
+                f"退出后将自动替换为 v{latest}；下次打开请右键 →「打开」一次。")
+
+
+def _shq(s: str) -> str:
+    """shell 单引号转义。"""
+    return "'" + str(s).replace("'", "'\\''") + "'"
+
+
+def _mac_fallback(latest: str) -> None:
+    """自动替换准备失败时的降级：提示 + 打开下载页（至少不让用户自己找）。"""
+    _mac_notify("发现新版本 Pinghe Launcher Lite",
+                f"v{latest} 已发布，请前往官网下载更新。")
+    try:
+        subprocess.Popen(["open", MAC_DOWNLOAD_URL],
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def check_for_update_mac_async() -> None:
-    """启动后异步检查 macOS 版本；有新版时发系统通知提示去官网下载。"""
+    """启动后异步检查 macOS 版本：自动下载并准备替换；失败才降级到下载页。"""
 
     def _run() -> None:
         if not getattr(sys, "frozen", False):
             return
         try:
             data = _check_remote()
-            if not data.get("ok") or str(data.get("latest_version") or "") == APP_VERSION:
+            if not data.get("ok"):
                 return
-            latest = str(data.get("latest_version"))
-            _mac_notify("发现新版本 Pinghe Launcher Lite",
-                        f"v{latest} 已发布，请前往官网下载更新。")
+            latest = str(data.get("latest_version") or "")
+            if not latest or latest == APP_VERSION:
+                return
+            if _stage_mac_update(data, latest):
+                # 替换脚本已接管：稍等它写盘，然后退出主进程
+                time.sleep(1.2)
+                os._exit(0)
+            _mac_fallback(latest)
         except Exception:  # noqa: BLE001
             pass
 
