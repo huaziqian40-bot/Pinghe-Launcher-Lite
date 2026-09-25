@@ -31,7 +31,7 @@ DOWNLOAD_BASE = "https://phix.ing/media/downloads"
 MAC_URL = "https://phix.ing/download/"
 
 #: 打包时的版本号（发布时由构建/发布脚本更新；源码运行取 0.0.0 表示"开发版，不更新"）
-APP_VERSION = "1.2.2"
+APP_VERSION = "1.2.3"
 
 #: 替换用临时目录（数据目录下，与 exe 可能不同盘也 OK —— 但替换仍需同盘，见 _launch_updater）
 def _update_dir() -> Path:
