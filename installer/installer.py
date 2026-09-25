@@ -26,7 +26,7 @@ UNINSTALL_EXE = "Uninstall.exe"
 APP_NAME = "Pinghe Launcher Lite"
 REG_KEY = r"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\PingheLauncherLite"
 LNK_NAME = "Pinghe Launcher Lite.lnk"
-VERSION = "1.2.1"
+VERSION = "1.2.2"
 
 BUNDLED_APP = Path(getattr(sys, "_MEIPASS", ".")) / APP_EXE
 
