@@ -1,17 +1,26 @@
 # -*- coding: utf-8 -*-
-"""Pinghe Launcher Lite 应用内自动更新（Windows 单文件 exe）。
+"""Pinghe Launcher Lite 应用内更新（Windows 单文件 exe）—— **卡片确认制**。
 
-流程（启动时后台线程执行，不阻塞主界面）：
+进入软件时后台线程**只检查**（不阻塞主界面，也不下载任何东西）：
+
 1. GET https://phix.ing/api/v1/update/check?product=phl-lite&platform=win
-2. 有新版本 → 下载新 exe 到数据目录的 .updates/ 临时位置
-3. SHA256 校验（与清单比对，不匹配丢弃）
-4. 写 updater.bat（等待本进程退出 → 覆盖 exe → 重启 → 删自身），启动它并退出
+2. 有新版本 → 通知界面弹卡片：版本号 + 本次更新内容 +
+   三个按钮「取消 / 跳过本版本 / 更新」
+3. 用户点「更新」之后才：下载新 exe 到数据目录的 .updates/ 临时位置 →
+   SHA256 校验（与清单比对，不匹配丢弃）→
+   写 updater.bat（等本进程退出 → 覆盖 exe → 重启 → 删自身）并启动它
+
+**点「更新」之前不会有任何下载或替换**（见 apply_update）。
+「取消」不记任何东西（下次启动还会提示）；「跳过本版本」记住该版本号，
+之后这个版本静默，但**更高的版本仍会提示**。
 
 安装版（%LOCALAPPDATA%\\Programs\\PingheLauncherLite\\PingheLauncherLite.exe）
 与便携版（解压目录）都适用 —— 都通过 sys.executable 定位要替换的 exe。
 用户数据不落在 exe 目录（在 data 目录），替换 exe 不影响任何数据。
 
-macOS 未签名：不走自动替换（Gatekeeper），有新版时提示去官网下载页。
+macOS 未签名：用户点「更新」后由软件自己下载 zip 并替换 .app
+（见 check_for_update_mac_async / apply_update_mac），用户不需要自己去官网下载，
+只需在新版本首次启动时右键 →「打开」一次。
 """
 from __future__ import annotations
 

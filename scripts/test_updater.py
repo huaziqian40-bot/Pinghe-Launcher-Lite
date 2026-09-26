@@ -62,7 +62,8 @@ class UpdateCheckTest(unittest.TestCase):
 
 
 class MacAutoReplaceTest(unittest.TestCase):
-    """macOS：自动下载 zip 并替换 .app（用户只需右键打开一次），不是让用户自己下载。"""
+    """macOS：用户在卡片上点「更新」之后，软件自己下载 zip 并替换 .app
+    （用户只需在新版本首次启动时右键打开一次），不是让用户自己去官网下载。"""
 
     def test_current_app_bundle_walks_up_from_executable(self):
         with mock.patch.object(sys, "executable",
