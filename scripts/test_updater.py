@@ -239,6 +239,41 @@ class CardConfirmTest(unittest.TestCase):
         self.assertIn("__updateAvailable", js)
         self.assertIn("9.9.9", js)
 
+    def test_notify_ui_retries_until_the_window_is_ready(self):
+        """检查线程在 webview.start() 之前就起来了：窗口还没建好时推送会失败，
+        必须重试 —— 否则网速快的时候卡片永远不弹（而且失败是静默的）。"""
+        import types
+        win = mock.Mock()
+        # 前 3 次窗口没准备好（抛异常），第 4 次才送到
+        win.evaluate_js.side_effect = [
+            RuntimeError("window not ready"), RuntimeError("window not ready"),
+            None, True,
+        ]
+        with mock.patch.dict(sys.modules, {"webview": types.SimpleNamespace(windows=[win])}), \
+             mock.patch.object(updater.time, "sleep") as sleep:
+            ok = updater._notify_ui({"version": "9.9.9", "current": "1.2.2"}, attempts=10)
+        self.assertTrue(ok, "重试之后应该送达")
+        self.assertEqual(win.evaluate_js.call_count, 4)
+        self.assertEqual(sleep.call_count, 3, "每次失败之间要等一下再试")
+
+    def test_notify_ui_gives_up_quietly(self):
+        import types
+        win = mock.Mock()
+        win.evaluate_js.return_value = False     # 页面一直没加载出来
+        with mock.patch.dict(sys.modules, {"webview": types.SimpleNamespace(windows=[])}), \
+             mock.patch.object(updater.time, "sleep"):
+            ok = updater._notify_ui({"version": "9.9.9"}, attempts=3)
+        self.assertFalse(ok, "没有窗口时安静放弃，不能抛异常影响启动")
+
+    def test_js_hooks_return_true_so_the_backend_knows_it_arrived(self):
+        js = (Path(__file__).resolve().parent.parent / "ui" / "app.js").read_text(encoding="utf-8")
+        at = js.index("window.__updateAvailable = (info) => {")
+        block = js[at:at + 300]
+        self.assertIn("return true;", block,
+                      "回调必须返回 true，后端才能判断推送是否真的送到")
+        at2 = js.index("window.__updateProgress = (p) => {")
+        self.assertIn("return true;", js[at2:at2 + 300])
+
     def test_apply_update_is_the_only_download_path(self):
         """apply_update 是「用户点了更新」之后才走的路：校验失败要报错且不替换。"""
         errs = []
@@ -275,6 +310,19 @@ class UpdateCardMarkupTest(unittest.TestCase):
         for c in ("cancel", "skip", "update"):
             self.assertIn(f'chooseUpdate("{c}")', js)
         self.assertIn("bindUpdateCard();", js, "启动时要绑定卡片按钮")
+
+    def test_card_waits_for_the_splash_screen(self):
+        """开机画面（#splash）z-index 比弹层高；检查比它先结束的话卡片会被挡住，
+        所以必须先等开机画面收起来再弹 —— 否则用户根本看不到卡片。"""
+        js = (self.ui / "app.js").read_text(encoding="utf-8")
+        self.assertIn("function showUpdateCardAfterSplash", js)
+        self.assertIn('window.__updateAvailable = (info) => {', js)
+        self.assertIn("showUpdateCardAfterSplash(info)", js,
+                      "__updateAvailable 必须走「等开机画面」这条路")
+        self.assertIn('document.getElementById("splash")', js)
+        css = (self.ui / "styles.css").read_text(encoding="utf-8")
+        self.assertIn(".splash-screen{position:fixed;inset:0;z-index:200", css,
+                      "前提确认：开机画面确实盖在弹层（z-index:50）上面")
 
     def test_styles_have_update_card_rules(self):
         css = (self.ui / "styles.css").read_text(encoding="utf-8")

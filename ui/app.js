@@ -4232,6 +4232,25 @@ function showUpdateCard(info) {
   modal.classList.remove("hidden");
 }
 
+/* 开机画面（#splash，z-index 200）盖在所有弹层之上。更新检查是并发的，
+ * 很可能比开机画面先结束 —— 那时卡片会被挡住看不见，所以要等开机画面收起来
+ * 再弹（用户点一下开机画面也能立刻进去）。最多等 30 秒，之后照弹不误。 */
+function showUpdateCardAfterSplash(info) {
+  const splash = document.getElementById("splash");
+  const gone = () => !splash || splash.classList.contains("hidden")
+    || getComputedStyle(splash).display === "none";
+  if (gone()) { showUpdateCard(info); return; }
+  updateInfo = info;                       // 先把信息存下来，按钮回调要用
+  let waited = 0;
+  const timer = setInterval(() => {
+    waited += 200;
+    if (gone() || waited >= 30000) {
+      clearInterval(timer);
+      showUpdateCard(info);
+    }
+  }, 200);
+}
+
 function hideUpdateCard() {
   $("#update-modal")?.classList.add("hidden");
 }
@@ -4288,9 +4307,17 @@ function bindUpdateCard() {
   });
 }
 
-/* 后端在后台检查完之后回调这两个（pywebview evaluate_js 调过来） */
-window.__updateAvailable = (info) => { try { showUpdateCard(info); } catch { /* 忽略 */ } };
-window.__updateProgress = (p) => { try { handleUpdateProgress(p); } catch { /* 忽略 */ } };
+/* 后端在后台检查完之后回调这两个（pywebview evaluate_js 调过来）。
+ * **必须返回 true**：后端据此判断"这次推送真的送到了"——窗口/页面还没准备好时
+ * evaluate_js 会失败或返回假值，后端就会重试。返回 undefined 会被当成没送到。 */
+window.__updateAvailable = (info) => {
+  try { showUpdateCardAfterSplash(info); } catch { /* 忽略 */ }
+  return true;
+};
+window.__updateProgress = (p) => {
+  try { handleUpdateProgress(p); } catch { /* 忽略 */ }
+  return true;
+};
 
 /* ================= 自绘窗口控件（无边框窗口） =================
  * 用户 2026-09-21：窗口控件不要系统那条单独的标题栏，要像 PHL 那样是软件的一部分；

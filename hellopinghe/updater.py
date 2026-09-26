@@ -142,23 +142,31 @@ def _apply_update(entry) -> bool:
     return True
 
 
-def _notify_ui(info: dict) -> None:
+def _notify_ui(info: dict, attempts: int = 60, interval: float = 0.5) -> bool:
     """把"发现新版本"推给前端，由它弹卡片让用户选。
 
     **只通知，不下载**：用户在卡片上点「更新」之后才会走下载/替换（见 apply_update）。
+
+    为什么要重试：更新检查线程在 `webview.start()` **之前**就起来了，网速快的时候
+    几百毫秒就拿到结果 —— 那时窗口的 GUI 还没建起来，`evaluate_js` 会抛异常
+    （被下面吞掉），卡片就永远不弹了。所以让 JS 显式返回 true 表示"确实送到了"，
+    没送到就每 0.5 秒重试一次（最多 30 秒，跑在后台线程上，不挡启动）。
     """
-    try:
-        import json
+    import json
 
-        import webview
+    payload = json.dumps(info, ensure_ascii=False)
+    script = ("(function(){ return !!(window.__updateAvailable"
+              f" && window.__updateAvailable({payload})); }})()")
+    for _ in range(attempts):
+        try:
+            import webview
 
-        if webview.windows:
-            payload = json.dumps(info, ensure_ascii=False)
-            webview.windows[0].evaluate_js(
-                f"window.__updateAvailable && window.__updateAvailable({payload});"
-            )
-    except Exception:  # noqa: BLE001
-        pass
+            if webview.windows and webview.windows[0].evaluate_js(script):
+                return True
+        except Exception:  # noqa: BLE001  窗口还没起来：等下一轮
+            pass
+        time.sleep(interval)
+    return False
 
 
 def check_for_update_async(config=None) -> None:
@@ -219,19 +227,25 @@ def apply_update() -> bool:
 
 
 def _notify_ui_progress(stage: str, **extra) -> None:
-    """把更新进度推给前端卡片显示。"""
-    try:
-        import json
+    """把更新进度推给前端卡片显示。
 
-        import webview
+    进度推送发生在用户点过「更新」之后，窗口肯定已经在了；仍然短暂重试几次，
+    避免恰好卡在窗口重建的瞬间。
+    """
+    import json
 
-        if webview.windows:
-            payload = json.dumps({"stage": stage, **extra}, ensure_ascii=False)
-            webview.windows[0].evaluate_js(
-                f"window.__updateProgress && window.__updateProgress({payload});"
-            )
-    except Exception:  # noqa: BLE001
-        pass
+    payload = json.dumps({"stage": stage, **extra}, ensure_ascii=False)
+    script = ("(function(){ return !!(window.__updateProgress"
+              f" && window.__updateProgress({payload})); }})()")
+    for _ in range(10):
+        try:
+            import webview
+
+            if webview.windows and webview.windows[0].evaluate_js(script):
+                return
+        except Exception:  # noqa: BLE001
+            pass
+        time.sleep(0.3)
 
 
 # ---- macOS：自动下载 zip → 替换 .app → 清 quarantine → ad-hoc 重签 → 重启 ----
