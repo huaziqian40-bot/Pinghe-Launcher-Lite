@@ -7,6 +7,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import sys
 import threading
 import time as _time
 import uuid
@@ -164,6 +165,51 @@ class Api:
     # ================================================================ 窗口控件
     # 无边框窗口（用户 2026-09-21 要求：窗口控件要是软件自己的一部分）：
     # 界面自己画那三个按钮，动作全落到下面这几个方法上。
+    def update_choice(self, choice: str, version: str = "") -> dict:
+        """用户在更新卡片上的选择。
+
+        · 'cancel' 这次先不选，继续用软件（下次启动还会提示）
+        · 'skip'   跳过本版本：记住版本号，该版本不再提示（**更高的版本仍会提示**）
+        · 'update' 这时才真正下载并替换
+
+        **只有 'update' 会触发下载** —— 检查阶段只弹卡片，绝不自动更新。
+        """
+        try:
+            from .. import updater
+
+            choice = (choice or "").strip()
+            if choice == "cancel":
+                return {"ok": True, "action": "cancel"}
+            if choice == "skip":
+                v = str(version or "").strip()
+                if v:
+                    self.cfg.skipped_update_version = v
+                    self.cfg.save()
+                return {"ok": True, "action": "skip", "version": v}
+            if choice != "update":
+                return {"ok": False, "error": f"未知的选择: {choice}"}
+
+            def _run() -> None:
+                applied = (
+                    updater.apply_update_mac()
+                    if sys.platform == "darwin"
+                    else updater.apply_update()
+                )
+                if applied:
+                    # 替换脚本已接管：稍等它写盘，然后退出当前实例
+                    import time as _t
+
+                    _t.sleep(1.5)
+                    try:
+                        os._exit(0)
+                    except Exception:  # noqa: BLE001
+                        pass
+
+            threading.Thread(target=_run, name="update-apply", daemon=True).start()
+            return {"ok": True, "action": "update"}
+        except Exception as exc:  # noqa: BLE001
+            return {"ok": False, "error": str(exc)}
+
     def win_minimize(self) -> dict:
         try:
             if self._window is not None:

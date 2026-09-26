@@ -279,16 +279,17 @@ def main() -> None:
 
         threading.Thread(target=close_later, daemon=True).start()
 
-    # ---- 应用内自动更新：后台检查，不阻塞启动 ----
+    # ---- 应用内更新：后台**只检查**，发现新版本弹卡片让用户选 ----
+    # （取消 / 跳过本版本 / 更新；用户点「更新」之前不会下载任何东西）
     # smoke/自检模式不联网（避免干扰测试与自动化）
     if not smoke:
         try:
             from .. import updater
 
             if sys.platform == "win32":
-                updater.check_for_update_async()
+                updater.check_for_update_async(api.cfg)
             elif sys.platform == "darwin":
-                updater.check_for_update_mac_async()
+                updater.check_for_update_mac_async(api.cfg)
         except Exception:  # noqa: BLE001
             pass
 

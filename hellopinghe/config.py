@@ -150,6 +150,11 @@ class Config:
     send_grades_to_llm: bool = False
     ddl_notify_days: int = 3
 
+    # --- 应用内更新 ---
+    #: 用户在更新卡片上点过「跳过本版本」的那个版本号：该版本不再提示，
+    #: 更高的新版本仍会照常弹卡片。（存独立的 update 段，不动与三端共享的同步对象）
+    skipped_update_version: str = ""
+
     # ------------------------------------------------------------ 存取
     def to_doc(self, doc: dict | None = None) -> dict:
         """把配置写进 settings.yaml 文档(保留 accounts / secrets_extra / 未知段)."""
@@ -192,6 +197,8 @@ class Config:
             "course_order": list(self.course_class_order or []),
             "task_order": list(self.task_order or []),
         }
+        # 应用内更新：独立成段，避免混进与 PLL/网页端共享的同步对象
+        doc["update"] = {"skipped_version": self.skipped_update_version or ""}
         return doc
 
     def save(self) -> None:
@@ -262,6 +269,7 @@ class Config:
             agent_mode=ag.get("mode") or "confirm",
             send_grades_to_llm=bool(ag.get("send_grades_to_llm")),
             ddl_notify_days=int(ag.get("ddl_notify_days") or 3),
+            skipped_update_version=str((doc.get("update") or {}).get("skipped_version") or "").strip(),
         )
         # 原样的 ai 段留一份: 同步元信息(updated_at/updated_by)与以后新增的字段
         # 不该因为"保存其它设置"被 to_doc 重新拼装时丢掉。

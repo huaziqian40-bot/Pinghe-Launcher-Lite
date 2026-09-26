@@ -31,7 +31,7 @@ DOWNLOAD_BASE = "https://phix.ing/media/downloads"
 MAC_URL = "https://phix.ing/download/"
 
 #: 打包时的版本号（发布时由构建/发布脚本更新；源码运行取 0.0.0 表示"开发版，不更新"）
-APP_VERSION = "1.2.3"
+APP_VERSION = "1.2.4"
 
 #: 替换用临时目录（数据目录下，与 exe 可能不同盘也 OK —— 但替换仍需同盘，见 _launch_updater）
 def _update_dir() -> Path:
@@ -142,36 +142,96 @@ def _apply_update(entry) -> bool:
     return True
 
 
-def check_for_update_async() -> None:
-    """后台线程：检查更新。有新版且下载替换成功则让主进程退出。"""
+def _notify_ui(info: dict) -> None:
+    """把"发现新版本"推给前端，由它弹卡片让用户选。
+
+    **只通知，不下载**：用户在卡片上点「更新」之后才会走下载/替换（见 apply_update）。
+    """
+    try:
+        import json
+
+        import webview
+
+        if webview.windows:
+            payload = json.dumps(info, ensure_ascii=False)
+            webview.windows[0].evaluate_js(
+                f"window.__updateAvailable && window.__updateAvailable({payload});"
+            )
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def check_for_update_async(config=None) -> None:
+    """后台线程：**只检查**是否有新版本；有就通知界面弹卡片。
+
+    绝不自动下载或替换 —— 那是用户点「更新」之后的事（apply_update）。
+    config 用来读「跳过本版本」：同一个版本被跳过过就不再提示。
+    """
 
     def _run() -> None:
         try:
-            if getattr(sys, "frozen", False):
-                data = _check_remote()
-                if not data.get("ok"):
-                    return
-                latest = str(data.get("latest_version") or "")
-                if not latest or latest == APP_VERSION:
-                    return
-                if current := data.get("platforms") or data.get("url"):
-                    pass
-                # 响应结构：{ok, latest_version, url, sha256, size, ...}
-                entry = {"url": data.get("url"), "sha256": data.get("sha256")}
-                if _apply_update(entry):
-                    # 替换脚本已接管，稍等它写盘后退出当前实例
-                    import time as _t
-
-                    _t.sleep(1.5)
-                    try:
-                        if sys.platform == "win32":
-                            os._exit(0)
-                    except Exception:  # noqa: BLE001
-                        pass
+            if not getattr(sys, "frozen", False):
+                return
+            data = _check_remote()
+            if not data.get("ok"):
+                return
+            latest = str(data.get("latest_version") or "")
+            if not latest or latest == APP_VERSION:
+                return
+            skipped = ""
+            try:
+                skipped = str(getattr(config, "skipped_update_version", "") or "")
+            except Exception:  # noqa: BLE001
+                skipped = ""
+            if skipped and skipped == latest:
+                return  # 用户点过「跳过本版本」→ 静默
+            _notify_ui({
+                "version": latest,
+                "current": APP_VERSION,
+                "notes": str(data.get("release_notes") or ""),
+            })
         except Exception:  # noqa: BLE001  任何失败都不影响启动
             pass
 
-    threading.Thread(target=_run, name="auto-updater", daemon=True).start()
+    threading.Thread(target=_run, name="update-check", daemon=True).start()
+
+
+def apply_update() -> bool:
+    """**用户点过「更新」之后**才调用：重新取一次载荷信息 → 下载 → 校验 → 替换。
+
+    成功返回 True（调用方应尽快退出，把舞台交给替换脚本）。
+    """
+    try:
+        data = _check_remote()
+        if not data or not data.get("ok"):
+            _notify_ui_progress("error", message="拿不到更新信息，请稍后再试。")
+            return False
+        entry = {"url": data.get("url"), "sha256": data.get("sha256")}
+        _notify_ui_progress("downloading", percent=0)
+        if not _apply_update(entry):
+            _notify_ui_progress("error", message="下载或校验失败，请稍后再试。")
+            return False
+        _notify_ui_progress("applying", message="正在替换新版本…")
+        return True
+    except Exception as exc:  # noqa: BLE001
+        _notify_ui_progress("error", message=str(exc))
+        return False
+
+
+def _notify_ui_progress(stage: str, **extra) -> None:
+    """把更新进度推给前端卡片显示。"""
+    try:
+        import json
+
+        import webview
+
+        if webview.windows:
+            payload = json.dumps({"stage": stage, **extra}, ensure_ascii=False)
+            webview.windows[0].evaluate_js(
+                f"window.__updateProgress && window.__updateProgress({payload});"
+            )
+    except Exception:  # noqa: BLE001
+        pass
 
 
 # ---- macOS：自动下载 zip → 替换 .app → 清 quarantine → ad-hoc 重签 → 重启 ----
@@ -332,8 +392,11 @@ def _mac_fallback(latest: str) -> None:
         pass
 
 
-def check_for_update_mac_async() -> None:
-    """启动后异步检查 macOS 版本：自动下载并准备替换；失败才降级到下载页。"""
+def check_for_update_mac_async(config=None) -> None:
+    """macOS：**只检查**是否有新版本，有就通知界面弹卡片（绝不自动替换）。
+
+    config 用来读「跳过本版本」。
+    """
 
     def _run() -> None:
         if not getattr(sys, "frozen", False):
@@ -345,12 +408,38 @@ def check_for_update_mac_async() -> None:
             latest = str(data.get("latest_version") or "")
             if not latest or latest == APP_VERSION:
                 return
-            if _stage_mac_update(data, latest):
-                # 替换脚本已接管：稍等它写盘，然后退出主进程
-                time.sleep(1.2)
-                os._exit(0)
-            _mac_fallback(latest)
+            skipped = str(getattr(config, "skipped_update_version", "") or "")
+            if skipped and skipped == latest:
+                return  # 用户点过「跳过本版本」→ 静默
+            _notify_ui({
+                "version": latest,
+                "current": APP_VERSION,
+                "notes": str(data.get("release_notes") or ""),
+            })
         except Exception:  # noqa: BLE001
             pass
 
-    threading.Thread(target=_run, name="auto-updater-mac", daemon=True).start()
+    threading.Thread(target=_run, name="update-check-mac", daemon=True).start()
+
+
+def apply_update_mac() -> bool:
+    """**用户点过「更新」之后**才调用：下载 zip → 校验 → 解压 → 写替换脚本。
+
+    成功返回 True（调用方应尽快退出，脚本会替换并重启）。
+    """
+    try:
+        data = _check_remote()
+        if not data or not data.get("ok"):
+            _notify_ui_progress("error", message="拿不到更新信息，请稍后再试。")
+            return False
+        latest = str(data.get("latest_version") or "")
+        _notify_ui_progress("downloading", percent=0)
+        if not _stage_mac_update(data, latest):
+            _notify_ui_progress("error", message="下载或校验失败，已为你打开下载页。")
+            _mac_fallback(latest)
+            return False
+        _notify_ui_progress("applying", message="正在替换应用…")
+        return True
+    except Exception as exc:  # noqa: BLE001
+        _notify_ui_progress("error", message=str(exc))
+        return False

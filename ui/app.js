@@ -4202,6 +4202,96 @@ function phixSummary(s) {
   return parts.join("，");
 }
 
+/* ================= 应用内更新卡片（卡片确认制） =================
+ * 用户要求：**不要未经允许更新**。每次客户端检测到新版本，
+ * 进入软件时弹一张卡片，写清版本号 + 本次更新内容，下面三个按钮：
+ *   取消 → 这次先不选，继续用软件（下次启动还会提示）
+ *   跳过本版本 → 记住版本号，该版本不再提示（更高的版本仍会提示）
+ *   更新 → 这时才下载并替换
+ *
+ * 后端（hellopinghe/updater.py）只负责**检查**并调用 window.__updateAvailable(info)，
+ * 下载/替换发生在点了「更新」之后（bridge.update_choice）。前端绝不主动下载。
+ */
+let updateInfo = null;   // 当前卡片上显示的版本信息
+
+function showUpdateCard(info) {
+  if (!info || !info.version) return;
+  updateInfo = info;
+  const modal = $("#update-modal");
+  if (!modal) return;
+  const vEl = $("#update-version");
+  const cEl = $("#update-current");
+  if (vEl) vEl.textContent = info.version;
+  if (cEl) cEl.textContent = info.current || "";
+  const notes = $("#update-notes");
+  if (notes) notes.textContent = String(info.notes || "").trim();
+  const hint = $("#update-hint");
+  if (hint) hint.textContent = "";
+  const now = $("#update-now");
+  if (now) now.disabled = false;
+  modal.classList.remove("hidden");
+}
+
+function hideUpdateCard() {
+  $("#update-modal")?.classList.add("hidden");
+}
+
+/* 用户点了某个按钮 → 告诉后端；只有 'update' 会真的下载 */
+async function chooseUpdate(choice) {
+  const version = (updateInfo && updateInfo.version) || "";
+  if (choice === "update") {
+    const now = $("#update-now");
+    if (now) now.disabled = true;
+    const hint = $("#update-hint");
+    if (hint) hint.textContent = "正在准备下载…";
+    // 卡片先留在屏幕上：下面的进度会画在 #update-hint 上
+  } else {
+    hideUpdateCard();
+  }
+  try {
+    await call("update_choice", choice, version);
+  } catch (e) {
+    // 后端没接住（例如旧版本后端）也不能让界面卡住
+    const hint = $("#update-hint");
+    if (hint) hint.textContent = String(e.message || e);
+    const now = $("#update-now");
+    if (now) now.disabled = false;
+  }
+}
+
+/* 后端推来的下载/替换进度 */
+function handleUpdateProgress(p) {
+  if (!p) return;
+  const hint = $("#update-hint");
+  if (!hint) return;
+  const stage = String(p.stage || "");
+  if (stage === "downloading") {
+    hint.textContent = p.percent ? `正在下载… ${p.percent}%` : "正在下载…";
+  } else if (stage === "applying") {
+    hint.textContent = p.message || "正在替换新版本…";
+  } else if (stage === "error") {
+    hint.textContent = (p.message || "更新失败") + "（软件仍可继续使用）";
+    const now = $("#update-now");
+    if (now) now.disabled = false;
+  } else if (stage === "done") {
+    hint.textContent = p.message || "更新完成。";
+  }
+}
+
+function bindUpdateCard() {
+  $("#update-cancel")?.addEventListener("click", () => chooseUpdate("cancel"));
+  $("#update-skip")?.addEventListener("click", () => chooseUpdate("skip"));
+  $("#update-now")?.addEventListener("click", () => chooseUpdate("update"));
+  // 点卡片外的遮罩 = 取消（这次先不选），不写任何记录
+  $("#update-modal")?.addEventListener("click", (ev) => {
+    if (ev.target && ev.target.id === "update-modal") chooseUpdate("cancel");
+  });
+}
+
+/* 后端在后台检查完之后回调这两个（pywebview evaluate_js 调过来） */
+window.__updateAvailable = (info) => { try { showUpdateCard(info); } catch { /* 忽略 */ } };
+window.__updateProgress = (p) => { try { handleUpdateProgress(p); } catch { /* 忽略 */ } };
+
 /* ================= 自绘窗口控件（无边框窗口） =================
  * 用户 2026-09-21：窗口控件不要系统那条单独的标题栏，要像 PHL 那样是软件的一部分；
  * 并且「窗口四周有一圈白边，去掉」「侧边栏往上移，不要让上面有一块空着」。
@@ -4308,3 +4398,4 @@ function bindWindowControls() {
 phixBind();
 bindWindowControls();
 phixBindAvatar();
+bindUpdateCard();

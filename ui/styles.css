@@ -603,6 +603,20 @@ button,.chip,.item,.mail-item,.session-item,.file-item,.tt-lesson,.gt-lesson{
   font-size:13px;color:var(--ink);cursor:pointer}
 .tt-menu button:hover{background:var(--ivory-100)}
 
+/* ---------- 应用内更新卡片 ---------- */
+.update-card{width:min(480px, calc(94vw / var(--ap-zoom,1)))}
+.update-version{display:flex;align-items:baseline;gap:8px;margin:2px 0 12px;
+  font-size:15px;color:var(--green-800)}
+.update-version b{font-size:17px}
+.update-notes-label{font-size:13px;font-weight:600;color:var(--ink-2);margin-bottom:6px}
+.update-notes{max-height:min(230px,34vh);overflow:auto;white-space:pre-wrap;word-break:break-word;
+  background:var(--ivory-100);border:1px solid var(--border);border-radius:var(--radius-sm);
+  padding:10px 12px;font-size:13.5px;line-height:1.65;color:var(--ink)}
+.update-notes:empty::after{content:"（本次更新没有提供说明）";color:var(--ink-3)}
+.update-hint{margin-top:8px;min-height:16px}
+.update-actions{gap:8px}
+.update-actions .primary{margin-left:auto}
+
 /* ---------- 心履(心情记录) ---------- */
 #xl-mood-grid,#xl-rec-moods{display:grid;grid-template-columns:repeat(5,1fr);gap:10px}
 .xl-mood{display:flex;flex-direction:column;align-items:center;gap:4px;padding:10px 4px;

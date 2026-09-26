@@ -125,5 +125,217 @@ class MacAutoReplaceTest(unittest.TestCase):
         self.assertFalse(swap.called, "坏包不应启动替换")
 
 
+class CardConfirmTest(unittest.TestCase):
+    """卡片确认制：检查阶段**只弹卡片**，绝不下载；只有点「更新」才下载替换。
+
+    用户要求（原话）：不要未经用户允许更新；每次检测到有新版本就在进入软件时跳一张卡片，
+    写版本号 + 更新内容，下面三个按钮：取消 / 跳过本版本 / 更新。
+    """
+
+    @staticmethod
+    def _run_now():
+        """让 check_for_update_*_async 里的后台线程同步执行，便于断言。"""
+        class _Sync:
+            def __init__(self, target=None, **kw):
+                self._target = target
+
+            def start(self):
+                if self._target:
+                    self._target()
+
+        return mock.patch.object(updater.threading, "Thread", _Sync)
+
+    def _remote(self, latest="9.9.9", notes="修了几个 bug\n新增了周视图"):
+        return {
+            "ok": True,
+            "latest_version": latest,
+            "url": "https://phix.ing/updates/phl-lite/PingheLauncherLite.exe",
+            "sha256": "a" * 64,
+            "size": 1,
+            "release_notes": notes,
+        }
+
+    # ---------- Windows ----------
+    def test_check_only_notifies_and_never_downloads(self):
+        seen = []
+        with mock.patch.object(sys, "frozen", True, create=True), \
+             mock.patch.object(updater, "_check_remote", return_value=self._remote()), \
+             mock.patch.object(updater, "_notify_ui", side_effect=seen.append), \
+             mock.patch.object(updater, "_apply_update") as apply_mock, \
+             self._run_now():
+            updater.check_for_update_async(None)
+        self.assertFalse(apply_mock.called, "检查阶段绝对不能下载/替换")
+        self.assertEqual(len(seen), 1, "发现新版本应通知界面弹卡片")
+        self.assertEqual(seen[0]["version"], "9.9.9")
+        self.assertEqual(seen[0]["current"], updater.APP_VERSION)
+        self.assertIn("周视图", seen[0]["notes"], "卡片要带上本次更新内容")
+
+    def test_same_version_is_silent(self):
+        with mock.patch.object(sys, "frozen", True, create=True), \
+             mock.patch.object(updater, "_check_remote",
+                               return_value=self._remote(latest=updater.APP_VERSION)), \
+             mock.patch.object(updater, "_notify_ui") as notify, \
+             self._run_now():
+            updater.check_for_update_async(None)
+        self.assertFalse(notify.called)
+
+    def test_skipped_version_is_silent_but_newer_one_still_prompts(self):
+        class Cfg:
+            skipped_update_version = "9.9.9"
+
+        with mock.patch.object(sys, "frozen", True, create=True), \
+             mock.patch.object(updater, "_check_remote", return_value=self._remote()), \
+             mock.patch.object(updater, "_notify_ui") as notify, \
+             self._run_now():
+            updater.check_for_update_async(Cfg())
+        self.assertFalse(notify.called, "点过「跳过本版本」后该版本要静默")
+
+        with mock.patch.object(sys, "frozen", True, create=True), \
+             mock.patch.object(updater, "_check_remote",
+                               return_value=self._remote(latest="9.9.10")), \
+             mock.patch.object(updater, "_notify_ui") as notify2, \
+             self._run_now():
+            updater.check_for_update_async(Cfg())
+        self.assertTrue(notify2.called, "更高的版本仍然要提示")
+
+    def test_not_frozen_is_silent(self):
+        with mock.patch.object(sys, "frozen", False, create=True), \
+             mock.patch.object(updater, "_check_remote") as remote, \
+             mock.patch.object(updater, "_notify_ui") as notify, \
+             self._run_now():
+            updater.check_for_update_async(None)
+        self.assertFalse(remote.called, "源码运行不该联网检查")
+        self.assertFalse(notify.called)
+
+    # ---------- macOS ----------
+    def test_mac_check_only_notifies_and_never_stages(self):
+        seen = []
+        with mock.patch.object(sys, "frozen", True, create=True), \
+             mock.patch.object(updater, "_check_remote", return_value=self._remote()), \
+             mock.patch.object(updater, "_notify_ui", side_effect=seen.append), \
+             mock.patch.object(updater, "_stage_mac_update") as stage, \
+             self._run_now():
+            updater.check_for_update_mac_async(None)
+        self.assertFalse(stage.called, "macOS 检查阶段也绝不能下载/替换")
+        self.assertEqual([s["version"] for s in seen], ["9.9.9"])
+
+    def test_mac_skipped_version_is_silent(self):
+        class Cfg:
+            skipped_update_version = "9.9.9"
+
+        with mock.patch.object(sys, "frozen", True, create=True), \
+             mock.patch.object(updater, "_check_remote", return_value=self._remote()), \
+             mock.patch.object(updater, "_notify_ui") as notify, \
+             self._run_now():
+            updater.check_for_update_mac_async(Cfg())
+        self.assertFalse(notify.called)
+
+    def test_notify_ui_calls_the_js_hook(self):
+        import types
+        win = mock.Mock()
+        with mock.patch.dict(sys.modules, {"webview": types.SimpleNamespace(windows=[win])}):
+            updater._notify_ui({"version": "9.9.9", "current": "1.2.2", "notes": "x"})
+        js = win.evaluate_js.call_args[0][0]
+        self.assertIn("__updateAvailable", js)
+        self.assertIn("9.9.9", js)
+
+    def test_apply_update_is_the_only_download_path(self):
+        """apply_update 是「用户点了更新」之后才走的路：校验失败要报错且不替换。"""
+        errs = []
+        with mock.patch.object(updater, "_check_remote", return_value=self._remote()), \
+             mock.patch.object(updater, "_apply_update", return_value=False) as apply_mock, \
+             mock.patch.object(updater, "_notify_ui_progress",
+                               side_effect=lambda stage, **kw: errs.append(stage)):
+            ok = updater.apply_update()
+        self.assertTrue(apply_mock.called, "点更新后才允许下载")
+        self.assertFalse(ok)
+        self.assertIn("error", errs, "失败要回给卡片一个提示")
+
+
+class UpdateCardMarkupTest(unittest.TestCase):
+    """界面侧：卡片必须有版本号、更新内容、三个按钮，并接上后端回调。"""
+
+    def setUp(self):
+        self.ui = Path(__file__).resolve().parent.parent / "ui"
+
+    def test_index_has_card_with_three_buttons(self):
+        html = (self.ui / "index.html").read_text(encoding="utf-8")
+        for i in ("update-modal", "update-version", "update-current",
+                  "update-notes", "update-cancel", "update-skip", "update-now"):
+            self.assertIn(f'id="{i}"', html, f"缺 #{i}")
+        self.assertIn("跳过本版本", html)
+        self.assertIn("取消", html)
+        self.assertIn(">更新<", html)
+
+    def test_app_js_binds_card_and_exposes_hooks(self):
+        js = (self.ui / "app.js").read_text(encoding="utf-8")
+        self.assertIn("window.__updateAvailable", js)
+        self.assertIn("window.__updateProgress", js)
+        self.assertIn('call("update_choice"', js)
+        for c in ("cancel", "skip", "update"):
+            self.assertIn(f'chooseUpdate("{c}")', js)
+        self.assertIn("bindUpdateCard();", js, "启动时要绑定卡片按钮")
+
+    def test_styles_have_update_card_rules(self):
+        css = (self.ui / "styles.css").read_text(encoding="utf-8")
+        for cls in (".update-card", ".update-version", ".update-notes", ".update-hint"):
+            self.assertIn(cls, css)
+
+
+class BridgeChoiceTest(unittest.TestCase):
+    """bridge.update_choice：cancel/skip 不下载，skip 记住版本，只有 update 才下载。"""
+
+    def _api(self):
+        from hellopinghe.app.bridge import Api
+        api = Api.__new__(Api)          # 不跑 __init__（避免建服务/读磁盘）
+        api.cfg = mock.Mock()
+        api.cfg.skipped_update_version = ""
+        return api
+
+    def test_cancel_downloads_nothing(self):
+        api = self._api()
+        with mock.patch.object(updater, "apply_update") as apply_mock:
+            r = api.update_choice("cancel", "9.9.9")
+        self.assertTrue(r["ok"])
+        self.assertEqual(r["action"], "cancel")
+        self.assertFalse(apply_mock.called)
+        self.assertEqual(api.cfg.skipped_update_version, "", "取消不该写任何记录")
+        self.assertFalse(api.cfg.save.called)
+
+    def test_skip_remembers_version_without_downloading(self):
+        api = self._api()
+        with mock.patch.object(updater, "apply_update") as apply_mock:
+            r = api.update_choice("skip", "9.9.9")
+        self.assertEqual(r["action"], "skip")
+        self.assertFalse(apply_mock.called, "跳过绝不能下载")
+        self.assertEqual(api.cfg.skipped_update_version, "9.9.9")
+        self.assertTrue(api.cfg.save.called, "跳过要落盘，下次启动才静默")
+
+    def test_update_spawns_download_thread(self):
+        api = self._api()
+        started = []
+
+        class _Sync:
+            def __init__(self, target=None, **kw):
+                self._target = target
+
+            def start(self):
+                started.append(True)
+                # 不真的执行 target（那会退出进程），只验证它被启动了
+
+        with mock.patch.object(sys, "frozen", True, create=True), \
+             mock.patch.object(updater, "apply_update") as apply_mock, \
+             mock.patch.object(sys.modules["hellopinghe.app.bridge"], "threading") as th:
+            th.Thread = _Sync
+            r = api.update_choice("update", "9.9.9")
+        self.assertEqual(r["action"], "update")
+        self.assertTrue(started, "点「更新」才启动下载线程")
+
+    def test_unknown_choice_is_rejected(self):
+        api = self._api()
+        r = api.update_choice("whatever", "9.9.9")
+        self.assertFalse(r["ok"])
+
+
 if __name__ == "__main__":
     unittest.main()

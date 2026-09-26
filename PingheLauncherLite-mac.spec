@@ -2,6 +2,24 @@
 # macOS 构建: 产物为 dist/Pinghe Launcher Lite.app
 # 用法(在 Mac 上): python -m PyInstaller --noconfirm --clean PingheLauncherLite-mac.spec
 
+# 版本号从源码读，不在 spec 里硬编码 —— 之前写死成 '1.1.0'，
+# 之后每次 bump 都忘了改，导致包里的版本号一直停在 1.1.0。
+# （更新判断用的是 hellopinghe/updater.py 的 APP_VERSION，但关于面板/系统
+#   显示的是 Info.plist，两者不一致会让用户以为没更新成功。）
+def _app_version() -> str:
+    import re
+    from pathlib import Path
+
+    src = Path(SPECPATH) / 'hellopinghe' / 'updater.py'
+    m = re.search(r'APP_VERSION\s*=\s*"([\d.]+)"', src.read_text(encoding='utf-8'))
+    if not m:
+        raise SystemExit('✗ 读不到 hellopinghe/updater.py 里的 APP_VERSION')
+    return m.group(1)
+
+
+APP_VERSION = _app_version()
+print(f'[spec] 打包版本号 = {APP_VERSION}')
+
 a = Analysis(
     ['run_hellopinghe.py'],
     pathex=[],
@@ -49,7 +67,8 @@ app = BUNDLE(
     info_plist={
         'CFBundleName': 'Pinghe Launcher Lite',
         'CFBundleDisplayName': 'Pinghe Launcher Lite',
-        'CFBundleShortVersionString': '1.1.0',
+        'CFBundleShortVersionString': APP_VERSION,
+        'CFBundleVersion': APP_VERSION,
         'NSHighResolutionCapable': True,
         'LSMinimumSystemVersion': '11.0',
     },
