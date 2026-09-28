@@ -322,6 +322,8 @@
     <!-- ================= 设置 ================= -->
     <section class="view" id="view-settings">
       <div class="card phix-card" id="phix-card">
+        <!-- 账号卡片由 account-ui.js 画（与 PH Launcher 共用同一份界面文件） -->
+        <div id="accountCard"></div>
         <div class="card-title">phix 账号
           <span class="muted small">一套账号打通心履与 PH Launcher · 数据端到端加密，服务器只存密文</span>
         </div>
@@ -917,6 +919,10 @@
                 而 js_api 桥能发邮件/交作业/写文件，不能直接吃它的 HTML -->
 <script src="vendor/marked.min.js"></script>
 <script src="vendor/purify.min.js"></script>
+<!-- phix 账号界面：account-ui.js 与 PH Launcher 共用同一份（字节相同），
+     account-bridge.js 才是本程序自己的适配层。 -->
+<script src="account-ui.js"></script>
+<script src="account-bridge.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

@@ -3197,25 +3197,29 @@ async function boot() {
   const st = await call("wizard_status");
   if (!st.done) {
     // 首次启动：先检查 phix 会话
-    hideSplash();   // 开机画面先收起来，让向导露出来（boot 时它是盖在最上面的）
+    hideSplash();   // 开机画面先收起来，让账号界面露出来（boot 时它是盖在最上面的）
     try {
       const phix = await call("phix_status");
       const hasSession = phix.has_access_token || phix.has_refresh_token || phix.has_token;
-      if (!hasSession) {
-        // 无会话 → 显示 phix 引导
-        obBind();
-        $("#phix-onboard").classList.remove("hidden");
-        window._phixBootNext = () => {
-          // 引导完成后进入向导
-          $("#wizard").classList.remove("hidden");
-          wzShow(1);
-          show("home");
-        };
+      // 用户 2026-09-28：首次打开也走与微软开机流程一致的那一套
+      // （登录 → 注册 → 选"本地覆盖云端 / 云端覆盖本地" → 正在为你准备你的软件 → 向导）
+      const afterAccount = () => {
+        $("#wizard").classList.remove("hidden");
+        wzShow(1);
         show("home");
-        return;
+        void window.AccountUI?.card(document.getElementById("accountCard"));
+      };
+      if (!hasSession) {
+        // 没登录 → 占满窗口的登录界面（右上角「暂时跳过」可以直接进来）
+        window.AccountUI?.login({ firstRun: true, onFinish: afterAccount });
+      } else {
+        // 已登录 → 直接进「正在为你准备你的软件」
+        window.AccountUI?.firstRun({ onFinish: afterAccount });
       }
+      show("home");
+      return;
     } catch (e) { /* phix_status 失败就跳过引导 */ }
-    // 有会话或检查失败 → 直接进向导
+    // 检查失败 → 直接进向导
     $("#wizard").classList.remove("hidden");
     wzShow(1);
     show("home");
@@ -4423,6 +4427,9 @@ function bindWindowControls() {
 }
 
 phixBind();
+/* 设置页里的账号卡片：同一个界面模块画的（PHL 那边也是它），
+   已登录显示资料卡片 + 退出登录，未登录显示占位头像 + 登录按钮。 */
+void window.AccountUI?.card(document.getElementById("accountCard"));
 bindWindowControls();
 phixBindAvatar();
 bindUpdateCard();

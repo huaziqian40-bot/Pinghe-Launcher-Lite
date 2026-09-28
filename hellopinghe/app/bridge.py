@@ -764,6 +764,63 @@ class Api:
             return {"report": report, "summary": _phix._brief(report)}
         return _phix_call(job)
 
+    # ---- 「我们正在为你准备你的软件」的逐项步骤（界面见 ui/account-ui.js）----
+    # 用户 2026-09-28 要求：同步的时候就把所有东西都缓存好（课表、日程、账号），
+    # 选完方向不要马上进软件，先显示"正在为你准备"和当前在同步哪些东西。
+    # 真正的下载由 phix_sync 完成；这里逐项确认本机缓存里到底有什么，
+    # 顺便把 detail 报给界面，用户能看到确实在动。
+
+    #: (id, 界面上的标题) —— 顺序就是界面上的顺序
+    PHIX_PREPARE_STEPS = (
+        ("accounts", "账号与密码"),
+        ("school", "学校数据"),
+        ("timetable", "课表"),
+        ("schedule", "日程"),
+        ("profile", "个人资料"),
+    )
+
+    def phix_prepare_plan(self) -> dict:
+        return _wrap(lambda: [{"id": sid, "label": label}
+                              for sid, label in self.PHIX_PREPARE_STEPS])
+
+    def phix_prepare_step(self, step_id: str = "") -> dict:
+        """跑一步，返回 {ok, detail}。失败不抛异常 —— 界面会把那一步标红、后面继续。"""
+        def job():
+            sid = str(step_id or "")
+            try:
+                if sid == "accounts":
+                    names = [n for n, v in (
+                        ("EduPage", self.cfg.edupage_username),
+                        ("ManageBac", self.cfg.managebac_email),
+                        ("平和邮箱", self.cfg.mail_email),
+                    ) if str(v or "").strip()]
+                    return {"ok": True,
+                            "detail": f"{len(names)} 个平台已就绪" if names else "暂无已保存的账号"}
+                if sid == "school":
+                    doc = fs.load_json(fs.root() / "School", None) or {}
+                    parts = [k for k in ("edupage", "managebac") if doc.get(k)]
+                    return {"ok": True,
+                            "detail": "、".join(parts) if parts else "等下次同步"}
+                if sid == "timetable":
+                    doc = fs.load_json(fs.root() / "Timetable", None) or {}
+                    n = len(doc.get("lessons") or []) if isinstance(doc, dict) else 0
+                    week = str(doc.get("week") or "") if isinstance(doc, dict) else ""
+                    return {"ok": True,
+                            "detail": f"{week} · {n} 节".strip(" ·") if n else "等下次同步"}
+                if sid == "schedule":
+                    doc = fs.load_json(fs.root() / fs.SCHEDULE, None)
+                    n = len(doc) if isinstance(doc, list) else (
+                        len(doc.get("entries") or []) if isinstance(doc, dict) else 0)
+                    return {"ok": True, "detail": f"{n} 条" if n else "暂无日程"}
+                if sid == "profile":
+                    doc = fs.load_json(fs.root() / "Profile", None) or {}
+                    name = str(doc.get("display_name") or "").strip()
+                    return {"ok": True, "detail": f"你好，{name}" if name else "已就绪"}
+                return {"ok": False, "detail": "未知步骤"}
+            except Exception as exc:  # noqa: BLE001  单步失败不影响后面
+                return {"ok": False, "detail": str(exc)[:60]}
+        return _wrap(job)
+
     def phix_conflicts(self) -> dict:
         def job():
             st = _phix.SESSION.status()
