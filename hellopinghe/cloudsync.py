@@ -34,6 +34,7 @@ import re
 import shutil
 import socket
 import threading
+import urllib.parse
 from pathlib import Path
 
 import requests
@@ -52,6 +53,13 @@ SNAPSHOT_SUBDIR = "last"
 DEFAULT_TIMEOUT = 30
 MAX_PAYLOAD = 8 * 1024 * 1024
 API_PREFIX = "/api/v1"
+
+#: 长轮询：服务端最多挂这么多秒（与 phix 的 api/syncwatch.py 对齐），
+#: 客户端超时给得比它长，免得在服务端刚要返回时被本地掐断。
+WATCH_HOLD_SECONDS = 25
+WATCH_TIMEOUT_SECONDS = 35
+#: 长轮询断线后的重试间隔。
+WATCH_RETRY_SECONDS = 3
 
 #: 这些前缀/名字**永远不上云**（硬编码，不依赖配置）
 NEVER_SYNC = (
@@ -578,6 +586,19 @@ class PhixClient:
     # -- 同步 --
     def manifest(self, token=None):
         return self._req("GET", "/sync/manifest", token=token)
+
+    def watch(self, cursor: str = "", token=None):
+        """长轮询：挂着等云端变化（服务端见 phix 的 api/syncwatch.py）。
+
+        `cursor` 是上次拿到的光标；第一次传空串，服务端会立刻返回当前光标。
+        服务端最多挂 ``WATCH_HOLD_SECONDS``，之后返回 ``changed=False``，再挂一次即可。
+        ``changed=True`` 时清单一起带回来，醒来就只差下载真正变了的对象。
+
+        超时给得**比服务端挂起时间长**，免得在服务端刚要返回时被本地掐断。
+        """
+        query = f"?cursor={urllib.parse.quote(cursor)}" if cursor else ""
+        return self._req("GET", f"/sync/watch{query}", token=token,
+                         timeout=WATCH_TIMEOUT_SECONDS)
 
     def get_object(self, name, token=None):
         return self._req("GET", f"/sync/objects/{name}", token=token)

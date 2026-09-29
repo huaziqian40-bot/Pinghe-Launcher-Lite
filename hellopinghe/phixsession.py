@@ -156,6 +156,10 @@ class PhixSession:
         self.last_report: dict | None = None
         self._timer: threading.Timer | None = None
         self._stop = False
+        #: 长轮询：光标 + 线程 + 最近一次被云端叫醒的时间（排障用）
+        self._watch_cursor: str = ""
+        self._watch_thread: threading.Thread | None = None
+        self._last_watch_hit_at: float = 0.0
 
     # ---------------- 状态 ----------------
     def status(self) -> dict:
@@ -177,6 +181,11 @@ class PhixSession:
                 "unlocked": unlocked,
                 "key_mode": self.key_mode or cfg.get("key_mode") or "password",
                 "auto_sync": bool(cfg.get("auto_sync", True)),
+                # 长轮询：区分"等着被叫醒"和"每 N 分钟去问一次"（排障一眼看出走的哪条路）
+                "watching": bool(self._watch_thread and self._watch_thread.is_alive()
+                                 and not self._stop),
+                "watch_cursor": self._watch_cursor or "",
+                "last_watch_hit_at": self._last_watch_hit_at or 0.0,
                 "sync_interval_minutes": int(cfg.get("sync_interval_minutes")
                                              or DEFAULT_INTERVAL_MINUTES),
                 "last_sync_at": cfg.get("last_sync_at") or "",
@@ -639,13 +648,29 @@ class PhixSession:
 
     # ---------------- 自动同步 ----------------
     def start_auto_sync(self) -> None:
+        """自动同步 = **长轮询**（用户 2026-09-28：同步延迟要秒级）。
+
+        原来这里是"每 N 分钟跑一整轮同步"（默认 10 分钟），所以别的设备改了东西，
+        这边最坏要等 10 分钟才看得见。现在改成两条路：
+
+        * 一条长轮询线程挂着等云端变化（服务端见 phix 的 ``api/syncwatch.py``），
+          一变就立刻跑一轮同步 —— 延迟变成一个 RTT；
+        * `sync_interval_minutes` 仍然有效，作为"无论如何至少完整同步一次"的兜底
+          （长轮询被封、服务端重启等情况的下限保障）。
+
+        两者互不阻塞：长轮询挂了也不影响兜底那一轮。
+        """
         cfg = load_config()
         if not cfg.get("auto_sync", True):
             return
         minutes = max(2, int(cfg.get("sync_interval_minutes") or DEFAULT_INTERVAL_MINUTES))
         self.stop_auto_sync()
         self._stop = False
+        self._watch_cursor = ""
         self._schedule(minutes * 60)
+        self._watch_thread = threading.Thread(
+            target=self._watch_loop, name="phix-watch", daemon=True)
+        self._watch_thread.start()
 
     def stop_auto_sync(self) -> None:
         self._stop = True
@@ -656,6 +681,23 @@ class PhixSession:
                 except Exception:  # noqa: BLE001
                     pass
                 self._timer = None
+
+    def _watch_loop(self) -> None:
+        """长轮询循环：挂着等云端变化，一变就立刻同步。失败退避重试，绝不抛出。"""
+        while not self._stop:
+            client = self.client
+            if client is None or self.dek is None:
+                self._stop or time.sleep(cs.WATCH_RETRY_SECONDS)
+                continue
+            try:
+                result = client.watch(getattr(self, "_watch_cursor", "") or "")
+                self._watch_cursor = str((result or {}).get("cursor") or self._watch_cursor or "")
+                if (result or {}).get("changed"):
+                    self._last_watch_hit_at = time.time()
+                    self.sync()
+            except Exception as exc:  # noqa: BLE001  后台失败绝不能炸掉程序
+                _log_warn(f"phix 长轮询失败（{cs.WATCH_RETRY_SECONDS}s 后重试）：{exc}")
+                time.sleep(cs.WATCH_RETRY_SECONDS)
 
     def _schedule(self, delay: float) -> None:
         if self._stop:
