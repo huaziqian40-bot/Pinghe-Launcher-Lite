@@ -691,10 +691,20 @@ class PhixSession:
                 continue
             try:
                 result = client.watch(getattr(self, "_watch_cursor", "") or "")
-                self._watch_cursor = str((result or {}).get("cursor") or self._watch_cursor or "")
-                if (result or {}).get("changed"):
+                result = result or {}
+                self._watch_cursor = str(result.get("cursor") or self._watch_cursor or "")
+                if result.get("changed"):
                     self._last_watch_hit_at = time.time()
                     self.sync()
+                    continue
+                # 服务端同时挂起的个数有上限（挂起要占一个 waitress 线程），名额满了
+                # 它会**立刻**打回并附一个 retry_after。这种回包和"正常挂满 25 秒超时"
+                # 长得一样（都是 changed=false），意思却相反：超时该**立刻**再挂上
+                # （这就是长轮询接力），被打回则必须先等一会儿 —— 否则就是拿热循环
+                # 打服务器，比不挂还糟。只认 retry_after 这个明确信号。
+                retry_after = result.get("retry_after")
+                if isinstance(retry_after, (int, float)) and retry_after > 0:
+                    self._stop or time.sleep(min(float(retry_after), cs.WATCH_RETRY_SECONDS))
             except Exception as exc:  # noqa: BLE001  后台失败绝不能炸掉程序
                 _log_warn(f"phix 长轮询失败（{cs.WATCH_RETRY_SECONDS}s 后重试）：{exc}")
                 time.sleep(cs.WATCH_RETRY_SECONDS)

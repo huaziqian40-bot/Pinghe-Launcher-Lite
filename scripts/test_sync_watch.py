@@ -118,6 +118,50 @@ class WatchLoopTest(unittest.TestCase):
             s.stop_auto_sync()
         self.assertGreaterEqual(client.watch.call_count, 2, "失败之后要接着重试")
 
+    def test_busy_server_retry_after_is_honoured(self):
+        """服务端名额满了会**立刻**打回一个 changed=false + retry_after。
+
+        这跟"正常挂满 25 秒超时"长得一模一样（都是 changed=False），意思却相反：
+        超时该**立刻**再挂上（长轮询接力），被打回则必须先等一下 ——
+        否则客户端就变成拿热循环打服务器，比不挂还糟。所以单独守住这条。
+        """
+        s, client = self._session([
+            {"changed": False, "cursor": "3:c", "retry_after": 0.5},
+            StopIteration,
+        ])
+        slept = []
+        with mock.patch.object(ps, "time") as fake_time:
+            fake_time.time = time.time
+            fake_time.sleep = lambda d=0, *a, **k: slept.append(d)
+            s.start_auto_sync()
+            for _ in range(200):
+                if client.watch.call_count >= 2:
+                    break
+                time.sleep(0.01)
+            s.stop_auto_sync()
+        self.assertIn(0.5, slept, "被服务端打回时必须按 retry_after 等一下再挂")
+        self.assertEqual(s._watch_cursor, "3:c", "被打回也不能丢掉光标")
+
+    def test_timeout_without_retry_after_reissues_immediately(self):
+        """真超时（没有 retry_after）就该立刻再挂 —— 这才是长轮询接力，
+        也是这个机制能一直挂着的原因。别把它和"被打回"搞混。"""
+        s, client = self._session([
+            {"changed": False, "cursor": "4:d"},
+            {"changed": False, "cursor": "4:d"},
+            StopIteration,
+        ])
+        slept = []
+        with mock.patch.object(ps, "time") as fake_time:
+            fake_time.time = time.time
+            fake_time.sleep = lambda d=0, *a, **k: slept.append(d)
+            s.start_auto_sync()
+            for _ in range(200):
+                if client.watch.call_count >= 3:
+                    break
+                time.sleep(0.01)
+            s.stop_auto_sync()
+        self.assertEqual(slept, [], "超时后不该睡，要马上接着挂")
+
     def test_start_auto_sync_reports_watching(self):
         s, client = self._session([{"changed": False, "cursor": ""}])
         with mock.patch.object(ps, "load_config", return_value={"auto_sync": True}):
