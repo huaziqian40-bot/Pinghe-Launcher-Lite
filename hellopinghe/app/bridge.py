@@ -210,6 +210,28 @@ class Api:
         except Exception as exc:  # noqa: BLE001
             return {"ok": False, "error": str(exc)}
 
+    def app_version(self) -> dict:
+        """「关于软件」里的当前版本：读 updater.current_version()（单一事实源，不硬编码）。"""
+        from .. import updater
+
+        return {"ok": True, "data": {"current": updater.current_version()}}
+
+    def update_check(self) -> dict:
+        """设置 →「关于软件」→「检查更新」按钮。
+
+        复用启动时那套检查（updater.check_for_update_manual），**必定回一个结果**：
+          · {status:'up-to-date', current}     已是最新版本
+          · {status:'new', version, current, notes}  发现新版本（界面据此弹卡片）
+          · {status:'failed', error}            检查失败（离线/服务器挂了）
+        发现新版本时由前端自己弹卡片（showUpdateCardAfterSplash），这里不重复推送。
+        """
+        from .. import updater
+
+        result = updater.check_for_update_manual(config=self.cfg)
+        # 统一成 {ok:True, data:{status,...}} 的信封：三种结果都由前端读 data 判断，
+        # 检查失败也不会让 call() 直接抛异常 —— 前端要在界面写明「检查失败」。
+        return {"ok": True, "data": result}
+
     def win_minimize(self) -> dict:
         try:
             if self._window is not None:

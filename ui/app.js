@@ -2744,6 +2744,7 @@ async function loadSettings() {
   providersState = (ai.providers || []).map((p) => ({ ...p, api_key: "" }));
   renderProviderCards();
   renderActiveSelects(ai.active_provider_id, ai.active_model);
+  initAbout();   /* 「关于软件」：填当前版本 + 绑「检查更新 / 访问官网 / B站」三个按钮 */
 }
 /* 已移除的作业: 列表 + 恢复按钮 */
 async function renderDismissed() {
@@ -4257,6 +4258,94 @@ function showUpdateCardAfterSplash(info) {
 
 function hideUpdateCard() {
   $("#update-modal")?.classList.add("hidden");
+}
+
+/* ================= 「关于软件」(设置页) =================
+ * 四项：当前版本 / 手动检查更新 / 作者信息 / 访问官网。
+ *
+ * 版本读后端 `app_version()`（它再读 updater.current_version()）—— **单一事实源**，
+ * 前端不写死版本号，免得发版时漏改一处、界面永远显示旧版本。
+ *
+ * 手动检查复用启动时那套检查（后端 `update_check()` → updater.check_for_update_manual），
+ * **三种结果必须分明**：
+ *     up-to-date → 「已是最新版本」
+ *     new        → 「发现新版本 vX」并照常弹更新卡片
+ *     failed     → 「检查失败，请稍后再试」
+ * **检查失败绝不能显示成「已是最新版本」**：离线时谎报"已是最新"，用户会以为
+ * 自己没落后，也就不会去手动更新 —— 这是这一块最容易写错、后果又最误导的地方。
+ */
+const ABOUT_BILIBILI = "https://space.bilibili.com/1121702307";
+const ABOUT_OFFICIAL_SITE = "https://phix.ing/download/";
+
+/** 初始化「关于软件」：填版本、绑三个按钮。绑过一次就不再绑（loadSettings 会重复进）。 */
+async function initAbout() {
+  const verEl = $("#about-current-version");
+  if (verEl) {
+    try {
+      const d = await call("app_version");
+      verEl.textContent = "v" + ((d && d.current) || "未知");
+    } catch (e) {
+      // 读不到就如实说读不到，别编一个版本号
+      verEl.textContent = "读取失败";
+    }
+  }
+  const btn = $("#about-check-update");
+  if (btn && !btn.dataset.bound) {
+    btn.dataset.bound = "1";
+    btn.onclick = () => manualUpdateCheck(btn);
+  }
+  const bl = $("#about-bilibili");
+  if (bl && !bl.dataset.bound) {
+    bl.dataset.bound = "1";
+    bl.onclick = (ev) => { ev.preventDefault(); openAboutLink(ABOUT_BILIBILI); };
+  }
+  const site = $("#about-visit-site");
+  if (site && !site.dataset.bound) {
+    site.dataset.bound = "1";
+    site.onclick = () => openAboutLink(ABOUT_OFFICIAL_SITE);
+  }
+}
+
+/** 用系统默认浏览器打开外链（走后端 open_external，它只放行 http(s)）。失败只提示，不抛。 */
+async function openAboutLink(url) {
+  try {
+    await call("open_external", url);
+  } catch (e) {
+    toast("打不开浏览器，请手动访问：" + url);
+  }
+}
+
+/** 「检查更新」按钮：进忙态 → 写明三种结果之一 → **必定**恢复可点。 */
+async function manualUpdateCheck(btn) {
+  const out = $("#about-update-result");
+  if (!btn || btn.disabled) return;          // 已经在检查中
+  const label = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = "检查中…";
+  if (out) { out.className = "about-result muted small is-checking"; out.textContent = "正在检查更新…"; }
+  try {
+    const r = await call("update_check");
+    const status = (r && r.status) || "failed";
+    if (status === "new" && r.version) {
+      if (out) { out.className = "about-result small is-updated"; out.textContent = "发现新版本 v" + r.version; }
+      // 已在设置页 = 开机画面早收了，直接弹卡片；不必再走等 splash 那条路
+      showUpdateCard({ version: r.version, current: r.current || "", notes: r.notes || "" });
+    } else if (status === "up-to-date") {
+      if (out) { out.className = "about-result small is-updated"; out.textContent = "已是最新版本"; }
+    } else {
+      // 离线 / 服务器不可达 —— 明确说「检查失败」，**不冒充「已是最新」**
+      if (out) {
+        out.className = "about-result small is-error";
+        out.textContent = (r && r.error) || "检查失败，请稍后再试";
+      }
+    }
+  } catch (e) {
+    // 后端没接住（旧后端/桥异常）同样是「检查失败」
+    if (out) { out.className = "about-result small is-error"; out.textContent = "检查失败，请稍后再试"; }
+  } finally {
+    btn.disabled = false;                    // 永远可以再来一次
+    btn.textContent = label;
+  }
 }
 
 /* 用户点了某个按钮 → 告诉后端；只有 'update' 会真的下载 */

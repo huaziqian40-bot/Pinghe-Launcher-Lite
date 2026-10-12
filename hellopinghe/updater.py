@@ -40,7 +40,7 @@ DOWNLOAD_BASE = "https://phix.ing/media/downloads"
 MAC_URL = "https://phix.ing/download/"
 
 #: 打包时的版本号（发布时由构建/发布脚本更新；源码运行取 0.0.0 表示"开发版，不更新"）
-APP_VERSION = "1.2.5"
+APP_VERSION = "1.2.6"
 
 #: 替换用临时目录（数据目录下，与 exe 可能不同盘也 OK —— 但替换仍需同盘，见 _launch_updater）
 def _update_dir() -> Path:
@@ -211,6 +211,46 @@ def check_for_update_async(config=None) -> None:
             pass
 
     threading.Thread(target=_run, name="update-check", daemon=True).start()
+
+
+def check_for_update_manual(config=None) -> dict:
+    """手动「检查更新」（设置 →「关于软件」→「检查更新」按钮）。
+
+    与启动时的自动检查**共用同一套检查逻辑**（同一个 _check_remote / 同一个
+    「跳过本版本」判定），但**必定给界面一个结果**，三种情况分明：
+
+      · {"ok": True,  "status": "up-to-date", "current": ...}         已是最新版本
+      · {"ok": True,  "status": "new", "version": ..., ...}           发现新版本
+      · {"ok": False, "status": "failed", "error": "检查失败，请稍后再试"}  离线/服务器挂了
+
+    关键不变式：**检查失败绝不能当成「已是最新版本」** —— 两者是完全不同的状态。
+    调用方（bridge.update_check）拿回结果后，由界面负责弹卡片（走现有的
+    showUpdateCardAfterSplash），这里不重复 _notify_ui，避免双卡/阻塞 js_api 线程。
+    """
+    try:
+        data = _check_remote()
+    except Exception:  # noqa: BLE001  任何网络/解析失败都是「检查失败」，不是「已是最新」
+        return {"ok": False, "status": "failed", "error": "检查失败，请稍后再试"}
+    if not data or not data.get("ok"):
+        return {"ok": False, "status": "failed", "error": "检查失败，请稍后再试"}
+    latest = str(data.get("latest_version") or "")
+    if not latest or latest == APP_VERSION:
+        return {"ok": True, "status": "up-to-date", "current": APP_VERSION}
+    # 用户点过「跳过本版本」：该版本照旧静默，不重复弹、也不清掉跳过记录。
+    skipped = ""
+    try:
+        skipped = str(getattr(config, "skipped_update_version", "") or "")
+    except Exception:  # noqa: BLE001
+        skipped = ""
+    if skipped and skipped == latest:
+        return {"ok": True, "status": "up-to-date", "current": APP_VERSION}
+    return {
+        "ok": True,
+        "status": "new",
+        "version": latest,
+        "current": APP_VERSION,
+        "notes": str(data.get("release_notes") or ""),
+    }
 
 
 def apply_update() -> bool:

@@ -768,3 +768,16 @@ button,.chip,.item,.mail-item,.session-item,.file-item,.tt-lesson,.gt-lesson{
   background:var(--ivory-200);color:var(--ink-3)}
 .phix-sess-tag.on{background:#e6f4ea;color:#1f5a46}
 .phix-sess-tag.off{background:#f3e2e2;color:#8a3b3b}
+
+/* ---------- 「关于软件」（设置页） ---------- */
+.about-card .card-title{display:block}
+.about-row{display:flex;align-items:center;gap:10px;margin:10px 0 2px}
+.about-label{color:var(--ink-2);font-weight:700;font-size:13px}
+.about-value{color:var(--ink-3);font-size:12.5px}
+.about-result{min-height:1.2em;margin:4px 0 0}
+.about-result.is-error{color:#c0392b}
+.about-result.is-checking{color:var(--ink-3)}
+.about-result.is-updated{color:#1f5a46}
+.about-author p{margin:6px 0 0;color:var(--ink-2);font-size:13px;line-height:1.5}
+.about-author a{color:var(--green-700,#1f5a46);text-decoration:none;font-weight:700}
+.about-author a:hover{text-decoration:underline}
