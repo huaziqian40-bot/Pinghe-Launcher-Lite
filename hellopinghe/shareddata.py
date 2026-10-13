@@ -107,8 +107,17 @@ def read_marker(data_dir: Path, kind: str) -> dict | None:
         pid = int(data.get("pid") or 0)
         if pid <= 0:
             return None
+        # 时间戳**两种拼法都要认**：本应用写 snake_case（started_at/updated_at），
+        # PH Launcher 写 camelCase（startedAt/updatedAt）。
+        # 只认自己那一种的后果是**跨程序的心跳过期判定等于关掉** —— 读不到对方的时间戳，
+        # _marker_fresh 就按"当作仍然有效"处理，冲突只剩"PID 还活着吗"一条判据；
+        # 而 PID 一旦被系统回收给别人，就会误判成"对方正在运行"、程序打不开，
+        # 用户只能手动去删标记文件。这正是 _marker_fresh 注释里说要防的那件事
+        # （2026-10-12 实测确认过：两边互相读不到时间戳）。
+        updated = (data.get("updated_at") or data.get("updatedAt")
+                   or data.get("started_at") or data.get("startedAt") or "")
         return {"pid": pid, "kind": data.get("kind") or kind,
-                "updated_at": str(data.get("updated_at") or "")}
+                "updated_at": str(updated)}
     except Exception:  # noqa: BLE001
         return None
 
@@ -141,9 +150,14 @@ def sibling_running(data_dir: Path, kind: str = "pll") -> dict | None:
 def _write_marker(data_dir: Path, kind: str, pid: int) -> None:
     data_dir.mkdir(parents=True, exist_ok=True)
     tmp = _marker(data_dir, kind).with_suffix(".tmp")
+    stamp = datetime.now().astimezone().isoformat(timespec="seconds")
+    # **两种拼法都写**（snake_case + camelCase）：对方是 Electron 那份实现，历史上只读
+    # camelCase；已经装在用户机器上的旧版本也只会读自己那一种。两种都写上，
+    # 新旧版本互相都读得到心跳（见 read_marker 的注释）。
     tmp.write_text(
-        json.dumps({"kind": kind, "pid": pid, "started_at": _started_at(),
-                    "updated_at": datetime.now().astimezone().isoformat(timespec="seconds")},
+        json.dumps({"kind": kind, "pid": pid,
+                    "started_at": _started_at(), "updated_at": stamp,
+                    "startedAt": _started_at(), "updatedAt": stamp},
                    ensure_ascii=False),
         encoding="utf-8",
     )

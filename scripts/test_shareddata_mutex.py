@@ -95,6 +95,29 @@ def main() -> int:
             write_marker(data, "pll", os.getpid(), datetime.now().astimezone().isoformat(timespec="seconds"))
             shareddata.release(data, "pll")
             check(shareddata.read_marker(data, "pll") is None, "自己的标记应当被删掉")
+
+            # 9. 认得 PH Launcher 写的 camelCase 标记（跨程序心跳不能失效）
+            #    两个程序写的 JSON 键名不一样：本应用 snake_case，PHL（Electron）camelCase。
+            #    只认自己那一种的后果是**跨程序的心跳过期判定等于关掉** —— 读不到对方的
+            #    时间戳，冲突只剩"PID 还活着吗"；而 PID 一旦被系统回收给别人，就会误判成
+            #    "对方正在运行"而打不开程序。2026-10-12 实测确认过这个失效，这里守住读法。
+            stale = (datetime.now(timezone.utc) - timedelta(minutes=10)).astimezone().isoformat(timespec="seconds")
+            (data / ".phl-running").write_text(json.dumps({
+                "kind": "phl", "pid": child.pid,
+                "startedAt": stale, "updatedAt": stale,
+            }), encoding="utf-8")
+            marker = shareddata.read_marker(data, "phl")
+            check(bool(marker["updated_at"]), "camelCase 的时间戳要读得到")
+            check(shareddata.acquire(data, "pll") is None,
+                  "camelCase 的过期心跳要认出来，否则用户会被一个不存在的「对方」挡住")
+
+            # 10. 自己写的标记两种拼法都带上（老版本 / 对方都读得到）
+            (data / ".phl-running").unlink()
+            check(shareddata.acquire(data, "pll") is None, "清掉对方标记后应当能拿到")
+            raw = json.loads((data / ".pll-running").read_text(encoding="utf-8"))
+            for key in ("startedAt", "updatedAt", "started_at", "updated_at"):
+                check(isinstance(raw.get(key), str) and raw[key],
+                      f"标记里要有非空的 {key}（两种拼法都写，新旧版本互相才读得到）")
     finally:
         for child in children:
             try:
