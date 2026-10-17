@@ -810,6 +810,18 @@ class MailService:
             extra = ("。ERR.ILLEGAL.EMAIL 通常表示该账号未开通 IMAP 客户端服务: "
                      "请登录 mail.shphschool.com → 设置 → 客户端设置 → 开启 IMAP 并生成客户端授权密码; "
                      "若已开启仍报错, 请联系学校管理员为你的账号开通客户端协议")
+        elif "ERR.LOGIN.PASSERR" in err_str:
+            # 网易企业邮在**密码/授权码不对**时返回的就是这个码(2026-10-17 实测确认)。
+            # 之前没有单独处理, 会掉到下面的通用提示里, 用户按"检查 IMAP 设置"去查却发现
+            # 设置一切正常 —— 真正的原因(授权码已失效)反而没说出来。
+            extra = ("。ERR.LOGIN.PASSERR = 服务器不接受这组邮箱和客户端授权码。\n"
+                     "最常见的原因是授权码已经失效: 在网页邮箱改过密码、重新生成过授权码、"
+                     "或管理员重置过密码, 都会让旧授权码立刻作废。\n"
+                     "解决方法:\n"
+                     "  1. 登录 mail.shphschool.com\n"
+                     "  2. 进入 设置 → 客户端设置\n"
+                     "  3. 删除旧授权码 → 新增授权码(会生成一个新的授权码字符串)\n"
+                     "  4. 把新授权码填到本应用的设置页里")
         elif "ERR.LOGIN.REQCODE" in err_str:
             extra = ("。ERR.LOGIN.REQCODE = 服务器要求客户端授权码, 但提供的凭据无效或已过期。\n"
                      "解决方法:\n"
@@ -822,12 +834,31 @@ class MailService:
             extra = ("。认证失败: 网易企业邮 IMAP/SMTP 服务需要使用「客户端授权码」登录, "
                      "而不是网页登录密码。请登录 mail.shphschool.com → 设置 → 客户端设置 → "
                      "开启 IMAP/SMTP 服务并生成客户端授权码, 然后在设置页面填写客户端授权码")
-        return PingheError(
-            f"IMAP 连接/登录失败: {exc}{extra}。"
-            "通用检查: ① 服务器 imap.qiye.163.com(网页入口 mail.shphschool.com);"
-            "② 网页版开启 IMAP/SMTP 服务;"
-            "③ 使用「客户端授权码」而不是网页登录密码"
-        )
+        else:
+            # 认不出来的错误里，有一大半其实是**网络**问题（超时/连不上/DNS/证书）。
+            # 把它们也说成"去网页版检查 IMAP 设置"会把人引到一条查不出问题的路上，
+            # 所以单独分开说，并且不再附上"通用检查"那张设置清单。
+            upper = err_str.upper()
+            if ("CERTIFICATE_VERIFY_FAILED" in upper or "SSLERROR" in upper
+                    or "[SSL:" in upper or "CERTIFICATE" in upper):
+                extra = ("。与邮箱服务器的加密连接没通过校验: 多半是这台电脑的系统时间不对, "
+                         "或者网络上有代理/防火墙在解密流量。"
+                         "请先校准系统时间、关掉代理或 VPN 再试")
+            elif ("GETADDRINFO" in upper or "NODENAME NOR SERVNAME" in upper
+                  or "NAME OR SERVICE NOT KNOWN" in upper or "NAME RESOLUTION" in upper):
+                extra = ("。找不到邮箱服务器的地址: 这台电脑现在连不上网, 或 DNS 有问题。"
+                         "这不是邮箱设置的问题, 先确认能正常打开别的网站再试")
+            elif ("TIMED OUT" in upper or "TIMEOUT" in upper or "REFUSED" in upper
+                  or "RESET" in upper or "UNREACHABLE" in upper or "NO ROUTE TO HOST" in upper):
+                extra = ("。连不上邮箱服务器: 是网络没通, 不是账号设置的问题。"
+                         "请检查 Wi-Fi / 校园网, 或关掉代理、VPN 再试")
+        # 只有在**确实不知道该往哪查**的时候，才附上那张通用设置清单；
+        # 已经说清原因的（授权码、网络、证书）再让人去翻设置只会添乱。
+        tail = ("。"
+                "通用检查: ① 服务器 imap.qiye.163.com(网页入口 mail.shphschool.com);"
+                "② 网页版开启 IMAP/SMTP 服务;"
+                "③ 使用「客户端授权码」而不是网页登录密码") if not extra else ""
+        return PingheError(f"IMAP 连接/登录失败: {exc}{extra}{tail}")
 
     def _conn(self):
         import imaplib

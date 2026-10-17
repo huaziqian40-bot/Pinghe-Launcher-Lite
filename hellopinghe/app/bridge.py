@@ -20,7 +20,7 @@ from .. import cloudsync as _cs
 from .. import filestore as fs
 from .. import phixsession as _phix
 from .agent import AgentEngine, detect_ai_environment
-from .services import Services, secret_set, secret_get
+from .services import Services, secret_set, secret_get, secret_del
 
 
 def _phix_call(fn, *args, **kwargs) -> dict:
@@ -334,7 +334,13 @@ class Api:
             if password.strip():
                 secret_set(f"mail:{email}", password.strip())
             # 客户端授权码用于 IMAP/SMTP 登录(网易企业邮的核心要求)
-            self.svc.mail.set_authcode(email, authcode)
+            if authcode.strip():
+                self.svc.mail.set_authcode(email, authcode)
+            elif password.strip():
+                # 只填了网页密码、没填授权码 → **必须删掉旧授权码**。
+                # `_password()` 里是"授权码优先于密码"，留着旧的会让刚填的密码永远用不上：
+                # 界面显示保存成功，认证却一直拿那个已经失效的旧授权码去试。
+                secret_del(f"mail_authcode:{email}")
             self.svc.mail.configure(email, imap_host.strip(), smtp_host.strip())
             self._save_cfg()
             self.svc.mail._unread_cache = None
@@ -1660,6 +1666,9 @@ class Api:
                 )
             elif payload.get("mail_password") and self.cfg.mail_email:
                 # 仅修改密码时，如果没有授权码，尝试用密码重新配置
+                # —— 但**必须先把旧授权码删掉**：`_password()` 是"授权码优先于密码"，
+                # 旧授权码留着的话，刚填的密码永远用不上（界面显示已保存、认证却一直失败）。
+                secret_del(f"mail_authcode:{(self.cfg.mail_email or '').strip()}")
                 self.svc.mail.configure(
                     self.cfg.mail_email, self.cfg.mail_imap_host, self.cfg.mail_smtp_host,
                 )
