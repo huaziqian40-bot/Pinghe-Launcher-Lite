@@ -32,15 +32,15 @@
   <aside class="sidebar drag-zone">
     <div class="logo" id="logo" title="回到首页"><span class="logo-mark"><img src="logo.png" alt="Pinghe Launcher Lite!"></span><div><b>Pinghe Launcher Lite</b><small>平和 · 本地学习助手</small></div></div>
     <nav id="nav">
-      <button data-go="home" class="active">🏠 首页</button>
-      <button data-go="timetable">📅 我的课表</button>
-      <button data-go="schedule">🗓️ 我的日程</button>
-      <button data-go="gradett">📊 班级课表</button>
-      <button data-go="courses">📚 我的课程</button>
-      <button data-go="mail">✉️ 平和邮箱</button>
-      <button data-go="xinlv">🌿 心履</button>
-      <button data-go="agent">🤖 Agent 助手</button>
-      <button data-go="settings">⚙️ 设置</button>
+      <button data-go="home" class="active"><svg class="nav-ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 10.5 12 3l9 7.5"/><path d="M5 9.5V21h14V9.5"/><path d="M10 21v-6h4v6"/></svg><span>首页</span></button>
+      <button data-go="timetable"><svg class="nav-ico" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4.5" width="18" height="16.5" rx="2.5"/><path d="M3 9.5h18M8 3v3M16 3v3M8 13.5h2M14 13.5h2M8 17h2"/></svg><span>我的课表</span></button>
+      <button data-go="schedule"><svg class="nav-ico" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4.5" width="18" height="16.5" rx="2.5"/><path d="M3 9.5h18M8 3v3M16 3v3"/><path d="m9 15 2 2 4-4"/></svg><span>我的日程</span></button>
+      <button data-go="gradett"><svg class="nav-ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20V10M10 20V4M16 20v-7M21 20H3"/></svg><span>班级课表</span></button>
+      <button data-go="courses"><svg class="nav-ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4.5A1.5 1.5 0 0 1 5.5 3H11v18H5.5A1.5 1.5 0 0 1 4 19.5z"/><path d="M13 3h5.5A1.5 1.5 0 0 1 20 4.5v15a1.5 1.5 0 0 1-1.5 1.5H13z"/></svg><span>我的课程</span></button>
+      <button data-go="mail"><svg class="nav-ico" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2.5"/><path d="m4 7 8 6 8-6"/></svg><span>平和邮箱</span></button>
+      <button data-go="xinlv"><svg class="nav-ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 19c0-8 5-13 14-14-1 9-6 14-14 14z"/><path d="M5 19 13 11"/></svg><span>心履</span></button>
+      <button data-go="agent"><svg class="nav-ico" viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="7" width="16" height="12" rx="3"/><path d="M12 3v4M9 12h.01M15 12h.01M9.5 15.5h5"/></svg><span>Agent 助手</span></button>
+      <button data-go="settings"><svg class="nav-ico" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3M5.3 5.3l2.1 2.1M16.6 16.6l2.1 2.1M5.3 18.7l2.1-2.1M16.6 7.4l2.1-2.1"/></svg><span>设置</span></button>
     </nav>
     <div class="side-foot">
         <div>本地运行 · 数据不出机器</div>
@@ -76,11 +76,13 @@
           <div class="muted small">平和邮箱</div>
         </div>
       </div>
-      <div class="grid-2">
+      <div class="grid-2 home-main">
         <div class="card go-card" data-go="timetable" title="查看我的课表"><div class="card-title">今天的课</div><div id="home-lessons" class="list"></div></div>
-        <div class="card go-card" data-go="schedule" title="查看我的日程"><div class="card-title">今天的日程</div><div id="home-events" class="list"></div></div>
+        <div class="home-side">
+          <div class="card go-card" data-go="schedule" title="查看我的日程"><div class="card-title">今天的日程</div><div id="home-events" class="list"></div></div>
+          <div class="card go-card" data-go="courses" title="打开我的课程"><div class="card-title">ManageBac · 未来 14 天 DDL</div><div id="home-ddl" class="list"></div></div>
+        </div>
       </div>
-      <div class="card go-card" data-go="courses" title="打开我的课程"><div class="card-title">ManageBac · 未来 14 天 DDL</div><div id="home-ddl" class="list"></div></div>
     </section>
 
     <!-- ================= 我的课表 ================= -->

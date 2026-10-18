@@ -781,3 +781,66 @@ button,.chip,.item,.mail-item,.session-item,.file-item,.tt-lesson,.gt-lesson{
 .about-author p{margin:6px 0 0;color:var(--ink-2);font-size:13px;line-height:1.5}
 .about-author a{color:var(--green-700,#1f5a46);text-decoration:none;font-weight:700}
 .about-author a:hover{text-decoration:underline}
+
+/* ================= 界面打磨（2026-10-18） =================
+   只加样式、不改结构：id / data-go / 既有 class 全部照旧。 */
+
+/* 侧栏：线性图标替代 emoji（各家 emoji 字体粗细颜色不一，排在一列很乱） */
+#nav button{display:flex;align-items:center;gap:10px}
+.nav-ico{width:18px;height:18px;flex-shrink:0;fill:none;stroke:currentColor;stroke-width:1.7;
+  stroke-linecap:round;stroke-linejoin:round;opacity:.85}
+#nav button.active .nav-ico{opacity:1}
+/* 软件名在 224px 侧栏里折成两行时，行距收紧，看起来是"排过的"而不是"挤下去的" */
+.logo b{display:block;font-size:15px;line-height:1.25;letter-spacing:-.1px}
+.logo small{margin-top:3px}
+
+/* 首页"今天的课"：正在上的高亮、已上完的变淡（app.js 的 lessonLine 打 class） */
+.lesson-line{padding:7px 12px}
+.lesson-line .lesson-time{font-variant-numeric:tabular-nums;min-width:84px}
+.lesson-line.lesson-now{background:var(--green-50);box-shadow:inset 3px 0 0 var(--green-700)}
+.lesson-line.lesson-now .lesson-time{color:var(--green-800);font-weight:650}
+/* 列表有"渐次浮现"动画(fill-mode both 会把 opacity 定回 1), 所以变淡加在子元素上 */
+.lesson-line.lesson-past>*{opacity:.5}
+/* 没有状态文字的徽章不显示(否则是一小块空色块) */
+.badge:empty{display:none}
+#home-lessons.list{gap:6px}
+/* 首页右栏：日程 + DDL 上下叠放 */
+.home-side{display:flex;flex-direction:column;min-width:0}
+.ddl-when{font-variant-numeric:tabular-nums}
+/* 窄窗口：时钟占满一行，下面三张小卡并排，不再把"正在上的课"挤成三行 */
+@media (max-width:1180px){
+  .hero{grid-template-columns:repeat(3,minmax(0,1fr))}
+  .hero .clock-card{grid-column:1/-1;display:flex;align-items:baseline;gap:16px}
+  .hero .clock-card .big-clock{font-size:36px}
+  .hero-duo{grid-column:span 2}
+}
+
+/* 邮件列表：发件人只留名字、时间靠右；条目之间细分隔线；未读 = 左侧小圆点 + 加粗 */
+.mail-item{border-bottom:1px solid var(--border);border-radius:0;padding:10px 12px 10px 18px;position:relative}
+.mail-item:last-child{border-bottom:0}
+.mail-item:hover{border-radius:var(--radius-sm)}
+.mail-item .meta{display:flex;gap:10px;align-items:baseline;margin-bottom:2px}
+.mail-item .mail-from{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--ink-2)}
+.mail-item .mail-when{flex-shrink:0;font-variant-numeric:tabular-nums}
+.mail-item .subj{overflow:hidden;text-overflow:ellipsis;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
+.mail-item.unread .mail-from{color:var(--ink)}
+.mail-item.unread::before{content:"";position:absolute;left:6px;top:16px;width:6px;height:6px;
+  border-radius:50%;background:var(--green-700)}
+#ml-read > .empty:only-child{height:100%;display:flex;align-items:center;justify-content:center}
+
+/* 我的课程："未出分"用中性灰，金色留给真正有内容的状态 */
+.badge.muted{background:var(--ivory-200);color:var(--ink-3)}
+
+/* 课表：空格子只留虚线轮廓，课卡更显眼 */
+.tt-cell:not(.rest):not(:has(.tt-lesson)){background:transparent;border-style:dashed;border-color:rgba(24,35,30,.07)}
+
+/* 键盘操作时看得见焦点（鼠标点击不出现） */
+button:focus-visible,.go-card:focus-visible,.item:focus-visible,.mail-item:focus-visible{
+  outline:2px solid var(--gold-500);outline-offset:2px}
+
+/* 细滚动条（WebView2 默认的又宽又灰，和象牙白底不搭） */
+.main ::-webkit-scrollbar,.main::-webkit-scrollbar{width:10px;height:10px}
+.main ::-webkit-scrollbar-thumb,.main::-webkit-scrollbar-thumb{background:rgba(24,35,30,.16);
+  border-radius:99px;border:3px solid transparent;background-clip:content-box}
+.main ::-webkit-scrollbar-thumb:hover,.main::-webkit-scrollbar-thumb:hover{background-color:rgba(24,35,30,.3)}
+.main ::-webkit-scrollbar-track,.main::-webkit-scrollbar-track{background:transparent}

@@ -9,6 +9,27 @@ function esc(s) {
   }[c]));
 }
 
+/* 时间统一显示成 "10-19 15:55"(withYear 时带年份)。
+ * 来源有三种: 本机 ManageBac 的本地时间 "2026-10-19T15:55"、共享数据 data/School 里的
+ * UTC 串 "2026-10-17T11:07:17.000Z"、邮件头 "Fri, 17 Oct 2026 19:07:17"。以前直接
+ * slice(5,16) —— 会把 "T" 显示出来, UTC 串还差 8 小时。只有日期的原样保留; 认不出的原样返回。 */
+function fmtWhen(v, withYear = false) {
+  const s = String(v || "").trim();
+  if (!s || /^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+  const d = new Date(s);
+  if (isNaN(d)) return s;
+  const p = (n) => String(n).padStart(2, "0");
+  return `${withYear ? d.getFullYear() + "-" : ""}${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+/* "张三 <a@b.com>" → "张三"; 只有地址时显示地址 */
+function senderName(v) {
+  const s = String(v || "").trim();
+  const m = s.match(/^"?([^"<]*?)"?\s*<([^>]+)>$/);
+  return m ? (m[1].trim() || m[2]) : s;
+}
+/* 用 " · " 连起非空的几段(避免缺老师/教室时出现 "A507 · " 这种尾巴) */
+const joinDot = (...parts) => parts.filter((x) => x !== undefined && x !== null && String(x).trim() !== "").map(esc).join(" · ");
+
 async function call(name, ...args) {
   const r = await window.pywebview.api[name](...args);
   if (!r || r.ok !== true) {
@@ -226,7 +247,10 @@ document.addEventListener("visibilitychange", () => { if (!document.hidden) auto
 
 /* ================= 首页 ================= */
 function lessonLine(l) {
-  return `<div class="item"><span class="dim">${esc(l.start)}-${esc(l.end)}</span>
+  // 首页"今天的课": 正在上的课高亮, 已上完的变淡(按当前时刻判断)
+  const hm = new Date().toTimeString().slice(0, 5);
+  const state = l.start && l.end ? (l.start <= hm && hm < l.end ? " lesson-now" : l.end <= hm ? " lesson-past" : "") : "";
+  return `<div class="item lesson-line${state}"><span class="dim lesson-time">${esc(l.start)}-${esc(l.end)}</span>
     <span class="grow"><b>${esc(l.subject)}</b>${l.cancelled ? " <s>(已取消)</s>" : ""}
     <span class="dim">${esc(l.room)} ${esc(l.teacher)}</span></span></div>`;
 }
@@ -276,7 +300,7 @@ function swipeableItemEl(className, innerHtml, onSwipe) {
 function ddlItemEl(it) {
   return swipeableItemEl(
     `item ddl-item ${it.urgent ? "urgent" : ""}`,
-    `<span class="dim">${esc((it.due_at || "").slice(5, 16))}</span>
+    `<span class="dim ddl-when">${esc(fmtWhen(it.due_at))}</span>
     <span class="grow">${esc(it.title)}<span class="dim"> · ${esc(it.course)}</span></span>
     ${badge(it.status || it.category, it.status === "Pending" ? "red" : "")}`,
     async () => { await call("ddl_dismiss", it.key); Store.drop("home"); },
@@ -287,11 +311,11 @@ function renderHome(d) {
   $("#home-date").textContent = `${d.now} ${d.weekday}`;
   const cur = d.current_lesson;
   $("#home-current").innerHTML = cur
-    ? `${esc(cur.subject)}<small>${esc(cur.start)}-${esc(cur.end)} · ${esc(cur.room)} · ${esc(cur.teacher)}</small>`
+    ? `${esc(cur.subject)}<small>${joinDot(`${cur.start}-${cur.end}`, cur.room, cur.teacher)}</small>`
     : `<span class="muted">此刻没有课</span>`;
   const nxt = d.next_lesson;
   $("#home-next").innerHTML = nxt
-    ? `${esc(nxt.subject)}<small>${nxt.day && nxt.day !== d.now ? esc(nxt.day_label) + " · " : ""}${esc(nxt.start)} 开始${nxt.room ? " · " + esc(nxt.room) : ""}${nxt.teacher ? " · " + esc(nxt.teacher) : ""}</small>`
+    ? `${esc(nxt.subject)}<small>${joinDot(nxt.day && nxt.day !== d.now ? nxt.day_label : "", `${nxt.start} 开始`, nxt.room, nxt.teacher)}</small>`
     : `<span class="muted">最近没有课</span>`;
   $("#home-unread").textContent = d.unread_mail ?? "–";
   $("#home-lessons").innerHTML = (d.today_lessons || []).map(lessonLine).join("") ||
@@ -1101,8 +1125,8 @@ function renderCourses(d) {
     <div class="item course-row" data-cid="${esc(c.id)}">
       <span class="move-btns"><button class="move-btn" data-move="up" title="上移">▲</button><button class="move-btn" data-move="down" title="下移">▼</button></span>
       <span class="grow"><span class="co-name">${esc(c.name)}</span>
-      <small>总评 ${c.grade ? esc(c.grade) : "未出分"} · 点击看课程详情</small></span>
-      ${badge(c.grade || "未出分", c.grade ? "green" : "")}
+      <small>${c.grade ? "总评 " + esc(c.grade) + " · " : ""}点击看课程详情</small></span>
+      ${badge(c.grade || "未出分", c.grade ? "green" : "muted")}
     </div>`).join("");
   $("#co-classes").innerHTML = classRows ||
     `<div class="empty">还没有课程数据, 点右上角同步</div>`;
@@ -1268,7 +1292,7 @@ function taskItemEl(t) {
     : badge(t.status || "?", t.status === "Pending" ? "red" : "green");
   return swipeableItemEl("item ddl-item" + (t.past_due ? " past-due" : ""),
     `<span class="move-btns"><button class="move-btn" data-move="up" title="上移">▲</button><button class="move-btn" data-move="down" title="下移">▼</button></span>
-    <span class="dim">${esc((t.due_at || "").slice(5, 16))}</span>
+    <span class="dim ddl-when">${esc(fmtWhen(t.due_at))}</span>
     <span class="grow">${esc(t.title)}<span class="dim"> · ${esc(t.class_name)}</span></span>
     ${pastBadge}`,
     async () => {
@@ -1327,7 +1351,7 @@ function setCourseTab(tab) {
       tasks.forEach((t) => {
         const el = document.createElement("div");
         el.className = "item clickable";
-        el.innerHTML = `<span class="dim">${esc((t.due_at || "").slice(5, 16))}</span>
+        el.innerHTML = `<span class="dim ddl-when">${esc(fmtWhen(t.due_at))}</span>
           <span class="grow">${esc(t.title)}<span class="dim"> · ${esc(t.status || "?")}</span></span>
           ${badge(t.status || "?", t.status === "Pending" ? "red" : "green")}`;
         el.onclick = () => openTaskModal(t);
@@ -1371,7 +1395,7 @@ function setCourseTab(tab) {
       evs.forEach((ev) => {
         const el = document.createElement("div");
         el.className = "item";
-        el.innerHTML = `<span class="dim">${esc(when(ev).slice(0, 16).replace("T", " "))}</span>
+        el.innerHTML = `<span class="dim">${esc(fmtWhen(when(ev)))}</span>
           <span class="grow">${esc(String(ev.title || ev.name || ev.summary || "未命名"))}</span>`;
         body.appendChild(el);
       });
@@ -1469,7 +1493,7 @@ function openTaskModal(t) {
   tdTask = t;
   $("#td-title").textContent = t.title || "作业";
   $("#td-course").textContent = t.class_name || "";
-  $("#td-due").textContent = `${(t.due_at || "").slice(0, 16).replace("T", " ")}${t.past_due ? " (已截止)" : ""}`;
+  $("#td-due").textContent = `${fmtWhen(t.due_at, true)}${t.past_due ? " (已截止)" : ""}`;
   $("#td-status").textContent = t.status || "—";
   $("#td-status").style.display = t.status ? "" : "none";
   $("#td-category").textContent = ""; $("#td-category").style.display = "none";
@@ -1767,10 +1791,11 @@ function renderMail(d) {
   const note = shared
     ? `<div class="empty shared-note">${esc(d.note || "这是另一个程序上次同步到的邮箱摘要（只能看标题）。要读正文，请在本机登录邮箱。")}</div>`
     : "";
+  /* 一封 = 两行: 发件人(只显示名字, 完整地址放悬停提示) + 时间 / 主题。未读用左侧小圆点 + 加粗 */
   $("#ml-list").innerHTML = note + ((d.mails || []).map((m) => `
     <div class="mail-item ${m.seen ? "" : "unread"}"${shared ? "" : ` data-uid="${m.uid}"`}>
-      <div class="subj">${m.seen ? "" : "🔵 "}${esc(m.subject)}</div>
-      <div class="meta">${esc(m.from)} · ${esc(m.date)}</div>
+      <div class="meta"><span class="mail-from" title="${esc(m.from)}">${esc(senderName(m.from))}</span><span class="mail-when">${esc(fmtWhen(m.date))}</span></div>
+      <div class="subj">${esc(m.subject)}</div>
     </div>`).join("") || `<div class="empty">没有邮件</div>`);
   if (shared) return;
   $$("#ml-list .mail-item").forEach((el) => {
@@ -1807,7 +1832,7 @@ function renderMail(d) {
             <span class="spacer"></span>
           </div>
           <h3>${esc(m.subject)}</h3>
-          <div class="muted small">${esc(m.from)} · ${esc(m.date)}</div>
+          <div class="muted small">${esc(m.from)} · ${esc(fmtWhen(m.date, true))}</div>
           ${rcSection}
           ${attHtml}
           <hr><div class="mail-body">${bodyHtml}</div>`;
@@ -2753,7 +2778,7 @@ async function renderDismissed() {
     const items = d.items || [];
     $("#st-dismissed").innerHTML = items.map((it) => `
       <div class="item">
-        <span class="grow">${esc(it.title)}<span class="dim"> · ${esc((it.due_at || "").slice(0, 16))}</span></span>
+        <span class="grow">${esc(it.title)}<span class="dim"> · ${esc(fmtWhen(it.due_at, true))}</span></span>
         <button class="ghost" data-restore="${esc(it.key)}">恢复</button>
       </div>`).join("") || `<div class="empty">没有已移除的作业</div>`;
     $$("#st-dismissed [data-restore]").forEach((b) => {
