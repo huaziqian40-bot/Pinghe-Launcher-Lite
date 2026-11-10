@@ -124,6 +124,17 @@ def _tune_window_soon(*_args: object) -> None:
 def main() -> None:
     smoke = "--smoke" in sys.argv
 
+    # ---- 安装登记: 记录本程序装在哪、实际用哪个数据根 ----
+    # 两个 Installer 通过 %LOCALAPPDATA%\PingheSeries\installations.ini 互相发现;
+    # 应用启动时顺手更新（用户手动移动过安装目录/数据根时能自愈）。失败绝不能挡启动。
+    try:
+        from .. import install_registry
+        from ..updater import APP_VERSION as _APP_VERSION
+
+        install_registry.record_self(version=_APP_VERSION)
+    except Exception:  # noqa: BLE001
+        pass
+
     # ---- 单实例: 已有实例在跑就唤醒它然后退出(不重复开窗) ----
     # smoke 测试不参与(否则会被用户正开着的实例挡掉, 拿不到 SMOKE_JS)
     inst = None

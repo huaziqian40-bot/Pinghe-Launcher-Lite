@@ -1,4 +1,4 @@
-# Pinghe Launcher Lite
+﻿# Pinghe Launcher Lite
 
 本地优先的 ManageBac + Edupage 学习助手：数据抓取、缓存、提醒、AI 都在本机跑；
 选课、日程、账号等可按需通过 **phix 做端到端加密同步**（服务端只存密文，默认可以不开）。
@@ -62,7 +62,7 @@ hellopinghe timetable --subdomain 你的学校子域名 --days 7
 Get-ChildItem scripts\test_*.py | ForEach-Object { python -X utf8 $_.FullName }
 ```
 
-当前 **18 个**脚本,0 失败。它们各自打印自己的汇总(其中 5 个用 unittest,会打印
+当前 **21 个**脚本,0 失败。它们各自打印自己的汇总(其中 8 个用 unittest,会打印
 `Ran N tests ... OK`)—— 验收看的是**明确的成功标志 + 没有 traceback**,
 不是某一条 "OK" 字符串。本机实际跑法见 `docs/交接文档.md` §4。
 

@@ -93,6 +93,14 @@ def output_path(version: str, dist: Path = DIST) -> Path:
     return candidate
 
 
+def ensure_utf8_bom(path: Path) -> None:
+    """NSIS 的 Unicode 脚本必须是带 BOM 的 UTF-8；编辑器/补丁弄丢 BOM 时自动补回。"""
+    data = path.read_bytes()
+    if data.startswith(b"\xef\xbb\xbf"):
+        return
+    path.write_bytes(b"\xef\xbb\xbf" + data)
+
+
 def build_command(makensis: Path, version: str, source: Path, destination: Path,
                   script: Path = SCRIPT) -> list[str]:
     # /D 参数须先于脚本，Python subprocess 负责正确转义带空格的 Windows 路径。
@@ -117,6 +125,8 @@ def main(argv: list[str] | None = None) -> int:
         print("命令：", subprocess.list2cmdline(command) if os.name == "nt" else repr(command))
         if args.dry_run:
             return 0
+        # 真正编译前才补 BOM：dry-run 保持"不创建/不修改任何文件"的约定。
+        ensure_utf8_bom(SCRIPT)
         # 禁止使用自动覆盖已存在的包，避免误覆盖官网或上一轮候选文件。
         if destination.exists():
             raise FileExistsError(destination)

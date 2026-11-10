@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 """Lite 更新器：静默发现并缓存已校验的新版本，只有用户确认才启动安装。
 
 检查端点按平台区分。发现合法新版本后先通知界面，再在后台单飞下载；取消只关闭
@@ -27,7 +27,7 @@ CHECK_URL = "https://phix.ing/api/v1/update/check?product=phl-lite&platform={pla
 DOWNLOAD_BASE = "https://phix.ing/media/downloads"
 MAC_URL = "https://phix.ing/download/"
 MAC_DOWNLOAD_URL = MAC_URL
-APP_VERSION = "1.2.8"  # release automation / lead owns version bumps
+APP_VERSION = "1.2.9"  # release automation / lead owns version bumps
 MAX_DOWNLOAD_BYTES = 1024 * 1024 * 1024
 CHECK_ERROR = "检查失败，请稍后再试。"
 DOWNLOAD_ERROR = "下载或校验失败，请稍后重试。"

@@ -35,7 +35,8 @@ class NsisSafetyTest(unittest.TestCase):
         self.assertNotIn("Program Files\\HPHL", self.commands)
 
     def test_shared_data_and_writability_checked_even_for_silent_install(self):
-        self.assertIn('CreateDirectory "$INSTDIR\\data"', self.commands)
+        self.assertIn('StrCpy $0 "$INSTDIR\\data"', self.commands)
+        self.assertIn('CreateDirectory "$0"', self.commands, "数据根可能是 PHL 登记的目录")
         self.assertIn('FileOpen $0 "$INSTDIR\\portable.flag" a', self.commands)
         self.assertIn('GetTempFileName $0 "$INSTDIR"', self.commands)
         self.assertIn("Call VerifyInstallDirectory", self.commands)
@@ -76,7 +77,24 @@ class NsisSafetyTest(unittest.TestCase):
         self.assertNotRegex(body, r'(?im)^\s*Delete\s+.*PingheLauncherLite\.exe')
         self.assertNotRegex(body, r'(?im)^\s*RMDir\s+/r\s+.*\\data\b')
 
-    def test_uninstall_only_owned_files_and_keys(self):
+    def test_install_registry_default_directory_and_data_root(self):
+        # 安装登记：两个程序通过固定 INI 互相发现，安装器默认装到对方目录。
+        self.assertIn("Function .onInit", self.commands)
+        self.assertIn("$LOCALAPPDATA\\PingheSeries\\installations.ini", self.commands)
+        self.assertIn('ReadINIStr $1 "$0" "phl" "path"', self.commands)
+        self.assertIn('ReadINIStr $2 "$0" "phl" "data_root"', self.commands)
+        self.assertIn('StrCpy $INSTDIR "$1"', self.commands)
+        self.assertIn("StrCpy $DetectedPhlDataRoot", self.commands)
+        self.assertIn("EnumRegKey", self.commands, "旧版 PHL 没写登记时要查注册表")
+        self.assertIn('StrCmp $5 "PH Launcher"', self.commands)
+        self.assertIn('"phl-lite" "path" "$INSTDIR"', self.commands)
+        self.assertIn('"phl-lite" "data_root" "$0"', self.commands)
+        self.assertIn('DeleteINISec "$LOCALAPPDATA\\PingheSeries\\installations.ini" "phl-lite"',
+                      self.commands, "卸载只删自己的条目")
+        self.assertNotIn('DeleteINISec "$LOCALAPPDATA\\PingheSeries\\installations.ini" "phl"',
+                         self.commands, "绝不能删 PHL 的登记条目")
+
+    def test_uninstall_keeps_shared_data_and_other_program(self):
         uninstall = self.commands.split('Section "Uninstall"', 1)[1]
         for own_file in ('${LITE_EXE}', '${LITE_UNINSTALLER}', '${LITE_SHORTCUT}'):
             self.assertIn(own_file, uninstall)

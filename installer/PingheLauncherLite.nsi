@@ -30,8 +30,8 @@ ShowUninstDetails show
 !define LITE_SHORTCUT "Pinghe Launcher Lite.lnk"
 !define LITE_UNINSTALL_KEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\PingheLauncherLite"
 
-; 标准 MUI2 辅助安装的目录页：明确提示共用数据所在目录，用户可浏览修改。
-!define MUI_DIRECTORYPAGE_TEXT_TOP "默认与 PH Launcher 同目录，共用 data。旧 MSI Lite 的数据不会自动合并，原目录保留，请勿删除旧数据；卸载 Lite 也不会删除共用数据。"
+; 标准 MUI2 辅助安装的目录页：默认值由 .onInit 按「已安装的 PH Launcher」决定。
+!define MUI_DIRECTORYPAGE_TEXT_TOP "若已安装 PH Launcher，默认使用它的安装目录并共用数据根；也可以改到其他目录。旧 MSI Lite 的数据不会自动合并，原目录保留；卸载 Lite 不会删除共用数据。"
 !define MUI_ABORTWARNING
 !insertmacro MUI_PAGE_WELCOME
 !insertmacro MUI_PAGE_DIRECTORY
@@ -41,6 +41,45 @@ ShowUninstDetails show
 !insertmacro MUI_UNPAGE_INSTFILES
 !insertmacro MUI_UNPAGE_FINISH
 !insertmacro MUI_LANGUAGE "SimpChinese"
+
+; 安装登记：两个程序共用 %LOCALAPPDATA%\PingheSeries\installations.ini。
+; .onInit 在目录页创建之前运行，改 $INSTDIR 就是改「目录页默认值」。
+Var /GLOBAL DetectedPhlDataRoot
+
+Function .onInit
+  ; 1) 优先读登记（新版 PHL/Lite 都会写）：path 必须真实存在对应 exe，防止陈旧条目。
+  StrCpy $0 "$LOCALAPPDATA\PingheSeries\installations.ini"
+  StrCpy $1 ""
+  StrCpy $2 ""
+  ReadINIStr $1 "$0" "phl" "path"
+  ReadINIStr $2 "$0" "phl" "data_root"
+  StrCmp $1 "" detect_from_registry
+  IfFileExists "$1\PH Launcher.exe" 0 detect_from_registry
+  StrCpy $INSTDIR "$1"
+  StrCpy $DetectedPhlDataRoot "$2"
+  Goto detected_done
+detect_from_registry:
+  ; 2) 旧版 PHL 可能没写过登记：按 HKCU 卸载项的 DisplayName 找 InstallLocation。
+  StrCpy $3 0
+registry_loop:
+  EnumRegKey $4 HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall" $3
+  StrCmp $4 "" registry_done
+  IntOp $3 $3 + 1
+  ReadRegStr $5 HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\$4" "DisplayName"
+  StrCmp $5 "PH Launcher" 0 registry_loop
+  ReadRegStr $6 HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\$4" "InstallLocation"
+  StrCmp $6 "" registry_loop
+  IfFileExists "$6\PH Launcher.exe" 0 registry_loop
+  StrCpy $INSTDIR "$6"
+  StrCpy $DetectedPhlDataRoot "$6\data"
+  Goto detected_done
+registry_done:
+  ; 3) 最后兜底：PHL 的标准默认目录（旧版非默认目录会找不到，用户仍可在目录页手改）。
+  IfFileExists "$LOCALAPPDATA\Programs\PH Launcher\PH Launcher.exe" 0 detected_done
+  StrCpy $INSTDIR "$LOCALAPPDATA\Programs\PH Launcher"
+  StrCpy $DetectedPhlDataRoot "$LOCALAPPDATA\Programs\PH Launcher\data"
+detected_done:
+FunctionEnd
 
 ; 目录页的检查也会在 Section 执行，防止 /S 静默安装绕过页面检查。
 Function VerifyInstallDirectory
@@ -97,7 +136,13 @@ install_files:
   FileOpen $0 "$INSTDIR\portable.flag" a
   IfErrors install_failed
   FileClose $0
-  CreateDirectory "$INSTDIR\data"
+  ; 数据根：优先采用 PH Launcher 登记的数据根（用户可能把 PHL 数据根改到过别处）；
+  ; 没有登记时就是安装目录\data。绝不删除/覆盖已有数据目录。
+  StrCpy $0 "$INSTDIR\data"
+  StrCmp $DetectedPhlDataRoot "" data_root_ready
+  StrCpy $0 "$DetectedPhlDataRoot"
+data_root_ready:
+  CreateDirectory "$0"
   IfErrors install_failed
   WriteUninstaller "$INSTDIR\${LITE_UNINSTALLER}"
   IfErrors install_failed
@@ -113,7 +158,14 @@ install_files:
   WriteRegStr HKCU "${LITE_UNINSTALL_KEY}" "UninstallString" "$\"$INSTDIR\${LITE_UNINSTALLER}$\""
   WriteRegDWORD HKCU "${LITE_UNINSTALL_KEY}" "NoModify" 1
   WriteRegDWORD HKCU "${LITE_UNINSTALL_KEY}" "NoRepair" 1
-  DetailPrint "Lite 与 PH Launcher 共用数据：$INSTDIR\data（卸载时保留）"
+  ; 写安装登记：另一个程序的安装器据此把它的默认目录设成 Lite 的目录。
+  ; 同一份 INI 里 PHL 的节原样保留，绝不覆盖。
+  CreateDirectory "$LOCALAPPDATA\PingheSeries"
+  WriteINIStr "$LOCALAPPDATA\PingheSeries\installations.ini" "phl-lite" "installed" "1"
+  WriteINIStr "$LOCALAPPDATA\PingheSeries\installations.ini" "phl-lite" "path" "$INSTDIR"
+  WriteINIStr "$LOCALAPPDATA\PingheSeries\installations.ini" "phl-lite" "data_root" "$0"
+  WriteINIStr "$LOCALAPPDATA\PingheSeries\installations.ini" "phl-lite" "version" "${VERSION}"
+  DetailPrint "安装登记：$LOCALAPPDATA\PingheSeries\installations.ini（数据根 $0，卸载时保留数据）"
   Goto install_done
 install_failed:
   MessageBox MB_ICONSTOP|MB_OK "无法写入 Lite 安装文件；请关闭运行中的 Lite 并检查目录权限：$INSTDIR" /SD IDOK
@@ -130,6 +182,11 @@ Section "Uninstall"
   Delete "$DESKTOP\${LITE_SHORTCUT}"
   DeleteRegKey HKCU "${LITE_UNINSTALL_KEY}"
 skip_global_entries:
+  ; 删除自己的安装登记（只删路径匹配的那条；PHL 的节保留，供它自己的安装器联动）。
+  ReadINIStr $1 "$LOCALAPPDATA\PingheSeries\installations.ini" "phl-lite" "path"
+  StrCmp $1 "$INSTDIR" 0 skip_registry
+  DeleteINISec "$LOCALAPPDATA\PingheSeries\installations.ini" "phl-lite"
+skip_registry:
   ; 禁止 RMDir /r、通配删除、删除 portable.flag/data；只删 Lite 文件。
   Delete "$INSTDIR\${LITE_EXE}"
   Delete "$INSTDIR\${LITE_UNINSTALLER}"

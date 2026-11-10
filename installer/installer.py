@@ -1,4 +1,4 @@
-r"""历史 tkinter 安装器（**不再构建、不再发布**）。
+﻿r"""历史 tkinter 安装器（**不再构建、不再发布**）。
 
 VERSION 暂留作跨版本兼容与发布脚本的第二个版本事实源；正式 Windows 安装入口是
 ``scripts/build_windows.py`` + ``installer/PingheLauncherLite.nsi``（标准 NSIS）。
@@ -23,7 +23,7 @@ UNINSTALL_EXE = "Uninstall.exe"
 APP_NAME = "Pinghe Launcher Lite"
 REG_KEY = r"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\PingheLauncherLite"
 LNK_NAME = "Pinghe Launcher Lite.lnk"
-VERSION = "1.2.8"
+VERSION = "1.2.9"
 
 BUNDLED_APP = Path(getattr(sys, "_MEIPASS", ".")) / APP_EXE
 

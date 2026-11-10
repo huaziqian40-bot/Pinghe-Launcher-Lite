@@ -13,7 +13,10 @@
    是 `~/.hellopinghe/`,测试环境用 `PHLL_DATA_DIR` 指到临时目录)。目录位置由
    `hellopinghe/paths.py::data_dir()` 单点解析,任何模块都不许自己拼 `Path.home()`。
    解析顺序:环境变量 `PHLL_DATA_DIR`(测试/自动化,与 PH Launcher 的 `PHL_DATA_DIR` 对称)
-   → 程序目录下存在 `portable.flag` 则数据落 `<安装目录>/data` → `~/.hellopinghe`。
+   → 安装登记(`%LOCALAPPDATA%\PingheSeries\installations.ini`)里本程序的 `data_root`
+   (仅安装版/`PHLL_RECORD_INSTALL=1`;安装器会把它设为 PH Launcher 实际使用的数据根,
+   见 `install_registry.py`) → 程序目录下存在 `portable.flag` 则数据落
+   `<安装目录>/data` → `~/.hellopinghe`。
    测试/演示用的便携包旁边还会放一个 `fresh.flag`:存在时**跳过旧数据迁移**
    (`paths.py::is_fresh`),否则便携模式首次启动会把 `~/.hellopinghe` 里的真实个人
    数据搬进测试目录,测试环境就不再是"完全隔离"的了。
@@ -621,4 +624,5 @@ backup:
 | 1 | 2026-09-10 | 首次确定布局:`settings.yaml` + `Schedule` + `agent/` + `phll/` + `logs/`;凭据并入 settings.yaml;旧布局(SQLite/config.json/secrets.json/散落缓存)自动迁移 |
 | 1.1 | 2026-09-11 | 补记两个程序共用的 `Timetable`(第 8 节)、`School`(第 9 节)与同系列互斥标记(第 10 节);`Schedule` 增加 `lastId` 高水位;`agent/` 增加可选的 `version/kind/app/updated_at`;新增 `PHLL_DATA_DIR` 环境变量;MSI 安装包写入 `portable.flag` 并预建 `data/` |
 | 1.1(核对) | 2026-11-02 | 文档与代码对齐(无破坏性字段变更,格式版本仍为 `1`):§1 目录总览补 `Timetable`/`School`/`Profile`/`Mood`/`.sync/`/`.pll-running`/`.phl-running`/`.updates/`;§0 修正数据目录解析顺序并补 `fresh.flag`(测试环境禁止旧数据迁移);§2 补 `ai.updated_at`/`updated_by`、`update.skipped_version`、`phix` 段与 `backup` 指引;§5 补 `managebac/classes.json`/`deadlines.json`、修正课表缓存文件名(`personal_v8_*`、班级 id 缺省写 `all`);新增第 6 节 6.1(`data/.sync/`)与 6.2(`data/Profile`、`data/Mood`);§8/§9 补 `curriculum` 字段;§10 补运行标记的 camelCase 拼写及"两种都读"的原因;§11 修正 `mood` 共享范围 |
+| 1.3 | 2026-11-10 | 新增安装登记(`%LOCALAPPDATA%\PingheSeries\installations.ini`,两个程序共写):记录各自安装目录与数据根,安装器据此默认装到对方目录并采用对方数据根;数据目录解析增加"登记里的 data_root"(仅安装版);`Schedule` 与 PHL 的跨程序读写加真实测试(不需要翻译) |
 | 1.2 | 2026-11-10 | 安装方式与更新载荷变化(数据文件格式不变,仍为 `1`):Windows 安装入口从 WiX MSI 改为标准 NSIS(默认 `%LOCALAPPDATA%\Programs\PH Launcher`,与 PH Launcher 2.0.13 相同),写入 `portable.flag` 并建 `data/`,两个程序默认共用同一数据根;旧 MSI 数据不自动合并(见 §0.1);应用内更新改为后台预下载 + 用户确认后运行 NSIS 安装包,Windows 更新清单平台名从 `win` 改为 `win-nsis`(旧 `win` 渠道保留供 1.2.7 升级) |

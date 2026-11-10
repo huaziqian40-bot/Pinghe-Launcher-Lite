@@ -2,6 +2,10 @@
 
 - 环境变量 PHLL_DATA_DIR 有值: 用它(自动化测试/互通测试/高级用户改向; 与 PH Launcher
   的 PHL_DATA_DIR 对称, 正常使用时不设置就没有任何影响)
+- 安装登记(``%LOCALAPPDATA%\\PingheSeries\\installations.ini``)里本程序的
+  ``data_root``: 安装器把「与 PH Launcher 共用哪个数据目录」记录在这里; 只有
+  安装版(frozen)或显式 ``PHLL_RECORD_INSTALL=1`` 时才读取, 源码运行不会被开发机
+  上的真实登记带偏
 - 便携模式(安装器在应用目录写入 portable.flag): 所有数据存安装目录下的 data 子目录
 - 普通运行(源码/未便携): 数据存 ~/.hellopinghe(与历史版本一致)
 
@@ -18,6 +22,9 @@ FRESH_FLAG = "fresh.flag"        # 测试环境: 存在则禁止旧数据迁移(
 LEGACY_HOME_DIR = Path.home() / ".hellopinghe"      # 历史数据目录(迁移源)
 LEGACY_SCHOOLHUB_DIR = Path.home() / ".schoolhub"   # 更旧的 SchoolHub 目录
 DATA_DIR_ENV = "PHLL_DATA_DIR"   # 显式指定数据目录(测试用; 两个软件的测试脚本靠它隔离)
+
+_ABSENT = object()
+_registry_root: object = _ABSENT   # 登记里的 data_root 只读一次（安装后不变）
 
 
 def exe_dir() -> Path | None:
@@ -42,11 +49,48 @@ def is_fresh() -> bool:
     return bool(d and (d / FRESH_FLAG).exists())
 
 
+def _registered_data_root() -> Path | None:
+    """安装登记里本程序的数据根（只有安装版/显式要求时才生效）。
+
+    安装器检测到 PH Launcher 时，会把「PHL 实际使用的数据目录」写进本程序的条目；
+    这样即使用户以前在 PHL 里把数据根改到别处，Lite 也直接读写同一份数据，而不是
+    在安装目录下另建一份空的 data/。
+    """
+    global _registry_root
+    if not (getattr(sys, "frozen", False) or os.environ.get("PHLL_RECORD_INSTALL") == "1"):
+        return None
+    if _registry_root is not _ABSENT:
+        return _registry_root  # type: ignore[return-value]
+    root: Path | None = None
+    try:
+        from . import install_registry
+
+        info = install_registry.installation(install_registry.APP_NAME)
+        raw = (info or {}).get("data_root") or ""
+        candidate = Path(raw).expanduser()
+        # 只接受绝对路径，且不能指向一个已存在的普通文件（防登记文件被写坏）。
+        if raw and candidate.is_absolute() and not (candidate.exists() and not candidate.is_dir()):
+            root = candidate
+    except Exception:  # noqa: BLE001  登记只是辅助，坏了就退回原有解析
+        root = None
+    _registry_root = root
+    return root
+
+
+def reset_cache() -> None:
+    """清掉登记缓存（测试/用户改向之后调用）。"""
+    global _registry_root
+    _registry_root = _ABSENT
+
+
 def data_dir() -> Path:
     """当前生效的数据目录(导入时即确定; portable.flag 由安装器预先写入)."""
     override = (os.environ.get(DATA_DIR_ENV) or "").strip()
     if override:
         return Path(override).expanduser()
+    registered = _registered_data_root()
+    if registered is not None:
+        return registered
     d = exe_dir()
     if d and (d / FLAG_NAME).exists():
         return d / "data"
