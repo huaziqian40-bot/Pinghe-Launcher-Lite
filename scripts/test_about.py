@@ -60,6 +60,7 @@ class AboutSectionTest(unittest.TestCase):
         # 后端那一侧也得真的存在
         self.assertRegex(BRIDGE, r"def app_version\(")
         self.assertRegex(BRIDGE, r"def update_check\(")
+        self.assertRegex(BRIDGE, r"def update_status\(")
         self.assertRegex(UPDATER, r"def check_for_update_manual\(")
         self.assertRegex(UPDATER, r"def current_version\(")
 
@@ -101,6 +102,34 @@ class UpdateCheckOutcomeTest(unittest.TestCase):
         """忙态结束后必须恢复可点，否则用户点一次就再也点不动了。"""
         self.assertIn("btn.disabled = false;", JS)
         self.assertIn("finally {", JS)
+
+
+class UpdateDialogContractTest(unittest.TestCase):
+    """静默预下载不等于静默安装；进度、确认与错误文案必须真实且可访问。"""
+
+    def test_dialog_and_progress_have_accessible_semantics(self):
+        self.assertIn('role="dialog"', HTML)
+        self.assertIn('aria-modal="true"', HTML)
+        self.assertIn('aria-labelledby="update-heading"', HTML)
+        self.assertIn('id="update-progress" max="100"', HTML)
+        self.assertGreaterEqual(HTML.count('aria-live="polite"'), 2)
+
+    def test_background_download_and_install_consent_are_separate(self):
+        self.assertIn('call("update_status")', JS, "窗口晚出现时要补拉下载状态")
+        self.assertIn('updateInfo?.stage !== "downloaded"', JS,
+                      "没下载并校验完成时不许启动安装")
+        self.assertIn('正在后台下载', JS)
+        self.assertIn('重启并安装', JS)
+        self.assertNotIn('只有 \'update\' 会真的下载', JS)
+
+    def test_cancel_skip_and_callbacks_do_not_lie(self):
+        cancel = JS[JS.index('if (choice === "cancel")'):JS.index('if (choice === "skip")')]
+        self.assertNotIn('skip_update', cancel, "取消只关卡，不能取消后台下载")
+        self.assertIn('call("update_choice", "skip"', JS, "跳过才撤销并清缓存")
+        self.assertIn('return showUpdateCardAfterSplash(info)', JS,
+                      "卡片没画出来时不能谎报回调已送达")
+        self.assertIn('return handleUpdateProgress(p)', JS)
+        self.assertIn('info.percent === null', JS, "未知总大小要用不确定进度，不能假装 0%")
 
 
 class VersionSingleSourceTest(unittest.TestCase):

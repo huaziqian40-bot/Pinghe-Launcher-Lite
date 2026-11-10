@@ -312,8 +312,11 @@ def _migrate_legacy() -> None:
     except OSError:
         return
 
-    # 1. 更旧的数据目录并进来(只补缺, 不覆盖)
-    for legacy in _legacy_dirs():
+    # 1. 只在目标没有 PHL 的既有用户数据时补旧目录。两个程序现在默认同装
+    #    PH Launcher/data，已有 PHL 的目录绝不能被旧 Lite 的账号/日程偷偷污染。
+    #    旧目录不删除；目标已有数据时必须由用户先备份、再明确选择如何合并。
+    legacy_sources = [] if paths.phl_shared_data_present(root) else _legacy_dirs()
+    for legacy in legacy_sources:
         if not legacy.exists() or legacy.resolve() == root.resolve():
             continue
         try:

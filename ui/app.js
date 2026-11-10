@@ -4207,57 +4207,136 @@ function phixSummary(s) {
   return parts.join("，");
 }
 
-/* ================= 应用内更新卡片（卡片确认制） =================
- * 用户要求：**不要未经允许更新**。每次客户端检测到新版本，
- * 进入软件时弹一张卡片，写清版本号 + 本次更新内容，下面三个按钮：
- *   取消 → 这次先不选，继续用软件（下次启动还会提示）
- *   跳过本版本 → 记住版本号，该版本不再提示（更高的版本仍会提示）
- *   更新 → 这时才下载并替换
- *
- * 后端（hellopinghe/updater.py）只负责**检查**并调用 window.__updateAvailable(info)，
- * 下载/替换发生在点了「更新」之后（bridge.update_choice）。前端绝不主动下载。
+/* ================= 应用内更新卡片（后台下载，点击后才安装） =================
+ * PHL 的确认卡流程：发现新版本先在后台下载，卡片在下载未完成时展示真实进度；
+ * 用户点「重启并安装」前绝不安装。取消只关卡、下载继续；跳过本版本才停止下载。
+ * 后端是下载状态的事实源，避免重进页面/窗口回调先到时把旧状态误画成「已完成」。
  */
-let updateInfo = null;   // 当前卡片上显示的版本信息
+let updateInfo = null;
+let updateDismissedVersion = "";
+let updateFocusBefore = null;
+let updateSplashTimer = null;
+let updateSplashEpoch = 0;
 
-function showUpdateCard(info) {
-  if (!info || !info.version) return;
-  updateInfo = info;
-  const modal = $("#update-modal");
-  if (!modal) return;
-  const vEl = $("#update-version");
-  const cEl = $("#update-current");
-  if (vEl) vEl.textContent = info.version;
-  if (cEl) cEl.textContent = info.current || "";
-  const notes = $("#update-notes");
-  if (notes) notes.textContent = String(info.notes || "").trim();
-  const hint = $("#update-hint");
-  if (hint) hint.textContent = "";
-  const now = $("#update-now");
-  if (now) now.disabled = false;
-  modal.classList.remove("hidden");
+function mergeUpdateState(info) {
+  if (updateInfo?.version !== info.version) return { ...info };
+  // pywebview 的初始通知可能比后台下载进度晚到，不可把已下载重新画成「准备下载」。
+  if ((info.stage === "available" && ["downloading", "downloaded", "error", "installing"].includes(updateInfo.stage))
+      || (info.stage === "downloading" && ["downloaded", "installing"].includes(updateInfo.stage))) {
+    return { ...updateInfo, notes: info.notes || updateInfo.notes };
+  }
+  return { ...updateInfo, ...info };
 }
 
-/* 开机画面（#splash，z-index 200）盖在所有弹层之上。更新检查是并发的，
- * 很可能比开机画面先结束 —— 那时卡片会被挡住看不见，所以要等开机画面收起来
- * 再弹（用户点一下开机画面也能立刻进去）。最多等 30 秒，之后照弹不误。 */
+function paintUpdateCard(info) {
+  const modal = $("#update-modal");
+  const now = $("#update-now");
+  const skip = $("#update-skip");
+  const row = $("#update-progress-row");
+  const bar = $("#update-progress");
+  const label = $("#update-progress-label");
+  const hint = $("#update-hint");
+  if (!modal || !now || !skip || !row || !bar || !label || !hint || !info?.version) return false;
+  $("#update-version").textContent = String(info.version);
+  $("#update-current").textContent = String(info.current || "");
+  $("#update-notes").textContent = String(info.notes || "").trim();
+  row.classList.remove("hidden");
+  const stage = String(info.stage || "available");
+  const percent = Number(info.percent);
+  // null/缺 Content-Length 不是 0%；让浏览器绘制真正的不确定进度条。
+  if (info.percent === null || info.percent === undefined || !Number.isFinite(percent)) {
+    bar.removeAttribute("value");
+    bar.setAttribute("aria-valuetext", "无法计算百分比");
+  } else {
+    bar.value = Math.max(0, Math.min(100, percent));
+    bar.removeAttribute("aria-valuetext");
+  }
+  skip.disabled = stage === "installing";
+  if (stage === "downloaded") {
+    bar.value = 100;
+    label.textContent = "已下载并校验新版本";
+    hint.textContent = "点击「重启并安装」后才会退出并启动安装器；个人数据会保留。";
+    now.textContent = "重启并安装";
+    now.disabled = false;
+  } else if (stage === "downloading") {
+    label.textContent = info.percent == null ? "正在后台下载（无法计算百分比）"
+      : `正在后台下载… ${Math.round(bar.value)}%`;
+    hint.textContent = "你可以继续使用软件，下载完成后再决定是否安装。";
+    now.textContent = "下载中…";
+    now.disabled = true;
+  } else if (stage === "error") {
+    label.textContent = "更新下载失败";
+    hint.textContent = String(info.message || "下载失败，请稍后重试。").slice(0, 120);
+    now.textContent = "重试下载";
+    now.disabled = false;
+  } else if (stage === "installing") {
+    label.textContent = "正在退出并准备安装…";
+    hint.textContent = "安装器已接管，尚不能确认安装成功；新版本启动后再核对版本。";
+    now.textContent = "正在准备…";
+    now.disabled = true;
+  } else {
+    label.textContent = "正在准备下载…";
+    hint.textContent = "新版会在后台下载，不影响使用；安装仍由你确认。";
+    now.textContent = "下载中…";
+    now.disabled = true;
+  }
+  return true;
+}
+
+function showUpdateCard(info) {
+  if (!info?.version || !$("#update-modal")) return false;
+  updateDismissedVersion = "";
+  updateInfo = mergeUpdateState(info);
+  if (!paintUpdateCard(updateInfo)) return false;
+  const modal = $("#update-modal");
+  if (modal.classList.contains("hidden")) {
+    updateFocusBefore = document.activeElement;
+    modal.classList.remove("hidden");
+    $("#update-cancel")?.focus();
+  }
+  return true;
+}
+
+/* Splash 遮挡卡片时先记录版本；进度变化只更新记录，等 Splash 消失画最新状态。
+ * generation 防止用户关闭/新版本覆盖后，旧定时器把过期信息重新弹出来。 */
 function showUpdateCardAfterSplash(info) {
-  const splash = document.getElementById("splash");
+  if (!info?.version || !$("#update-modal")) return false;
+  if (String(info.version) === updateDismissedVersion
+      && $("#update-modal").classList.contains("hidden")) return true;
+  updateInfo = mergeUpdateState(info);
+  const splash = $("#splash");
   const gone = () => !splash || splash.classList.contains("hidden")
     || getComputedStyle(splash).display === "none";
-  if (gone()) { showUpdateCard(info); return; }
-  updateInfo = info;                       // 先把信息存下来，按钮回调要用
+  if (gone()) return showUpdateCard(updateInfo);
+  if (updateSplashTimer) clearInterval(updateSplashTimer);
+  const epoch = ++updateSplashEpoch;
+  const version = String(info.version);
   let waited = 0;
-  const timer = setInterval(() => {
+  updateSplashTimer = setInterval(() => {
     waited += 200;
-    if (gone() || waited >= 30000) {
-      clearInterval(timer);
-      showUpdateCard(info);
+    if ((gone() || waited >= 30000) && epoch === updateSplashEpoch) {
+      clearInterval(updateSplashTimer);
+      updateSplashTimer = null;
+      if (version !== updateDismissedVersion && updateInfo?.version === version) {
+        showUpdateCard(updateInfo);
+      }
     }
   }, 200);
+  return true;
 }
 
 function hideUpdateCard() {
-  $("#update-modal")?.classList.add("hidden");
+  const modal = $("#update-modal");
+  if (!modal) return;
+  updateDismissedVersion = String(updateInfo?.version || "");
+  updateSplashEpoch++;
+  if (updateSplashTimer) clearInterval(updateSplashTimer);
+  updateSplashTimer = null;
+  modal.classList.add("hidden");
+  if (updateFocusBefore?.isConnected && typeof updateFocusBefore.focus === "function") {
+    updateFocusBefore.focus();
+  }
+  updateFocusBefore = null;
 }
 
 /* ================= 「关于软件」(设置页) =================
@@ -4315,10 +4394,10 @@ async function openAboutLink(url) {
   }
 }
 
-/** 「检查更新」按钮：进忙态 → 写明三种结果之一 → **必定**恢复可点。 */
+/** 手动检查不把离线/畸形清单/被跳过的新版本冒充「已是最新」。 */
 async function manualUpdateCheck(btn) {
   const out = $("#about-update-result");
-  if (!btn || btn.disabled) return;          // 已经在检查中
+  if (!btn || btn.disabled) return;
   const label = btn.textContent;
   btn.disabled = true;
   btn.textContent = "检查中…";
@@ -4328,88 +4407,126 @@ async function manualUpdateCheck(btn) {
     const status = (r && r.status) || "failed";
     if (status === "new" && r.version) {
       if (out) { out.className = "about-result small is-updated"; out.textContent = "发现新版本 v" + r.version; }
-      // 已在设置页 = 开机画面早收了，直接弹卡片；不必再走等 splash 那条路
-      showUpdateCard({ version: r.version, current: r.current || "", notes: r.notes || "" });
+      // 手动点检查要允许重新打开该版卡片（取消只影响自动弹出）。
+      showUpdateCard({ version: r.version, current: r.current || "", notes: r.notes || "",
+        stage: r.stage || "available", percent: r.percent ?? null });
     } else if (status === "up-to-date") {
       if (out) { out.className = "about-result small is-updated"; out.textContent = "已是最新版本"; }
+    } else if (status === "skipped") {
+      if (out) { out.className = "about-result small is-checking";
+        out.textContent = `有新版本 v${r.version || "未知"}，但已跳过这个版本。`; }
     } else {
-      // 离线 / 服务器不可达 —— 明确说「检查失败」，**不冒充「已是最新」**
-      if (out) {
-        out.className = "about-result small is-error";
-        out.textContent = (r && r.error) || "检查失败，请稍后再试";
-      }
+      // 网络/清单失败必须单独报错，绝不能说成「已是最新」。
+      if (out) { out.className = "about-result small is-error";
+        out.textContent = (r && r.error) || "检查失败，请稍后再试"; }
     }
   } catch (e) {
-    // 后端没接住（旧后端/桥异常）同样是「检查失败」
     if (out) { out.className = "about-result small is-error"; out.textContent = "检查失败，请稍后再试"; }
   } finally {
-    btn.disabled = false;                    // 永远可以再来一次
+    btn.disabled = false;
     btn.textContent = label;
   }
 }
 
-/* 用户点了某个按钮 → 告诉后端；只有 'update' 会真的下载 */
 async function chooseUpdate(choice) {
-  const version = (updateInfo && updateInfo.version) || "";
-  if (choice === "update") {
+  const version = String(updateInfo?.version || "");
+  if (choice === "cancel") {
+    hideUpdateCard();                // 取消只关卡，后台下载继续
+    try { await call("update_choice", "cancel", version); } catch { /* 无须误报停止下载 */ }
+    return;
+  }
+  if (choice === "skip") {
+    const skip = $("#update-skip");
+    if (skip) skip.disabled = true;
+    try {
+      await call("update_choice", "skip", version);
+      hideUpdateCard();
+      updateInfo = null;
+      toast("已跳过这个版本；更高版本仍会提示");
+    } catch {
+      if (skip) skip.disabled = false;
+      $("#update-hint").textContent = "暂时无法跳过此版本，请重试。";
+    }
+    return;
+  }
+  if (choice !== "update") return;
+  if (updateInfo?.stage === "error") {
+    // PHL 同款「重试下载」：后台重试后仍由用户决定是否安装。
     const now = $("#update-now");
     if (now) now.disabled = true;
-    const hint = $("#update-hint");
-    if (hint) hint.textContent = "正在准备下载…";
-    // 卡片先留在屏幕上：下面的进度会画在 #update-hint 上
-  } else {
-    hideUpdateCard();
+    try {
+      const r = await call("update_check");
+      if (r?.status === "new") showUpdateCard({ ...updateInfo, ...r });
+      else $("#update-hint").textContent = "重试失败，请稍后再试。";
+    } catch { $("#update-hint").textContent = "重试失败，请稍后再试。"; }
+    if (now && updateInfo?.stage === "error") now.disabled = false;
+    return;
   }
+  if (updateInfo?.stage !== "downloaded") return;
+  const now = $("#update-now");
+  if (now) now.disabled = true;
+  $("#update-hint").textContent = "正在重新校验更新包并准备安装…";
   try {
-    await call("update_choice", choice, version);
-  } catch (e) {
-    // 后端没接住（例如旧版本后端）也不能让界面卡住
-    const hint = $("#update-hint");
-    if (hint) hint.textContent = String(e.message || e);
-    const now = $("#update-now");
+    await call("update_choice", "update", version);
+    // 只有后端真正启动安装脚本才会推 installing；这里不提前宣称安装成功。
+  } catch {
+    $("#update-hint").textContent = "未能启动安装，请重新检查更新或稍后重试。";
     if (now) now.disabled = false;
   }
 }
 
-/* 后端推来的下载/替换进度 */
+/* 回调/状态补拉均共用此入口：同版取消后不能因进度事件重新弹卡。 */
 function handleUpdateProgress(p) {
-  if (!p) return;
-  const hint = $("#update-hint");
-  if (!hint) return;
-  const stage = String(p.stage || "");
-  if (stage === "downloading") {
-    hint.textContent = p.percent ? `正在下载… ${p.percent}%` : "正在下载…";
-  } else if (stage === "applying") {
-    hint.textContent = p.message || "正在替换新版本…";
-  } else if (stage === "error") {
-    hint.textContent = (p.message || "更新失败") + "（软件仍可继续使用）";
-    const now = $("#update-now");
-    if (now) now.disabled = false;
-  } else if (stage === "done") {
-    hint.textContent = p.message || "更新完成。";
+  if (!p || !$("#update-modal")) return false;
+  if (p.stage === "idle") {
+    updateInfo = null;
+    return true;
   }
+  if (!p.version || !["available", "downloading", "downloaded", "error", "installing"].includes(p.stage)) return false;
+  updateInfo = mergeUpdateState(p);
+  if (!$("#update-modal").classList.contains("hidden")) return paintUpdateCard(updateInfo);
+  if (String(p.version) === updateDismissedVersion) return true;
+  return showUpdateCardAfterSplash(updateInfo);
 }
 
 function bindUpdateCard() {
-  $("#update-cancel")?.addEventListener("click", () => chooseUpdate("cancel"));
-  $("#update-skip")?.addEventListener("click", () => chooseUpdate("skip"));
-  $("#update-now")?.addEventListener("click", () => chooseUpdate("update"));
-  // 点卡片外的遮罩 = 取消（这次先不选），不写任何记录
-  $("#update-modal")?.addEventListener("click", (ev) => {
-    if (ev.target && ev.target.id === "update-modal") chooseUpdate("cancel");
+  $("#update-cancel")?.addEventListener("click", () => { void chooseUpdate("cancel"); });
+  $("#update-skip")?.addEventListener("click", () => { void chooseUpdate("skip"); });
+  $("#update-now")?.addEventListener("click", () => { void chooseUpdate("update"); });
+  const modal = $("#update-modal");
+  modal?.addEventListener("click", (ev) => {
+    if (ev.target === modal && updateInfo?.stage !== "installing") void chooseUpdate("cancel");
+  });
+  modal?.addEventListener("keydown", (ev) => {
+    if (ev.key === "Escape" && updateInfo?.stage !== "installing") {
+      ev.preventDefault();
+      void chooseUpdate("cancel");
+    }
+    if (ev.key !== "Tab") return;
+    const buttons = Array.from(modal.querySelectorAll("button:not(:disabled)"));
+    if (!buttons.length) return;
+    if (ev.shiftKey && document.activeElement === buttons[0]) {
+      ev.preventDefault(); buttons[buttons.length - 1].focus();
+    } else if (!ev.shiftKey && document.activeElement === buttons[buttons.length - 1]) {
+      ev.preventDefault(); buttons[0].focus();
+    }
   });
 }
 
-/* 后端在后台检查完之后回调这两个（pywebview evaluate_js 调过来）。
- * **必须返回 true**：后端据此判断"这次推送真的送到了"——窗口/页面还没准备好时
- * evaluate_js 会失败或返回假值，后端就会重试。返回 undefined 会被当成没送到。 */
+async function refreshUpdateStatus() {
+  try {
+    const state = await call("update_status");
+    if (state?.version) handleUpdateProgress(state);
+  } catch { /* 旧后端或窗口刚出现：下一次状态回调仍可接管 */ }
+}
+window.addEventListener("pywebviewready", () => { void refreshUpdateStatus(); });
+
+/* 仅在实际接收到可画的状态时返回 true，否则让 Python 重试并用状态补拉兜底。 */
 window.__updateAvailable = (info) => {
-  try { showUpdateCardAfterSplash(info); } catch { /* 忽略 */ }
-  return true;
+  try { return showUpdateCardAfterSplash(info); } catch { return false; }
 };
 window.__updateProgress = (p) => {
-  try { handleUpdateProgress(p); } catch { /* 忽略 */ }
-  return true;
+  try { return handleUpdateProgress(p); } catch { return false; }
 };
 
 /* ================= 自绘窗口控件（无边框窗口） =================

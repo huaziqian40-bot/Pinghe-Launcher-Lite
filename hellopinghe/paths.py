@@ -53,6 +53,26 @@ def data_dir() -> Path:
     return LEGACY_HOME_DIR
 
 
+def phl_shared_data_present(root: Path) -> bool:
+    """已存在 PHL 的用户数据时，不把旧 Lite 目录偷偷并进这份共用数据。
+
+    默认两个安装器都指向 ``PH Launcher/data``，但升级老 MSI 的机器可能同时有
+    ``~/.hellopinghe`` 或旧 Lite 安装目录。把两套账号/日程按"缺失即复制"拼在一起
+    会把过期的课表、令牌或会话混进 PHL 正在使用的目录；旧文件应原地保留，
+    由用户在确认备份后决定是否迁移，安装器不会自动合并。
+    """
+    root = Path(root)
+    if not ((root.parent / "PH Launcher.exe").is_file() or (root / "phl").is_dir()):
+        return False
+    if any((root / item).is_file() for item in
+           ("settings.yaml", "Schedule", "Timetable", "School")):
+        return True
+    if (root / "phl" / "launcher.json").is_file() or (root / "phl" / "profile").exists():
+        return True
+    agent = root / "agent"
+    return agent.is_dir() and any(agent.glob("*.json"))
+
+
 def legacy_candidates() -> list[Path]:
     """迁移源候选: 存在且 ≠ 当前数据目录的旧数据目录."""
     out = []

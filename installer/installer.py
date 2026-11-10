@@ -1,11 +1,8 @@
-r"""Pinghe Launcher Lite 安装程序(替代 WiX MSI).
+r"""历史 tkinter 安装器（**不再构建、不再发布**）。
 
-- 默认安装目录: D:\Program Files\HPHL(D 盘不存在则 C:\Program Files\HPHL), 可浏览修改
-- 写入 portable.flag → 应用的所有数据(配置/数据库/缓存/密钥)都存在安装目录\data
-- 可选: 桌面快捷方式 / 固定到任务栏; 无论选择都会写入"已安装应用"列表与卸载器
-- 卸载: 同目录 Uninstall.exe(本程序副本), 可选保留用户数据
-
-构建: python -m PyInstaller --noconfirm --clean installer/installer.spec (需先构建好 app exe)
+VERSION 暂留作跨版本兼容与发布脚本的第二个版本事实源；正式 Windows 安装入口是
+``scripts/build_windows.py`` + ``installer/PingheLauncherLite.nsi``（标准 NSIS）。
+不要运行本文件生成安装包，它的旧默认路径与卸载语义已经废止。
 """
 from __future__ import annotations
 
@@ -26,7 +23,7 @@ UNINSTALL_EXE = "Uninstall.exe"
 APP_NAME = "Pinghe Launcher Lite"
 REG_KEY = r"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\PingheLauncherLite"
 LNK_NAME = "Pinghe Launcher Lite.lnk"
-VERSION = "1.2.7"
+VERSION = "1.2.8"
 
 BUNDLED_APP = Path(getattr(sys, "_MEIPASS", ".")) / APP_EXE
 

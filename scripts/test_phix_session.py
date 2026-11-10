@@ -196,6 +196,52 @@ check("恢复后 needs_unlock", s.needs_unlock(), True)
 ok("status() 不该发网络请求", not NETWORK_CALLS)
 check("未解锁时加密标志为 False", st["encrypted"], False)
 
+# ---------------------------------------------------------------- 4 同步准备向导的步骤文案
+# 登录/注册后选"合并方向"会走这 5 步进度条（account-ui.js → phix_prepare_step）。
+# 以前 timetable 读 ``lessons``/``week``、schedule 读 ``entries`` —— 都是不存在的字段，
+# 于是明明本地已有数据，两步也永远显示"等下次同步"/"暂无日程"。
+import json as _json          # noqa: E402
+import os as _os              # noqa: E402
+import shutil as _shutil      # noqa: E402
+import tempfile as _tempfile  # noqa: E402
+
+from hellopinghe import paths as _paths          # noqa: E402
+from hellopinghe.app import bridge as _bridge    # noqa: E402
+
+_tmp = _tempfile.mkdtemp(prefix="phll-prepare-")
+_old_env = _os.environ.get(_paths.DATA_DIR_ENV)
+_os.environ[_paths.DATA_DIR_ENV] = _tmp
+try:
+    _root = _paths.data_dir()
+    _root.mkdir(parents=True, exist_ok=True)
+    (_root / "Timetable").write_text(_json.dumps({
+        "version": 1, "kind": "pinghe-timetable",
+        "days": {"2026-09-21": [{"subject": "物理"}, {"subject": "数学"}],
+                 "2026-09-22": [{"subject": "化学"}]},
+    }, ensure_ascii=False), encoding="utf-8")
+    (_root / "Schedule").write_text(_json.dumps({
+        "version": 1, "kind": "pinghe-schedule",
+        "events": [{"id": 1, "day": "2026-09-21", "title": "打球"},
+                   {"id": 2, "day": "2026-09-22", "title": "开会"}],
+    }, ensure_ascii=False), encoding="utf-8")
+    (_root / "Profile").write_text(_json.dumps({"display_name": "小明"}),
+                                   encoding="utf-8")
+    # 这几步只读数据文件，不需要 Api 的完整初始化（不建服务、不联网）
+    api = _bridge.Api.__new__(_bridge.Api)
+    _tb = str(api.phix_prepare_step("timetable").get("detail"))
+    ok("课表步骤要数到节数（顶层字段是 days）", "3 节" in _tb)
+    ok("课表步骤不该再说'等下次同步'", "等下次同步" not in _tb)
+    _sc = str(api.phix_prepare_step("schedule").get("detail"))
+    check("日程步骤条数（顶层字段是 events）", _sc, "2 条")
+    _pf = str(api.phix_prepare_step("profile").get("detail"))
+    ok("个人资料步骤读到显示名", "小明" in _pf)
+finally:
+    if _old_env is None:
+        _os.environ.pop(_paths.DATA_DIR_ENV, None)
+    else:
+        _os.environ[_paths.DATA_DIR_ENV] = _old_env
+    _shutil.rmtree(_tmp, ignore_errors=True)
+
 # ---------------------------------------------------------------- 结果
 if FAILED:
     print(f"✗ {len(FAILED)} 项失败：\n")

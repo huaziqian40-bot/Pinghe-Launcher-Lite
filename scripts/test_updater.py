@@ -1,7 +1,11 @@
 # -*- coding: utf-8 -*-
-"""Pinghe Launcher Lite updater 模块测试（不联网，mock 远程接口）。"""
+"""更新器离线测试：发现更新、单飞预下载、完整性校验、用户同意边界。"""
+import hashlib
+import io
 import json
 import sys
+import tempfile
+import threading
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -10,380 +14,418 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from hellopinghe import updater
 
 
-class UpdateCheckTest(unittest.TestCase):
-    def test_current_version_matches_module_constant(self):
-        # 别在这里硬编码版本号：发版 bump APP_VERSION 时会漏改而误报失败
-        # （1.2.1 → 1.2.2 时就踩过一次）。只断言两者一致 + 是 semver。
-        self.assertEqual(updater.current_version(), updater.APP_VERSION)
-        self.assertRegex(updater.current_version(), r"^\d+\.\d+\.\d+$")
+class Response:
+    def __init__(self, body, *, length=None, url="https://phix.ing/update/PingheLauncherLite-9.9.9-Setup.exe", status=200):
+        self.stream = io.BytesIO(body)
+        self.headers = {} if length is None else {"Content-Length": str(length)}
+        self.url = url
+        self.status = status
 
-    def test_check_remote_parses_production_response(self):
-        # 模拟生产 /api/v1/update/check 的返回
-        payload = {
-            "ok": True,
-            "product": "phl-lite",
-            "platform": "win",
-            "latest_version": "1.2.1",
-            "url": "https://phix.ing/updates/phl-lite/PingheLauncherLite.exe",
-            "sha256": "a" * 64,
-            "size": 12345,
-        }
-        with mock.patch.object(updater.urllib.request, "urlopen") as m:
-            m.return_value.__enter__ = mock.Mock(return_value=mock.Mock(
-                read=mock.Mock(return_value=json.dumps(payload).encode("utf-8"))))
-            data = updater._check_remote()
-        self.assertTrue(data["ok"])
-        self.assertEqual(data["latest_version"], "1.2.1")
+    def read(self, size=-1):
+        return self.stream.read(size)
 
-    def test_apply_update_skips_when_not_frozen(self):
-        # 源码运行（非 PyInstaller 冻结）不应尝试替换 exe
-        with mock.patch.object(sys, "frozen", False, create=True):
-            self.assertFalse(updater._apply_update({"url": "x", "sha256": "y"}))
+    def geturl(self):
+        return self.url
 
-    def test_launch_updater_writes_bat(self):
-        # 验证 updater.bat 内容的关键结构
-        import tempfile
-        from hellopinghe import paths
+    def __enter__(self):
+        return self
 
-        with mock.patch.object(updater, "_update_dir") as ud:
-            ud.return_value = Path(tempfile.mkdtemp())
-            with mock.patch.object(updater.subprocess, "Popen") as popen:
-                updater._launch_updater(
-                    Path(r"C:\tmp\new.exe"), Path(r"C:\app\PingheLauncherLite.exe"))
-                popen.assert_called_once()
-                # 第一个参数是 cmd.exe /c bat
-                args = popen.call_args[0][0]
-                self.assertEqual(args[0], "cmd.exe")
-                bat = Path(args[2])
-                text = bat.read_text(encoding="utf-8")
-                self.assertIn("tasklist /FI", text)
-                self.assertIn('copy /Y "C:\\tmp\\new.exe" "C:\\app\\PingheLauncherLite.exe"', text)
-                self.assertIn('start "" "C:\\app\\PingheLauncherLite.exe"', text)
+    def __exit__(self, *unused):
+        self.stream.close()
 
 
-class MacAutoReplaceTest(unittest.TestCase):
-    """macOS：用户在卡片上点「更新」之后，软件自己下载 zip 并替换 .app
-    （用户只需在新版本首次启动时右键打开一次），不是让用户自己去官网下载。"""
-
-    def test_current_app_bundle_walks_up_from_executable(self):
-        with mock.patch.object(sys, "executable",
-                               "/Applications/Pinghe Launcher Lite.app/Contents/MacOS/PingheLauncherLite"):
-            got = updater._current_app_bundle()
-        # 注意：在 Windows 上跑测试时 Path 会把 /Applications 解释成当前盘下的路径，
-        # 所以这里只断言"上溯到了 .app 那一层"，不硬比绝对路径（macOS 上是 /Applications/…）。
-        self.assertTrue(got.endswith("Pinghe Launcher Lite.app"), got)
-        self.assertNotIn("Contents", got, "应该停在 .app 层，不能停在里面")
-
-    def test_current_app_bundle_empty_when_not_in_app(self):
-        with mock.patch.object(sys, "executable", "/usr/local/bin/python3"):
-            self.assertEqual(updater._current_app_bundle(), "")
-
-    def test_stage_rejects_non_zip_and_dev_mode(self):
-        # 非 zip 载荷（如 dmg）不接受
-        self.assertFalse(updater._stage_mac_update({"url": "https://x/y.dmg", "sha256": "a" * 64}, "9.9.9"))
-        # 开发模式（不在 .app 内）不自动替换
-        with mock.patch.object(sys, "executable", "/usr/local/bin/python3"):
-            self.assertFalse(
-                updater._stage_mac_update({"url": "https://x/y.zip", "sha256": "a" * 64}, "9.9.9"))
-
-    def test_swap_script_has_required_steps(self):
-        import tempfile
-
-        staging = Path(tempfile.mkdtemp())
-        with mock.patch.object(updater.subprocess, "Popen") as popen, \
-             mock.patch.object(updater, "_mac_notify"):
-            updater._write_and_launch_swap_script(
-                "/Applications/Pinghe Launcher Lite.app",
-                "/tmp/staging/Pinghe Launcher Lite.app",
-                staging, "9.9.9")
-            self.assertTrue(popen.called, "应启动替换脚本")
-        script = (staging / "swap.sh").read_text(encoding="utf-8")
-        self.assertIn('kill -0 "$PID"', script)              # 等主进程退出
-        self.assertIn(".Trash", script)                      # 旧包进废纸篓
-        self.assertIn("xattr -dr com.apple.quarantine", script)  # 清隔离属性
-        self.assertIn("codesign --sign - --deep --force", script)  # ad-hoc 重签
-        self.assertIn('/usr/bin/open "$TARGET"', script)     # 重启
-        self.assertIn("ditto", script)                       # 用 ditto 就位
-
-    def test_sha256_mismatch_discards_staged_update(self):
-        """坏包：SHA256 不匹配 → 丢弃，不写替换脚本。"""
-        import tempfile
-        from hellopinghe import paths
-
-        staging = Path(tempfile.mkdtemp())
-        with mock.patch.object(sys, "executable",
-                               "/Applications/Pinghe Launcher Lite.app/Contents/MacOS/x"), \
-             mock.patch.object(paths, "data_dir", return_value=staging), \
-             mock.patch.object(updater, "_download_file") as dl, \
-             mock.patch.object(updater, "_write_and_launch_swap_script") as swap:
-            # 下载出来的内容与清单哈希不符
-            def fake_dl(url, dest, timeout=600.0):
-                dest.write_bytes(b"tampered")
-            dl.side_effect = fake_dl
-            ok = updater._stage_mac_update(
-                {"url": "https://x/y.zip", "sha256": "0" * 64}, "9.9.9")
-        self.assertFalse(ok, "坏包必须被拒绝")
-        self.assertFalse(swap.called, "坏包不应启动替换")
-
-
-class CardConfirmTest(unittest.TestCase):
-    """卡片确认制：检查阶段**只弹卡片**，绝不下载；只有点「更新」才下载替换。
-
-    用户要求（原话）：不要未经用户允许更新；每次检测到有新版本就在进入软件时跳一张卡片，
-    写版本号 + 更新内容，下面三个按钮：取消 / 跳过本版本 / 更新。
-    """
-
-    @staticmethod
-    def _run_now():
-        """让 check_for_update_*_async 里的后台线程同步执行，便于断言。"""
-        class _Sync:
-            def __init__(self, target=None, **kw):
-                self._target = target
-
-            def start(self):
-                if self._target:
-                    self._target()
-
-        return mock.patch.object(updater.threading, "Thread", _Sync)
-
-    def _remote(self, latest="9.9.9", notes="修了几个 bug\n新增了周视图"):
-        return {
-            "ok": True,
-            "latest_version": latest,
-            "url": "https://phix.ing/updates/phl-lite/PingheLauncherLite.exe",
-            "sha256": "a" * 64,
-            "size": 1,
-            "release_notes": notes,
-        }
-
-    # ---------- Windows ----------
-    def test_check_only_notifies_and_never_downloads(self):
-        seen = []
-        with mock.patch.object(sys, "frozen", True, create=True), \
-             mock.patch.object(updater, "_check_remote", return_value=self._remote()), \
-             mock.patch.object(updater, "_notify_ui", side_effect=seen.append), \
-             mock.patch.object(updater, "_apply_update") as apply_mock, \
-             self._run_now():
-            updater.check_for_update_async(None)
-        self.assertFalse(apply_mock.called, "检查阶段绝对不能下载/替换")
-        self.assertEqual(len(seen), 1, "发现新版本应通知界面弹卡片")
-        self.assertEqual(seen[0]["version"], "9.9.9")
-        self.assertEqual(seen[0]["current"], updater.APP_VERSION)
-        self.assertIn("周视图", seen[0]["notes"], "卡片要带上本次更新内容")
-
-    def test_same_version_is_silent(self):
-        with mock.patch.object(sys, "frozen", True, create=True), \
-             mock.patch.object(updater, "_check_remote",
-                               return_value=self._remote(latest=updater.APP_VERSION)), \
-             mock.patch.object(updater, "_notify_ui") as notify, \
-             self._run_now():
-            updater.check_for_update_async(None)
-        self.assertFalse(notify.called)
-
-    def test_skipped_version_is_silent_but_newer_one_still_prompts(self):
-        class Cfg:
-            skipped_update_version = "9.9.9"
-
-        with mock.patch.object(sys, "frozen", True, create=True), \
-             mock.patch.object(updater, "_check_remote", return_value=self._remote()), \
-             mock.patch.object(updater, "_notify_ui") as notify, \
-             self._run_now():
-            updater.check_for_update_async(Cfg())
-        self.assertFalse(notify.called, "点过「跳过本版本」后该版本要静默")
-
-        with mock.patch.object(sys, "frozen", True, create=True), \
-             mock.patch.object(updater, "_check_remote",
-                               return_value=self._remote(latest="9.9.10")), \
-             mock.patch.object(updater, "_notify_ui") as notify2, \
-             self._run_now():
-            updater.check_for_update_async(Cfg())
-        self.assertTrue(notify2.called, "更高的版本仍然要提示")
-
-    def test_not_frozen_is_silent(self):
-        with mock.patch.object(sys, "frozen", False, create=True), \
-             mock.patch.object(updater, "_check_remote") as remote, \
-             mock.patch.object(updater, "_notify_ui") as notify, \
-             self._run_now():
-            updater.check_for_update_async(None)
-        self.assertFalse(remote.called, "源码运行不该联网检查")
-        self.assertFalse(notify.called)
-
-    # ---------- macOS ----------
-    def test_mac_check_only_notifies_and_never_stages(self):
-        seen = []
-        with mock.patch.object(sys, "frozen", True, create=True), \
-             mock.patch.object(updater, "_check_remote", return_value=self._remote()), \
-             mock.patch.object(updater, "_notify_ui", side_effect=seen.append), \
-             mock.patch.object(updater, "_stage_mac_update") as stage, \
-             self._run_now():
-            updater.check_for_update_mac_async(None)
-        self.assertFalse(stage.called, "macOS 检查阶段也绝不能下载/替换")
-        self.assertEqual([s["version"] for s in seen], ["9.9.9"])
-
-    def test_mac_skipped_version_is_silent(self):
-        class Cfg:
-            skipped_update_version = "9.9.9"
-
-        with mock.patch.object(sys, "frozen", True, create=True), \
-             mock.patch.object(updater, "_check_remote", return_value=self._remote()), \
-             mock.patch.object(updater, "_notify_ui") as notify, \
-             self._run_now():
-            updater.check_for_update_mac_async(Cfg())
-        self.assertFalse(notify.called)
-
-    def test_notify_ui_calls_the_js_hook(self):
-        import types
-        win = mock.Mock()
-        with mock.patch.dict(sys.modules, {"webview": types.SimpleNamespace(windows=[win])}):
-            updater._notify_ui({"version": "9.9.9", "current": "1.2.2", "notes": "x"})
-        js = win.evaluate_js.call_args[0][0]
-        self.assertIn("__updateAvailable", js)
-        self.assertIn("9.9.9", js)
-
-    def test_notify_ui_retries_until_the_window_is_ready(self):
-        """检查线程在 webview.start() 之前就起来了：窗口还没建好时推送会失败，
-        必须重试 —— 否则网速快的时候卡片永远不弹（而且失败是静默的）。"""
-        import types
-        win = mock.Mock()
-        # 前 3 次窗口没准备好（抛异常），第 4 次才送到
-        win.evaluate_js.side_effect = [
-            RuntimeError("window not ready"), RuntimeError("window not ready"),
-            None, True,
-        ]
-        with mock.patch.dict(sys.modules, {"webview": types.SimpleNamespace(windows=[win])}), \
-             mock.patch.object(updater.time, "sleep") as sleep:
-            ok = updater._notify_ui({"version": "9.9.9", "current": "1.2.2"}, attempts=10)
-        self.assertTrue(ok, "重试之后应该送达")
-        self.assertEqual(win.evaluate_js.call_count, 4)
-        self.assertEqual(sleep.call_count, 3, "每次失败之间要等一下再试")
-
-    def test_notify_ui_gives_up_quietly(self):
-        import types
-        win = mock.Mock()
-        win.evaluate_js.return_value = False     # 页面一直没加载出来
-        with mock.patch.dict(sys.modules, {"webview": types.SimpleNamespace(windows=[])}), \
-             mock.patch.object(updater.time, "sleep"):
-            ok = updater._notify_ui({"version": "9.9.9"}, attempts=3)
-        self.assertFalse(ok, "没有窗口时安静放弃，不能抛异常影响启动")
-
-    def test_js_hooks_return_true_so_the_backend_knows_it_arrived(self):
-        js = (Path(__file__).resolve().parent.parent / "ui" / "app.js").read_text(encoding="utf-8")
-        at = js.index("window.__updateAvailable = (info) => {")
-        block = js[at:at + 300]
-        self.assertIn("return true;", block,
-                      "回调必须返回 true，后端才能判断推送是否真的送到")
-        at2 = js.index("window.__updateProgress = (p) => {")
-        self.assertIn("return true;", js[at2:at2 + 300])
-
-    def test_apply_update_is_the_only_download_path(self):
-        """apply_update 是「用户点了更新」之后才走的路：校验失败要报错且不替换。"""
-        errs = []
-        with mock.patch.object(updater, "_check_remote", return_value=self._remote()), \
-             mock.patch.object(updater, "_apply_update", return_value=False) as apply_mock, \
-             mock.patch.object(updater, "_notify_ui_progress",
-                               side_effect=lambda stage, **kw: errs.append(stage)):
-            ok = updater.apply_update()
-        self.assertTrue(apply_mock.called, "点更新后才允许下载")
-        self.assertFalse(ok)
-        self.assertIn("error", errs, "失败要回给卡片一个提示")
-
-
-class UpdateCardMarkupTest(unittest.TestCase):
-    """界面侧：卡片必须有版本号、更新内容、三个按钮，并接上后端回调。"""
+class UpdaterTest(unittest.TestCase):
+    payload = b"mock NSIS installer bytes"
 
     def setUp(self):
-        self.ui = Path(__file__).resolve().parent.parent / "ui"
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        root = Path(self.temp.name)
+        self.dir_patch = mock.patch.object(updater, "_update_dir", return_value=root)
+        self.progress_patch = mock.patch.object(updater, "_notify_ui_progress")
+        self.notify_patch = mock.patch.object(updater, "_notify_ui", return_value=True)
+        self.dir_patch.start()
+        self.progress = self.progress_patch.start()
+        self.notify = self.notify_patch.start()
+        self.addCleanup(self.dir_patch.stop)
+        self.addCleanup(self.progress_patch.stop)
+        self.addCleanup(self.notify_patch.stop)
+        with updater._lock:
+            if updater._worker and updater._worker.is_alive():
+                updater._generation += 1
+                updater._worker.join(timeout=3)
+            updater._worker = None
+            updater._worker_generation = -1
+            updater._retry_queued = False
+            updater._entry = None
+            updater._skipped.clear()
+            updater._state.clear()
+            updater._state.update(stage="idle", version="", current=updater.APP_VERSION,
+                                  notes="", percent=None)
 
-    def test_index_has_card_with_three_buttons(self):
-        html = (self.ui / "index.html").read_text(encoding="utf-8")
-        for i in ("update-modal", "update-version", "update-current",
-                  "update-notes", "update-cancel", "update-skip", "update-now"):
-            self.assertIn(f'id="{i}"', html, f"缺 #{i}")
-        self.assertIn("跳过本版本", html)
-        self.assertIn("取消", html)
-        self.assertIn(">更新<", html)
+    def tearDown(self):
+        with updater._lock:
+            updater._generation += 1
+        if updater._worker and updater._worker.is_alive():
+            updater._worker.join(timeout=3)
 
-    def test_app_js_binds_card_and_exposes_hooks(self):
-        js = (self.ui / "app.js").read_text(encoding="utf-8")
-        self.assertIn("window.__updateAvailable", js)
-        self.assertIn("window.__updateProgress", js)
-        self.assertIn('call("update_choice"', js)
-        for c in ("cancel", "skip", "update"):
-            self.assertIn(f'chooseUpdate("{c}")', js)
-        self.assertIn("bindUpdateCard();", js, "启动时要绑定卡片按钮")
+    def release(self, **overrides):
+        result = dict(ok=True, latest_version="9.9.9", release_notes="修复窗口问题",
+                      url="https://phix.ing/update/PingheLauncherLite-9.9.9-Setup.exe",
+                      sha256=hashlib.sha256(self.payload).hexdigest(), size=len(self.payload))
+        result.update(overrides)
+        return result
 
-    def test_card_waits_for_the_splash_screen(self):
-        """开机画面（#splash）z-index 比弹层高；检查比它先结束的话卡片会被挡住，
-        所以必须先等开机画面收起来再弹 —— 否则用户根本看不到卡片。"""
-        js = (self.ui / "app.js").read_text(encoding="utf-8")
-        self.assertIn("function showUpdateCardAfterSplash", js)
-        self.assertIn('window.__updateAvailable = (info) => {', js)
-        self.assertIn("showUpdateCardAfterSplash(info)", js,
-                      "__updateAvailable 必须走「等开机画面」这条路")
-        self.assertIn('document.getElementById("splash")', js)
-        css = (self.ui / "styles.css").read_text(encoding="utf-8")
-        self.assertIn(".splash-screen{position:fixed;inset:0;z-index:200", css,
-                      "前提确认：开机画面确实盖在弹层（z-index:50）上面")
+    def _probe(self, data=None, *, mac=False, notify=True):
+        with mock.patch.object(updater, "_check_remote", return_value=data or self.release()):
+            return updater._probe(None, mac, notify)
 
-    def test_styles_have_update_card_rules(self):
-        css = (self.ui / "styles.css").read_text(encoding="utf-8")
-        for cls in (".update-card", ".update-version", ".update-notes", ".update-hint"):
-            self.assertIn(cls, css)
+    def _downloaded(self, data=None, *, length=True, mac=False):
+        data = data or self.release()
+        with mock.patch.object(updater.urllib.request, "urlopen", return_value=Response(
+                self.payload, length=len(self.payload) if length else None, url=data["url"])), \
+             mock.patch.object(updater, "_check_remote", return_value=data):
+            result = updater._probe(None, mac, True)
+            updater._worker.join(timeout=3)
+        self.assertEqual(updater.get_update_status()["stage"], "downloaded")
+        return result
 
+    def test_version_is_semver(self):
+        self.assertEqual(updater.current_version(), updater.APP_VERSION)
+        self.assertRegex(updater.APP_VERSION, r"^\d+\.\d+\.\d+$")
 
-class BridgeChoiceTest(unittest.TestCase):
-    """bridge.update_choice：cancel/skip 不下载，skip 记住版本，只有 update 才下载。"""
+    def test_platform_specific_check_url(self):
+        with mock.patch.object(updater.sys, "platform", "darwin"):
+            self.assertIn("platform=mac", updater._check_url())
+        with mock.patch.object(updater.sys, "platform", "win32"):
+            self.assertIn("platform=win-nsis", updater._check_url())
+            self.assertNotIn("platform=win&", updater._check_url())
 
-    def _api(self):
-        from hellopinghe.app.bridge import Api
-        api = Api.__new__(Api)          # 不跑 __init__（避免建服务/读磁盘）
-        api.cfg = mock.Mock()
-        api.cfg.skipped_update_version = ""
-        return api
+    def test_check_remote_parses_json_and_bounded_request(self):
+        data = self.release()
+        with mock.patch.object(updater.urllib.request, "urlopen", return_value=Response(json.dumps(data).encode())) as open_url:
+            self.assertEqual(updater._check_remote()["latest_version"], "9.9.9")
+        self.assertIn("product=phl-lite", open_url.call_args.args[0].full_url)
 
-    def test_cancel_downloads_nothing(self):
-        api = self._api()
-        with mock.patch.object(updater, "apply_update") as apply_mock:
-            r = api.update_choice("cancel", "9.9.9")
-        self.assertTrue(r["ok"])
-        self.assertEqual(r["action"], "cancel")
-        self.assertFalse(apply_mock.called)
-        self.assertEqual(api.cfg.skipped_update_version, "", "取消不该写任何记录")
-        self.assertFalse(api.cfg.save.called)
+    def test_status_returns_snapshot_not_mutable_global(self):
+        state = updater.get_update_status()
+        state["stage"] = "forged"
+        self.assertEqual(updater.get_update_status()["stage"], "idle")
 
-    def test_skip_remembers_version_without_downloading(self):
-        api = self._api()
-        with mock.patch.object(updater, "apply_update") as apply_mock:
-            r = api.update_choice("skip", "9.9.9")
-        self.assertEqual(r["action"], "skip")
-        self.assertFalse(apply_mock.called, "跳过绝不能下载")
-        self.assertEqual(api.cfg.skipped_update_version, "9.9.9")
-        self.assertTrue(api.cfg.save.called, "跳过要落盘，下次启动才静默")
+    def test_new_release_available_event_precedes_download(self):
+        seen = []
+        def callback(info):
+            seen.append((info.copy(), updater.get_update_status()["stage"]))
+            return True
+        with mock.patch.object(updater, "_notify_ui", side_effect=callback), \
+             mock.patch.object(updater.urllib.request, "urlopen", return_value=Response(self.payload, length=len(self.payload))):
+            result = self._probe()
+            updater._worker.join(3)
+        self.assertEqual(seen[0][0]["stage"], "available")
+        self.assertEqual(seen[0][1], "available")
+        self.assertEqual(result["status"], "new")
+        self.assertEqual(updater.get_update_status()["stage"], "downloaded")
 
-    def test_update_spawns_download_thread(self):
-        api = self._api()
-        started = []
+    def test_progress_known_length_reports_numbers(self):
+        self._downloaded()
+        events = [call.args[0] for call in self.progress.call_args_list]
+        self.assertIn("downloading", events)
+        self.assertIn("downloaded", events)
+        self.assertEqual(updater.get_update_status()["percent"], 100)
+        self.assertTrue(any(call.kwargs.get("percent") is not None
+                            for call in self.progress.call_args_list if call.args[0] == "downloading"))
 
-        class _Sync:
-            def __init__(self, target=None, **kw):
-                self._target = target
+    def test_progress_unknown_length_remains_null_until_verified(self):
+        self._downloaded(length=False)
+        self.assertTrue(all(call.kwargs.get("percent") is None
+                            for call in self.progress.call_args_list if call.args[0] == "downloading"))
+        self.assertEqual(updater.get_update_status()["percent"], 100)
 
-            def start(self):
-                started.append(True)
-                # 不真的执行 target（那会退出进程），只验证它被启动了
+    def test_cache_stored_with_atomic_metadata(self):
+        self._downloaded()
+        package, meta = updater._cache_paths(False)
+        self.assertEqual(package.read_bytes(), self.payload)
+        self.assertEqual(json.loads(meta.read_text())["version"], "9.9.9")
+        self.assertFalse(list(package.parent.glob("*.part*")))
 
+    def test_same_release_reuses_valid_cache_without_network(self):
+        self._downloaded()
+        data = self.release()
+        with mock.patch.object(updater.urllib.request, "urlopen", side_effect=AssertionError("downloaded twice")):
+            updater._download(data | {"version": "9.9.9", "notes": data["release_notes"]}, False, updater._generation)
+        self.assertEqual(updater.get_update_status()["stage"], "downloaded")
+
+    def test_manual_check_reports_cached_new_with_stage(self):
+        self._downloaded()
+        with mock.patch.object(updater, "_check_remote", side_effect=AssertionError("unneeded remote check")):
+            result = updater.check_for_update_manual()
+        self.assertEqual((result["status"], result["stage"], result["percent"]), ("new", "downloaded", 100))
+
+    def test_manual_network_failure_is_not_up_to_date(self):
+        with mock.patch.object(updater, "_check_remote", side_effect=OSError("private network path")):
+            result = updater.check_for_update_manual()
+        self.assertEqual(result["status"], "failed")
+        self.assertEqual(result["current"], updater.APP_VERSION)
+        self.assertNotIn("private network path", result["error"])
+
+    def test_manifest_ok_false_is_failed(self):
+        self.assertEqual(self._probe(dict(ok=False))["status"], "failed")
+
+    def test_invalid_latest_version_is_failed(self):
+        for latest in ("", "v9.9.9", "bogus", None, "9.9.9-preview", 999):
+            with self.subTest(latest=latest):
+                self.assertEqual(self._probe(self.release(latest_version=latest))["status"], "failed")
+
+    def test_equal_version_is_up_to_date(self):
+        result = self._probe(self.release(latest_version=updater.APP_VERSION))
+        self.assertEqual(result["status"], "up-to-date")
+        self.notify.assert_not_called()
+
+    def test_older_version_is_up_to_date_not_downgraded(self):
+        self.assertEqual(self._probe(self.release(latest_version="0.0.1"))["status"], "up-to-date")
+        self.notify.assert_not_called()
+
+    def test_numeric_comparison_treats_9_9_10_newer_than_9_9_9(self):
+        self.assertGreater(updater._version("9.9.10"), updater._version("9.9.9"))
+
+    def test_skipped_config_version_not_announced(self):
+        cfg = mock.Mock(skipped_update_version="9.9.9")
+        with mock.patch.object(updater, "_check_remote", return_value=self.release()):
+            self.assertEqual(updater._probe(cfg, False, True)["status"], "skipped")
+            self.assertEqual(updater.check_for_update_manual(cfg)["status"], "skipped")
+        self.notify.assert_not_called()
+
+    def test_skip_clears_cached_release_and_state(self):
+        self._downloaded()
+        package, metadata = updater._cache_paths(False)
+        updater.skip_update("9.9.9")
+        self.assertEqual(updater.get_update_status()["stage"], "idle")
+        self.assertFalse(package.exists())
+        self.assertFalse(metadata.exists())
+        self.assertEqual(self._probe()["status"], "skipped")
+
+    def test_skip_other_release_preserves_current_state(self):
+        self._downloaded()
+        updater.skip_update("9.9.10")
+        self.assertEqual(updater.get_update_status()["stage"], "downloaded")
+
+    def test_skip_stops_inflight_read_without_publishing_download(self):
+        entered, release = threading.Event(), threading.Event()
+        class Slow(Response):
+            def read(self, size=-1):
+                entered.set()
+                release.wait(3)
+                return super().read(size)
+        with mock.patch.object(updater.urllib.request, "urlopen", return_value=Slow(self.payload, length=len(self.payload))):
+            self._probe()
+            self.assertTrue(entered.wait(3))
+            updater.skip_update("9.9.9")
+            release.set()
+            updater._worker.join(3)
+        self.assertEqual(updater.get_update_status()["stage"], "idle")
+        self.assertFalse(updater._cache_paths(False)[0].exists())
+
+    def test_apply_during_download_does_not_launch_or_refetch(self):
+        entered, release = threading.Event(), threading.Event()
+        class Slow(Response):
+            def read(self, size=-1):
+                entered.set()
+                release.wait(3)
+                return super().read(size)
+        with mock.patch.object(updater.urllib.request, "urlopen", return_value=Slow(self.payload, length=len(self.payload))), \
+             mock.patch.object(updater, "_launch_updater") as launch, \
+             mock.patch.object(sys, "frozen", True, create=True):
+            self._probe()
+            self.assertTrue(entered.wait(3))
+            self.assertFalse(updater.apply_update())
+            launch.assert_not_called()
+            release.set()
+            updater._worker.join(3)
+
+    def test_apply_not_frozen_returns_false(self):
+        self._downloaded()
+        with mock.patch.object(sys, "frozen", False, create=True), mock.patch.object(updater, "_launch_updater") as launch:
+            self.assertFalse(updater.apply_update())
+        launch.assert_not_called()
+
+    def test_apply_verified_cache_launches_once_and_never_downloads(self):
+        self._downloaded()
         with mock.patch.object(sys, "frozen", True, create=True), \
-             mock.patch.object(updater, "apply_update") as apply_mock, \
-             mock.patch.object(sys.modules["hellopinghe.app.bridge"], "threading") as th:
-            th.Thread = _Sync
-            r = api.update_choice("update", "9.9.9")
-        self.assertEqual(r["action"], "update")
-        self.assertTrue(started, "点「更新」才启动下载线程")
+             mock.patch.object(sys, "executable", str(updater._cache_paths(False)[0])), \
+             mock.patch.object(updater, "_launch_updater") as launch, \
+             mock.patch.object(updater, "_check_remote", side_effect=AssertionError("refetched")):
+            self.assertTrue(updater.apply_update())
+        launch.assert_called_once()
+        self.assertEqual(updater.get_update_status()["stage"], "installing")
 
-    def test_unknown_choice_is_rejected(self):
-        api = self._api()
-        r = api.update_choice("whatever", "9.9.9")
-        self.assertFalse(r["ok"])
+    def test_apply_tampered_cache_fails_and_reports_error(self):
+        self._downloaded()
+        updater._cache_paths(False)[0].write_bytes(b"tampered")
+        with mock.patch.object(sys, "frozen", True, create=True), mock.patch.object(updater, "_launch_updater") as launch:
+            self.assertFalse(updater.apply_update())
+        launch.assert_not_called()
+        self.assertEqual(updater.get_update_status()["stage"], "error")
+
+    def test_bad_hash_discards_cache_and_reports_friendly_error(self):
+        bad = self.release(sha256="0" * 64)
+        with mock.patch.object(updater.urllib.request, "urlopen", return_value=Response(self.payload, length=len(self.payload), url=bad["url"])):
+            self._probe(bad)
+            updater._worker.join(3)
+        status = updater.get_update_status()
+        self.assertEqual(status["stage"], "error")
+        self.assertEqual(status["message"], updater.DOWNLOAD_ERROR)
+        self.assertFalse(updater._cache_paths(False)[0].exists())
+
+    def test_content_length_mismatch_rejected(self):
+        with mock.patch.object(updater.urllib.request, "urlopen", return_value=Response(self.payload, length=1)):
+            self._probe()
+            updater._worker.join(3)
+        self.assertEqual(updater.get_update_status()["stage"], "error")
+
+    def test_manifest_size_mismatch_rejected(self):
+        data = self.release(size=len(self.payload) + 1)
+        with mock.patch.object(updater.urllib.request, "urlopen", return_value=Response(self.payload, url=data["url"])):
+            self._probe(data)
+            updater._worker.join(3)
+        self.assertEqual(updater.get_update_status()["stage"], "error")
+
+    def test_large_download_aborts_before_writing(self):
+        with mock.patch.object(updater, "MAX_DOWNLOAD_BYTES", 5), \
+             mock.patch.object(updater.urllib.request, "urlopen", return_value=Response(self.payload)), \
+             mock.patch.object(updater, "_check_remote", return_value=self.release(size=None)):
+            updater._probe(None, False, True)
+            updater._worker.join(3)
+        self.assertEqual(updater.get_update_status()["stage"], "error")
+        self.assertFalse(updater._cache_paths(False)[0].exists())
+
+    def test_unsafe_urls_and_non_nsis_payload_rejected_before_download(self):
+        for url in ("http://phix.ing/update/PingheLauncherLite-Setup.exe",
+                    "file:///tmp/Setup.exe", "https://phix.ing/update/PingheLauncherLite.exe",
+                    "https://user:password@phix.ing/update/Setup.exe"):
+            with self.subTest(url=url):
+                self.assertEqual(self._probe(self.release(url=url))["status"], "failed")
+
+    def test_installer_filename_must_match_declared_version(self):
+        data = self.release(url="https://phix.ing/update/PingheLauncherLite-8.8.8-Setup.exe")
+        self.assertEqual(self._probe(data)["status"], "failed")
+
+    def test_redirect_to_http_rejected(self):
+        with mock.patch.object(updater.urllib.request, "urlopen", return_value=Response(
+                self.payload, length=len(self.payload), url="http://phix.ing/Setup.exe")):
+            self._probe()
+            updater._worker.join(3)
+        self.assertEqual(updater.get_update_status()["stage"], "error")
+
+    def test_redirect_to_another_version_installer_rejected(self):
+        with mock.patch.object(updater.urllib.request, "urlopen", return_value=Response(
+                self.payload, length=len(self.payload),
+                url="https://phix.ing/update/PingheLauncherLite-8.8.8-Setup.exe")):
+            self._probe()
+            updater._worker.join(3)
+        self.assertEqual(updater.get_update_status()["stage"], "error")
+
+    def test_invalid_sha_or_size_rejected(self):
+        for value in (self.release(sha256="xyz"), self.release(size=-1), self.release(size=updater.MAX_DOWNLOAD_BYTES + 1)):
+            self.assertEqual(self._probe(value)["status"], "failed")
+
+    def test_manual_retry_after_error_reuses_version_and_starts_download(self):
+        with mock.patch.object(updater.urllib.request, "urlopen", side_effect=OSError("offline")):
+            self._probe()
+            updater._worker.join(3)
+        self.assertEqual(updater.get_update_status()["stage"], "error")
+        with mock.patch.object(updater.urllib.request, "urlopen", return_value=Response(self.payload, length=len(self.payload))):
+            result = updater.check_for_update_manual()
+            updater._worker.join(3)
+        self.assertEqual(result["status"], "new")
+        self.assertEqual(updater.get_update_status()["stage"], "downloaded")
+
+    def test_duplicate_manual_check_does_not_spawn_duplicate_download(self):
+        entered, release = threading.Event(), threading.Event()
+        class Slow(Response):
+            def read(self, size=-1):
+                entered.set()
+                release.wait(3)
+                return super().read(size)
+        with mock.patch.object(updater.urllib.request, "urlopen", return_value=Slow(self.payload, length=len(self.payload))) as open_url:
+            self._probe()
+            self.assertTrue(entered.wait(3))
+            self.assertEqual(updater.check_for_update_manual()["status"], "new")
+            self.assertEqual(updater.check_for_update_manual()["status"], "new")
+            release.set()
+            updater._worker.join(3)
+        self.assertEqual(open_url.call_count, 1)
+
+    def test_windows_script_uses_pid_and_nsis_not_copy(self):
+        setup = Path(self.temp.name) / "PingheLauncherLite-9.9.9-Setup.exe"
+        setup.write_bytes(self.payload)
+        target = Path(self.temp.name) / "PingheLauncherLite.exe"
+        with mock.patch.object(updater.subprocess, "Popen") as popen:
+            updater._launch_updater(setup, target)
+        script = Path(popen.call_args.args[0][2]).read_text(encoding="utf-8")
+        self.assertIn("PID eq %PARENT_PID%", script)
+        self.assertIn('"' + str(setup) + '" /S /D=', script)
+        self.assertIn("if errorlevel 1 exit /b 1", script)
+        self.assertNotIn("copy /Y", script)
+        self.assertNotIn("del /F", script)
+
+    def test_windows_script_rejects_cmd_metacharacters(self):
+        with mock.patch.object(updater.subprocess, "Popen") as popen:
+            with self.assertRaises(ValueError):
+                updater._launch_updater(Path('C:/downloads/a&b-Setup.exe'), Path('C:/app/PingheLauncherLite.exe'))
+        popen.assert_not_called()
+
+    def test_mac_download_cache_and_install_are_separate(self):
+        data = self.release(url="https://phix.ing/update/PingheLauncherLite-9.9.9.zip")
+        self._downloaded(data, mac=True)
+        with mock.patch.object(updater, "_current_app_bundle", return_value="/Applications/Pinghe Launcher Lite.app"), \
+             mock.patch.object(updater.subprocess, "run") as extract, \
+             mock.patch.object(updater, "_find_app_bundle", return_value="/tmp/Pinghe Launcher Lite.app"), \
+             mock.patch.object(updater, "_write_and_launch_swap_script") as swap:
+            self.assertTrue(updater.apply_update_mac())
+        extract.assert_called_once()
+        swap.assert_called_once()
+        self.assertEqual(updater.get_update_status()["stage"], "installing")
+
+    def test_mac_tampered_cache_cannot_launch_swap(self):
+        data = self.release(url="https://phix.ing/update/PingheLauncherLite-9.9.9.zip")
+        self._downloaded(data, mac=True)
+        updater._cache_paths(True)[0].write_bytes(b"broken")
+        with mock.patch.object(updater, "_write_and_launch_swap_script") as swap:
+            self.assertFalse(updater.apply_update_mac())
+        swap.assert_not_called()
+
+    def test_mac_swap_script_waits_pid_and_retains_old_on_failure(self):
+        with mock.patch.object(updater.subprocess, "Popen"), mock.patch.object(updater, "_mac_notify"):
+            updater._write_and_launch_swap_script("/Applications/Lite.app", "/tmp/Lite.app",
+                                                  Path(self.temp.name), "9.9.9")
+        script = (Path(self.temp.name) / "swap.sh").read_text(encoding="utf-8")
+        for token in ('kill -0 "$PID"', 'mv "$TARGET" "$TRASH"', 'mv "$TRASH" "$TARGET"',
+                      'ditto "$NEW" "$TARGET"', 'xattr -dr', 'codesign --sign -', '/usr/bin/open'):
+            self.assertIn(token, script)
+
+    def test_mac_only_accepts_zip_payload(self):
+        self.assertEqual(self._probe(self.release(), mac=True)["status"], "failed")
+
+    def test_startup_async_prefetches_without_installing(self):
+        finished = threading.Event()
+        def progress(stage, **_):
+            if stage == "downloaded":
+                finished.set()
+        with mock.patch.object(sys, "frozen", True, create=True), \
+             mock.patch.object(updater, "_check_remote", return_value=self.release()), \
+             mock.patch.object(updater.urllib.request, "urlopen", return_value=Response(self.payload, length=len(self.payload))), \
+             mock.patch.object(updater, "_launch_updater") as install, \
+             mock.patch.object(updater, "_notify_ui_progress", side_effect=progress):
+            updater.check_for_update_async()
+            self.assertTrue(finished.wait(3))
+        self.assertEqual(updater.get_update_status()["stage"], "downloaded")
+        install.assert_not_called()
+
+    def test_source_mode_async_check_does_not_contact_network(self):
+        with mock.patch.object(sys, "frozen", False, create=True), mock.patch.object(updater, "_check_remote") as remote:
+            updater.check_for_update_async()
+            updater.check_for_update_mac_async()
+        remote.assert_not_called()
 
 
 if __name__ == "__main__":

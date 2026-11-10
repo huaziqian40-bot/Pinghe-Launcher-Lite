@@ -166,13 +166,10 @@ class Api:
     # 无边框窗口（用户 2026-09-21 要求：窗口控件要是软件自己的一部分）：
     # 界面自己画那三个按钮，动作全落到下面这几个方法上。
     def update_choice(self, choice: str, version: str = "") -> dict:
-        """用户在更新卡片上的选择。
+        """卡片确认只控制**安装**，下载在发现新版本后已于后台开始。
 
-        · 'cancel' 这次先不选，继续用软件（下次启动还会提示）
-        · 'skip'   跳过本版本：记住版本号，该版本不再提示（**更高的版本仍会提示**）
-        · 'update' 这时才真正下载并替换
-
-        **只有 'update' 会触发下载** —— 检查阶段只弹卡片，绝不自动更新。
+        取消只关闭界面、下载继续；跳过才撤销下载并删除临时缓存。安装前一定
+        核对前端看到的版本与后端已校验完成的版本相同，免得旧卡片装错包。
         """
         try:
             from .. import updater
@@ -180,35 +177,40 @@ class Api:
             choice = (choice or "").strip()
             if choice == "cancel":
                 return {"ok": True, "action": "cancel"}
+            state = updater.get_update_status()
+            v = str(version or "").strip()
+            if not v or v != state.get("version"):
+                return {"ok": False, "error": "更新版本已变化，请重新检查更新。"}
             if choice == "skip":
-                v = str(version or "").strip()
-                if v:
-                    self.cfg.skipped_update_version = v
-                    self.cfg.save()
+                updater.skip_update(v)
+                self.cfg.skipped_update_version = v
+                self.cfg.save()
                 return {"ok": True, "action": "skip", "version": v}
             if choice != "update":
-                return {"ok": False, "error": f"未知的选择: {choice}"}
+                return {"ok": False, "error": "未知的更新操作。"}
+            if state.get("stage") != "downloaded":
+                return {"ok": False, "error": "更新包尚未下载并校验完成，请稍候。"}
 
             def _run() -> None:
-                applied = (
-                    updater.apply_update_mac()
-                    if sys.platform == "darwin"
-                    else updater.apply_update()
-                )
+                applied = (updater.apply_update_mac() if sys.platform == "darwin"
+                           else updater.apply_update())
                 if applied:
-                    # 替换脚本已接管：稍等它写盘，然后退出当前实例
+                    # 脚本只承诺已接管，真正安装成功由下次启动的版本号确认。
                     import time as _t
 
                     _t.sleep(1.5)
-                    try:
-                        os._exit(0)
-                    except Exception:  # noqa: BLE001
-                        pass
+                    os._exit(0)
 
             threading.Thread(target=_run, name="update-apply", daemon=True).start()
             return {"ok": True, "action": "update"}
-        except Exception as exc:  # noqa: BLE001
-            return {"ok": False, "error": str(exc)}
+        except Exception:  # noqa: BLE001  私有路径/URL 不应直接回显到前端
+            return {"ok": False, "error": "更新操作失败，请稍后重试。"}
+
+    def update_status(self) -> dict:
+        """窗口晚于后台下载出现时补拉状态，防进度回调先到却丢了卡片。"""
+        from .. import updater
+
+        return {"ok": True, "data": updater.get_update_status()}
 
     def app_version(self) -> dict:
         """「关于软件」里的当前版本：读 updater.current_version()（单一事实源，不硬编码）。"""
@@ -830,15 +832,25 @@ class Api:
                     return {"ok": True,
                             "detail": "、".join(parts) if parts else "等下次同步"}
                 if sid == "timetable":
-                    doc = fs.load_json(fs.root() / "Timetable", None) or {}
-                    n = len(doc.get("lessons") or []) if isinstance(doc, dict) else 0
-                    week = str(doc.get("week") or "") if isinstance(doc, dict) else ""
+                    # 共享课表的顶层字段是 ``days``（DATA-FORMAT.md §8 / shareddata.py），
+                    # 不是 ``lessons``/``week``。以前按后者读 → 这一步永远显示"等下次同步"，
+                    # 明明课表早就同步下来了，用户会以为同步坏了。
+                    doc = fs.load_json(fs.root() / "Timetable", None)
+                    days = doc.get("days") if isinstance(doc, dict) else None
+                    days = days if isinstance(days, dict) else {}
+                    n = sum(len(v) for v in days.values() if isinstance(v, list))
                     return {"ok": True,
-                            "detail": f"{week} · {n} 节".strip(" ·") if n else "等下次同步"}
+                            "detail": f"{len(days)} 天 · {n} 节" if n else "等下次同步"}
                 if sid == "schedule":
+                    # 日程文件是 ``{"events": [...], "lastId": ...}``（DATA-FORMAT.md §3），
+                    # 不是 ``entries``；读错字段会让这一步永远显示"暂无日程"。
                     doc = fs.load_json(fs.root() / fs.SCHEDULE, None)
-                    n = len(doc) if isinstance(doc, list) else (
-                        len(doc.get("entries") or []) if isinstance(doc, dict) else 0)
+                    if isinstance(doc, dict):
+                        n = len(doc.get("events") or [])
+                    elif isinstance(doc, list):   # 极老的裸数组格式
+                        n = len(doc)
+                    else:
+                        n = 0
                     return {"ok": True, "detail": f"{n} 条" if n else "暂无日程"}
                 if sid == "profile":
                     doc = fs.load_json(fs.root() / "Profile", None) or {}

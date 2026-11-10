@@ -541,7 +541,7 @@
           <span id="about-current-version" class="about-value">正在读取…</span>
           <button class="ghost" id="about-check-update">检查更新</button>
         </div>
-        <div id="about-update-result" class="about-result muted small"></div>
+        <div id="about-update-result" class="about-result muted small" aria-live="polite"></div>
         <div class="about-author">
           <div class="card-title" style="border:none;padding:0;margin-top:14px">作者信息</div>
           <p>上海民办平和学校 · 维修社 · 用代码装点校园生活</p>
@@ -908,16 +908,13 @@
   </div>
 </div>
 
-<!-- ================= 应用内更新卡片 =================
-     卡片确认制：启动时后台**只检查**，发现新版本就弹这张卡，
-     绝不自动下载或安装。三个按钮的含义：
-       · 取消        这次先不选，继续用软件（下次启动还会提示）
-       · 跳过本版本  记住版本号，这个版本以后不再提示（更高的版本仍会提示）
-       · 更新        这时才下载并替换（下载进度显示在 #update-hint 上） -->
-<div id="update-modal" class="overlay hidden">
+<!-- 发现新版本后先在后台下载并校验；只在用户明确点「重启并安装」后安装。
+     下载未完成显示真实进度，未知总大小用不确定进度，不编造百分比。 -->
+<div id="update-modal" class="overlay hidden" role="dialog" aria-modal="true"
+     aria-labelledby="update-heading" aria-describedby="update-hint" tabindex="-1">
   <div class="mail-card tt-card update-card">
     <div class="wizard-head">
-      <b>🎉 发现新版本</b>
+      <b id="update-heading">发现新版本</b>
     </div>
     <div class="update-version">
       v<b id="update-version"></b>
@@ -925,11 +922,15 @@
     </div>
     <div class="update-notes-label">本次更新内容</div>
     <div class="update-notes" id="update-notes"></div>
-    <div class="update-hint muted small" id="update-hint"></div>
+    <div class="update-progress hidden" id="update-progress-row">
+      <progress id="update-progress" max="100" aria-label="更新下载进度"></progress>
+      <span id="update-progress-label" aria-live="polite"></span>
+    </div>
+    <div class="update-hint muted small" id="update-hint" aria-live="polite"></div>
     <div class="wizard-foot update-actions">
-      <button class="ghost" id="update-cancel">取消</button>
-      <button class="ghost" id="update-skip">跳过本版本</button>
-      <button class="primary" id="update-now">更新</button>
+      <button type="button" class="ghost" id="update-cancel">取消</button>
+      <button type="button" class="ghost" id="update-skip">跳过本版本</button>
+      <button type="button" class="primary" id="update-now" disabled>下载中…</button>
     </div>
   </div>
 </div>

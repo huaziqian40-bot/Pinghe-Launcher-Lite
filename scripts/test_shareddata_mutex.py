@@ -118,6 +118,27 @@ def main() -> int:
             for key in ("startedAt", "updatedAt", "started_at", "updated_at"):
                 check(isinstance(raw.get(key), str) and raw[key],
                       f"标记里要有非空的 {key}（两种拼法都写，新旧版本互相才读得到）")
+
+            # 11. 新 NSIS 与 PHL 默认同目录时，已有 PHL 数据必须阻止旧 Lite 目录
+            #     被自动并进来；否则过期账号/日程会污染正在使用的共用根。
+            from hellopinghe import paths  # noqa: E402
+
+            install = data / "Programs" / "PH Launcher"
+            shared_root = install / "data"
+            shared_root.mkdir(parents=True)
+            (install / "PH Launcher.exe").write_bytes(b"")
+            (shared_root / "settings.yaml").write_text("version: 1\n", encoding="utf-8")
+            check(paths.phl_shared_data_present(shared_root) is True,
+                  "同目录且已有 settings.yaml 时应认作 PHL 的既有共用数据")
+            (shared_root / "settings.yaml").unlink()
+            (shared_root / "phl" / "profile").mkdir(parents=True)
+            check(paths.phl_shared_data_present(shared_root) is True,
+                  "PHL profile 存在时也应阻止自动导入旧 Lite 数据")
+            isolated = data / "standalone" / "data"
+            isolated.mkdir(parents=True)
+            (isolated / "settings.yaml").write_text("version: 1\n", encoding="utf-8")
+            check(paths.phl_shared_data_present(isolated) is False,
+                  "没有 PHL 安装或 phl 私有目录时不能误判成 PHL 共用根")
     finally:
         for child in children:
             try:

@@ -5,7 +5,8 @@
 
 真实数据验证: 读共用 data/School 的 edupage 段(另一个程序同步回来的全班课卡),
 用 EdupageService.card_selected 过滤, 打印每天剩余节数。
-默认数据目录 D:\\phl-dev\\joint-testenv\\data(可用参数覆盖); 只读, 不写任何文件。
+默认数据目录依次尝试 D:\\phl-dev\\joint-testenv\\data、D:\\phl-test\\data
+(可用参数覆盖); 只读, 不写任何文件。两处都没有可用样本时明确跳过, 不冒充回归失败。
 """
 from __future__ import annotations
 
@@ -18,6 +19,8 @@ sys.path.insert(0, str(ROOT))
 from hellopinghe import paths, sharedschool  # noqa: E402
 from hellopinghe.app.services import EdupageService  # noqa: E402
 
+DEFAULT_DIRS = (Path(r"D:\phl-dev\joint-testenv\data"), Path(r"D:\phl-test\data"))
+
 
 class _Stub:
     """只提供 card_selected 需要的东西(选课列表), 不碰任何服务。"""
@@ -27,7 +30,12 @@ class _Stub:
 
 
 def main() -> int:
-    data_dir = Path(sys.argv[1]) if len(sys.argv) > 1 else Path(r"D:\phl-dev\joint-testenv\data")
+    if len(sys.argv) > 1:
+        data_dir = Path(sys.argv[1])
+    else:
+        data_dir = next((p for p in DEFAULT_DIRS
+                         if (p / "School").exists() and (p / "settings.yaml").exists()),
+                        DEFAULT_DIRS[0])
     doc = sharedschool.read(data_dir)
     section = doc.get("edupage") or {}
     lessons = section.get("lessons") or []
@@ -36,8 +44,10 @@ def main() -> int:
 
     settings = data_dir / "settings.yaml"
     if not settings.exists():
-        print(f"没有 {settings}, 无法读到共用选课")
-        return 1
+        print(f"没有 {settings}：本机没有可用的共享数据样本，跳过（不是回归失败）。")
+        print("  可显式传一个含 School/ 与 settings.yaml 的数据目录："
+              "python scripts/test_personal_filter.py <data_dir>")
+        return 0
     import yaml
 
     selected = (yaml.safe_load(settings.read_text(encoding="utf-8")) or {}).get("lessons") or []

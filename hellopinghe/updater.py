@@ -1,508 +1,555 @@
 # -*- coding: utf-8 -*-
-"""Pinghe Launcher Lite 应用内更新（Windows 单文件 exe）—— **卡片确认制**。
+"""Lite 更新器：静默发现并缓存已校验的新版本，只有用户确认才启动安装。
 
-进入软件时后台线程**只检查**（不阻塞主界面，也不下载任何东西）：
-
-1. GET https://phix.ing/api/v1/update/check?product=phl-lite&platform=win
-2. 有新版本 → 通知界面弹卡片：版本号 + 本次更新内容 +
-   三个按钮「取消 / 跳过本版本 / 更新」
-3. 用户点「更新」之后才：下载新 exe 到数据目录的 .updates/ 临时位置 →
-   SHA256 校验（与清单比对，不匹配丢弃）→
-   写 updater.bat（等本进程退出 → 覆盖 exe → 重启 → 删自身）并启动它
-
-**点「更新」之前不会有任何下载或替换**（见 apply_update）。
-「取消」不记任何东西（下次启动还会提示）；「跳过本版本」记住该版本号，
-之后这个版本静默，但**更高的版本仍会提示**。
-
-安装版（%LOCALAPPDATA%\\Programs\\PingheLauncherLite\\PingheLauncherLite.exe）
-与便携版（解压目录）都适用 —— 都通过 sys.executable 定位要替换的 exe。
-用户数据不落在 exe 目录（在 data 目录），替换 exe 不影响任何数据。
-
-macOS 未签名：用户点「更新」后由软件自己下载 zip 并替换 .app
-（见 check_for_update_mac_async / apply_update_mac），用户不需要自己去官网下载，
-只需在新版本首次启动时右键 →「打开」一次。
+检查端点按平台区分。发现合法新版本后先通知界面，再在后台单飞下载；取消只关闭
+卡片，跳过才撤销下载并清理缓存。检查和下载阶段都绝不会启动安装器。
 """
 from __future__ import annotations
 
 import hashlib
+import json
+import logging
 import os
+import re
+import shutil
 import subprocess
 import sys
-import tempfile
 import threading
 import time
 import urllib.parse
 import urllib.request
 from pathlib import Path
 
-CHECK_URL = "https://phix.ing/api/v1/update/check?product=phl-lite&platform=win"
+# Windows 使用独立的 NSIS 渠道。旧版仍查 platform=win 并拿裸 exe，因而可安全
+# 升到 1.2.8；新版查 win-nsis，未来永远只执行安装器，避免旧 updater 把 Setup
+# 复制覆盖成应用 exe。发布端必须同时保留 win(兼容裸 exe)与 win-nsis(NSIS)。
+CHECK_URL = "https://phix.ing/api/v1/update/check?product=phl-lite&platform={platform}"
 DOWNLOAD_BASE = "https://phix.ing/media/downloads"
 MAC_URL = "https://phix.ing/download/"
+MAC_DOWNLOAD_URL = MAC_URL
+APP_VERSION = "1.2.8"  # release automation / lead owns version bumps
+MAX_DOWNLOAD_BYTES = 1024 * 1024 * 1024
+CHECK_ERROR = "检查失败，请稍后再试。"
+DOWNLOAD_ERROR = "下载或校验失败，请稍后重试。"
+INSTALL_ERROR = "安装准备失败，请稍后重试。"
+_log = logging.getLogger(__name__)
+_lock = threading.RLock()
+_state = {"stage": "idle", "version": "", "current": APP_VERSION, "notes": "", "percent": None}
+_entry: dict | None = None
+_worker: threading.Thread | None = None
+_worker_generation = -1
+_retry_queued = False
+_generation = 0
+_skipped: set[str] = set()
 
-#: 打包时的版本号（发布时由构建/发布脚本更新；源码运行取 0.0.0 表示"开发版，不更新"）
-APP_VERSION = "1.2.7"
 
-#: 替换用临时目录（数据目录下，与 exe 可能不同盘也 OK —— 但替换仍需同盘，见 _launch_updater）
 def _update_dir() -> Path:
     from . import paths
-
-    d = paths.data_dir() / ".updates"
-    d.mkdir(parents=True, exist_ok=True)
-    return d
+    directory = paths.data_dir() / ".updates"
+    directory.mkdir(parents=True, exist_ok=True)
+    return directory
 
 
 def current_version() -> str:
     return APP_VERSION
 
 
+def get_update_status() -> dict:
+    with _lock:
+        return {**_state, "current": APP_VERSION}
+
+
 def _sha256(path: Path) -> str:
-    h = hashlib.sha256()
-    with open(path, "rb") as f:
-        for chunk in iter(lambda: f.read(1 << 20), b""):
-            h.update(chunk)
-    return h.hexdigest()
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1 << 20), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _version(value: object) -> tuple[int, ...] | None:
+    if not isinstance(value, str) or not re.fullmatch(r"\d+\.\d+\.\d+(?:\.\d+)?", value):
+        return None
+    return tuple(int(part) for part in value.split("."))
+
+
+def _check_url() -> str:
+    return CHECK_URL.format(platform="mac" if sys.platform == "darwin" else "win-nsis")
 
 
 def _check_remote(timeout: float = 10.0):
-    req = urllib.request.Request(CHECK_URL, headers={"User-Agent": f"PHL-Lite-{APP_VERSION}"})
+    req = urllib.request.Request(_check_url(), headers={"User-Agent": f"PHL-Lite-{APP_VERSION}"})
     with urllib.request.urlopen(req, timeout=timeout) as resp:
-        data = resp.read()
-    import json
-
+        data = resp.read(1 << 20)
+        if resp.read(1):
+            raise ValueError("oversized update manifest")
     return json.loads(data.decode("utf-8"))
 
 
-def _launch_updater(new_exe: Path, target_exe: Path) -> None:
-    """写一个 bat：等本进程退出 → 覆盖目标 exe → 重启 → 删自身。"""
-    bat = _update_dir() / "phl_updater.bat"
-    with open(bat, "w", encoding="utf-8", newline="\r\n") as f:
-        f.write(
-            "@echo off\r\n"
-            "rem PH Launcher Lite auto-updater (generated)\r\n"
-            f'cd /d "%~dp0"\r\n'
-            f':wait\r\n'
-            f'tasklist /FI "IMAGENAME eq {os.path.basename(target_exe)}" 2>nul | find /I "{os.path.basename(target_exe)}" >nul\r\n'
-            f'if not errorlevel 1 (timeout /t 1 /nobreak >nul & goto wait)\r\n'
-            f'copy /Y "{new_exe}" "{target_exe}" >nul\r\n'
-            f'del /F /Q "{new_exe}" >nul 2>nul\r\n'
-            f'start "" "{target_exe}"\r\n'
-            f'del /F /Q "%~f0" >nul 2>nul\r\n'
-        )
-    # 命令行里带引号路径；DETACHED 让 bat 脱离本进程独立存活
-    subprocess.Popen(
-        ["cmd.exe", "/c", str(bat)],
-        creationflags=(subprocess.CREATE_NO_WINDOW | subprocess.DETACHED_PROCESS),
-        close_fds=True,
-    )
+def _safe_url(url: object, mac: bool, version: str | None = None) -> str:
+    if not isinstance(url, str):
+        raise ValueError("missing download URL")
+    parsed = urllib.parse.urlsplit(url)
+    # 初始 URL 和重定向后都必须是 HTTPS；绝不信任 URL 提供的任意文件名。
+    if parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password:
+        raise ValueError("unsafe download URL")
+    name = urllib.parse.unquote(parsed.path.rsplit("/", 1)[-1])
+    if mac:
+        if not name.lower().endswith(".zip"):
+            raise ValueError("mac update must be a zip")
+    elif not re.search(r"(?:^|[-_. ])setup\.exe$", name, re.IGNORECASE):
+        raise ValueError("Windows update must be an NSIS Setup.exe")
+    elif version is not None and name.lower() != f"PingheLauncherLite-{version}-Setup.exe".lower():
+        raise ValueError("installer filename does not match release version")
+    return url
 
 
-def _apply_update(entry) -> bool:
-    """下载 → 校验 → 替换。返回是否已成功接管（True 时调用方应立即退出）。"""
-    from . import paths
+def _parse_entry(data: object, mac: bool) -> dict:
+    if not isinstance(data, dict) or data.get("ok") is not True:
+        raise ValueError("invalid update manifest")
+    latest = data.get("latest_version")
+    if _version(latest) is None:
+        raise ValueError("missing or invalid latest_version")
+    entry = {"version": latest, "notes": str(data.get("release_notes") or "")[:400]}
+    if _version(latest) <= _version(APP_VERSION):
+        return entry
+    entry["url"] = _safe_url(data.get("url"), mac, latest)
+    sha = data.get("sha256")
+    if not isinstance(sha, str) or not re.fullmatch(r"[0-9a-fA-F]{64}", sha):
+        raise ValueError("invalid SHA256")
+    entry["sha256"] = sha.lower()
+    size = data.get("size")
+    if size is not None:
+        if isinstance(size, bool) or not isinstance(size, int) or not 0 < size <= MAX_DOWNLOAD_BYTES:
+            raise ValueError("invalid manifest file size")
+        entry["size"] = size
+    return entry
 
-    # 便携版/安装版都直接替换 sys.executable；源码运行时（非冻结）不自动更新
-    if not getattr(sys, "frozen", False):
-        return False
-    target = Path(sys.executable).resolve()
-    if not target.exists():
-        return False
 
-    url = entry.get("url") or ""
-    sha = str(entry.get("sha256") or "").lower()
-    if not url or not sha:
-        return False
-
-    # 下载到数据目录的 .updates/（保证与后续替换逻辑简单）
-    tmp = _update_dir() / "phl_lite_new.exe"
+def _skipped_version(config) -> str:
     try:
-        req = urllib.request.Request(url, headers={"User-Agent": f"PHL-Lite-{APP_VERSION}"})
-        with urllib.request.urlopen(req, timeout=120) as resp, open(tmp, "wb") as out:
-            while True:
-                chunk = resp.read(1 << 20)
-                if not chunk:
-                    break
-                out.write(chunk)
-        if _sha256(tmp) != sha:
-            tmp.unlink(missing_ok=True)
-            return False
-    except Exception:  # noqa: BLE001  网络/下载失败静默跳过，下次启动再试
-        tmp.unlink(missing_ok=True)
-        return False
+        return str(getattr(config, "skipped_update_version", "") or "")
+    except Exception:
+        return ""
 
-    # 替换 exe 必须同盘（copy 在同一盘才能工作）：目标 exe 与临时目录分属两盘时，
-    # 把临时文件挪到目标的同盘临时目录。
-    if tmp.drive.lower() != target.drive.lower():
-        same_drive_tmp = Path(tempfile.gettempdir()) / "phl_lite_new.exe"
+
+def _cache_paths(mac: bool) -> tuple[Path, Path]:
+    root = _update_dir()
+    name = "update.zip" if mac else "PingheLauncherLite-Setup.exe"
+    return root / name, root / (name + ".json")
+
+
+def _discard_cache(mac: bool) -> None:
+    package, meta = _cache_paths(mac)
+    for path in (package, meta, *package.parent.glob(package.name + ".part.*")):
         try:
-            same_drive_tmp.parent.mkdir(parents=True, exist_ok=True)
-            with open(tmp, "rb") as src_f, open(same_drive_tmp, "wb") as dst_f:
-                while True:
-                    chunk = src_f.read(1 << 20)
-                    if not chunk:
-                        break
-                    dst_f.write(chunk)
-            tmp.unlink(missing_ok=True)
-            tmp = same_drive_tmp
+            path.unlink(missing_ok=True)
         except OSError:
-            tmp.unlink(missing_ok=True)
-            return False
+            # Windows 不能删除仍被读写线程占用的文件；对应代次的线程退出时再清理。
+            _log.debug("Updater cache path is currently busy")
 
-    _launch_updater(tmp, target)
+
+def _write_json_atomic(path: Path, data: dict) -> None:
+    tmp = path.with_name(path.name + ".part")
+    try:
+        with tmp.open("w", encoding="utf-8") as stream:
+            json.dump(data, stream)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(tmp, path)
+    finally:
+        tmp.unlink(missing_ok=True)
+
+
+def _cached(entry: dict, mac: bool) -> Path | None:
+    package, metadata = _cache_paths(mac)
+    try:
+        if metadata.is_symlink() or package.is_symlink():
+            return None
+        with metadata.open("r", encoding="utf-8") as stream:
+            saved = json.load(stream)
+        if not all(saved.get(key) == entry.get(key) for key in ("version", "url", "sha256", "size")):
+            return None
+        if package.is_symlink() or metadata.is_symlink() or not package.is_file() or not 0 < package.stat().st_size <= MAX_DOWNLOAD_BYTES:
+            return None
+        if entry.get("size") is not None and package.stat().st_size != entry["size"]:
+            return None
+        if _sha256(package) != entry["sha256"]:
+            return None
+        return package
+    except (OSError, ValueError, TypeError, KeyError):
+        return None
+
+
+def _set_state(stage: str, generation: int | None = None, **changes) -> bool:
+    with _lock:
+        if generation is not None and generation != _generation:
+            return False
+        _state.update(stage=stage, **changes)
+        snapshot = {**_state, "current": APP_VERSION}
+    # available 卡片由 _notify_ui 单独推一次，其余阶段走统一的进度回调。
+    if stage != "available":
+        _notify_ui_progress(stage, **{k: v for k, v in snapshot.items() if k != "stage"})
     return True
 
 
 def _notify_ui(info: dict, attempts: int = 60, interval: float = 0.5) -> bool:
-    """把"发现新版本"推给前端，由它弹卡片让用户选。
-
-    **只通知，不下载**：用户在卡片上点「更新」之后才会走下载/替换（见 apply_update）。
-
-    为什么要重试：更新检查线程在 `webview.start()` **之前**就起来了，网速快的时候
-    几百毫秒就拿到结果 —— 那时窗口的 GUI 还没建起来，`evaluate_js` 会抛异常
-    （被下面吞掉），卡片就永远不弹了。所以让 JS 显式返回 true 表示"确实送到了"，
-    没送到就每 0.5 秒重试一次（最多 30 秒，跑在后台线程上，不挡启动）。
-    """
-    import json
-
     payload = json.dumps(info, ensure_ascii=False)
     script = ("(function(){ return !!(window.__updateAvailable"
               f" && window.__updateAvailable({payload})); }})()")
-    for _ in range(attempts):
+    for attempt in range(attempts):
+        # 首个窗口仍在加载时用户也可能已跳过该版本，重试推送前先检查。
+        if info.get("version") in _skipped:
+            return False
         try:
             import webview
-
             if webview.windows and webview.windows[0].evaluate_js(script):
                 return True
-        except Exception:  # noqa: BLE001  窗口还没起来：等下一轮
+        except Exception:
             pass
-        time.sleep(interval)
+        if attempt + 1 < attempts:
+            time.sleep(interval)
     return False
 
 
-def check_for_update_async(config=None) -> None:
-    """后台线程：**只检查**是否有新版本；有就通知界面弹卡片。
-
-    绝不自动下载或替换 —— 那是用户点「更新」之后的事（apply_update）。
-    config 用来读「跳过本版本」：同一个版本被跳过过就不再提示。
-    """
-
-    def _run() -> None:
-        try:
-            if not getattr(sys, "frozen", False):
-                return
-            data = _check_remote()
-            if not data.get("ok"):
-                return
-            latest = str(data.get("latest_version") or "")
-            if not latest or latest == APP_VERSION:
-                return
-            skipped = ""
-            try:
-                skipped = str(getattr(config, "skipped_update_version", "") or "")
-            except Exception:  # noqa: BLE001
-                skipped = ""
-            if skipped and skipped == latest:
-                return  # 用户点过「跳过本版本」→ 静默
-            _notify_ui({
-                "version": latest,
-                "current": APP_VERSION,
-                "notes": str(data.get("release_notes") or ""),
-            })
-        except Exception:  # noqa: BLE001  任何失败都不影响启动
-            pass
-
-    threading.Thread(target=_run, name="update-check", daemon=True).start()
-
-
-def check_for_update_manual(config=None) -> dict:
-    """手动「检查更新」（设置 →「关于软件」→「检查更新」按钮）。
-
-    与启动时的自动检查**共用同一套检查逻辑**（同一个 _check_remote / 同一个
-    「跳过本版本」判定），但**必定给界面一个结果**，三种情况分明：
-
-      · {"ok": True,  "status": "up-to-date", "current": ...}         已是最新版本
-      · {"ok": True,  "status": "new", "version": ..., ...}           发现新版本
-      · {"ok": False, "status": "failed", "error": "检查失败，请稍后再试"}  离线/服务器挂了
-
-    关键不变式：**检查失败绝不能当成「已是最新版本」** —— 两者是完全不同的状态。
-    调用方（bridge.update_check）拿回结果后，由界面负责弹卡片（走现有的
-    showUpdateCardAfterSplash），这里不重复 _notify_ui，避免双卡/阻塞 js_api 线程。
-    """
-    try:
-        data = _check_remote()
-    except Exception:  # noqa: BLE001  任何网络/解析失败都是「检查失败」，不是「已是最新」
-        return {"ok": False, "status": "failed", "error": "检查失败，请稍后再试"}
-    if not data or not data.get("ok"):
-        return {"ok": False, "status": "failed", "error": "检查失败，请稍后再试"}
-    latest = str(data.get("latest_version") or "")
-    if not latest or latest == APP_VERSION:
-        return {"ok": True, "status": "up-to-date", "current": APP_VERSION}
-    # 用户点过「跳过本版本」：该版本照旧静默，不重复弹、也不清掉跳过记录。
-    skipped = ""
-    try:
-        skipped = str(getattr(config, "skipped_update_version", "") or "")
-    except Exception:  # noqa: BLE001
-        skipped = ""
-    if skipped and skipped == latest:
-        return {"ok": True, "status": "up-to-date", "current": APP_VERSION}
-    return {
-        "ok": True,
-        "status": "new",
-        "version": latest,
-        "current": APP_VERSION,
-        "notes": str(data.get("release_notes") or ""),
-    }
-
-
-def apply_update() -> bool:
-    """**用户点过「更新」之后**才调用：重新取一次载荷信息 → 下载 → 校验 → 替换。
-
-    成功返回 True（调用方应尽快退出，把舞台交给替换脚本）。
-    """
-    try:
-        data = _check_remote()
-        if not data or not data.get("ok"):
-            _notify_ui_progress("error", message="拿不到更新信息，请稍后再试。")
-            return False
-        entry = {"url": data.get("url"), "sha256": data.get("sha256")}
-        _notify_ui_progress("downloading", percent=0)
-        if not _apply_update(entry):
-            _notify_ui_progress("error", message="下载或校验失败，请稍后再试。")
-            return False
-        _notify_ui_progress("applying", message="正在替换新版本…")
-        return True
-    except Exception as exc:  # noqa: BLE001
-        _notify_ui_progress("error", message=str(exc))
-        return False
-
-
 def _notify_ui_progress(stage: str, **extra) -> None:
-    """把更新进度推给前端卡片显示。
-
-    进度推送发生在用户点过「更新」之后，窗口肯定已经在了；仍然短暂重试几次，
-    避免恰好卡在窗口重建的瞬间。
-    """
-    import json
-
     payload = json.dumps({"stage": stage, **extra}, ensure_ascii=False)
     script = ("(function(){ return !!(window.__updateProgress"
               f" && window.__updateProgress({payload})); }})()")
-    for _ in range(10):
-        try:
-            import webview
-
-            if webview.windows and webview.windows[0].evaluate_js(script):
-                return
-        except Exception:  # noqa: BLE001
-            pass
-        time.sleep(0.3)
-
-
-# ---- macOS：自动下载 zip → 替换 .app → 清 quarantine → ad-hoc 重签 → 重启 ----
-#
-# 未签名 .app 也能被自己替换：替换后清掉 com.apple.quarantine 再做 ad-hoc 重签，
-# 就不会显示"应用已损坏"；用户只需在新版本**首次启动时右键 →「打开」**一次
-# （Gatekeeper 对未签名应用的固有要求，无法绕过）。
-# 自动替换准备失败时降级：把新版放进「下载」并用 Finder 显示，用户拖一下即可。
-
-MAC_DOWNLOAD_URL = "https://phix.ing/download/"
-
-
-def _mac_notify(title: str, body: str) -> None:
-    """macOS 用 osascript 发通知（未签名环境最省事，无需权限）。"""
     try:
-        import shlex
-
-        script = f'display notification {shlex.quote(body)} with title {shlex.quote(title)}'
-        subprocess.Popen(["osascript", "-e", script],
-                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    except Exception:  # noqa: BLE001
+        import webview
+        if webview.windows:
+            webview.windows[0].evaluate_js(script)
+    except Exception:
         pass
 
 
+def _download(entry: dict, mac: bool, generation: int) -> None:
+    package, metadata = _cache_paths(mac)
+    part = package.with_name(package.name + f".part.{generation}")
+    try:
+        if _cached(entry, mac):
+            _set_state("downloaded", generation, percent=100, size=package.stat().st_size, message="更新包已下载，等待安装。")
+            return
+        with _lock:
+            if generation != _generation:
+                return
+            _discard_cache(mac)
+        _set_state("downloading", generation, percent=None, message="正在后台下载更新…")
+        req = urllib.request.Request(entry["url"], headers={"User-Agent": f"PHL-Lite-{APP_VERSION}"})
+        with urllib.request.urlopen(req, timeout=600) as response:
+            final_url = response.geturl() if hasattr(response, "geturl") else entry["url"]
+            # 重定向后的文件名也必须对应同一版本，不能只在首个 URL 上检查。
+            _safe_url(final_url, mac, entry["version"])
+            status = getattr(response, "status", 200)
+            if status != 200:
+                raise ValueError("download returned non-200 status")
+            raw_length = response.headers.get("Content-Length") if hasattr(response, "headers") else None
+            total = int(raw_length) if raw_length and re.fullmatch(r"[0-9]+", raw_length) else None
+            # 不可信的 Content-Length 不能拿来画百分比；缺失或分块传输也不能绕过大小上限。
+            if total is not None and (total <= 0 or total > MAX_DOWNLOAD_BYTES or
+                                      entry.get("size") is not None and total != entry["size"]):
+                raise ValueError("untrusted Content-Length")
+            count = 0
+            digest = hashlib.sha256()
+            last_percent = -1
+            with part.open("wb") as stream:
+                while True:
+                    with _lock:
+                        if generation != _generation:
+                            return
+                    chunk = response.read(1 << 20)
+                    if not chunk:
+                        break
+                    count += len(chunk)
+                    if count > MAX_DOWNLOAD_BYTES or total is not None and count > total or (entry.get("size") and count > entry["size"]):
+                        raise ValueError("download exceeds expected size")
+                    digest.update(chunk)
+                    stream.write(chunk)
+                    if total is not None:
+                        percent = min(99, int(count * 100 / total))
+                        if percent != last_percent:
+                            _set_state("downloading", generation, percent=percent, message="正在后台下载更新…")
+                            last_percent = percent
+                stream.flush()
+                os.fsync(stream.fileno())
+            if not count or total is not None and count != total or entry.get("size") is not None and count != entry["size"] or digest.hexdigest() != entry["sha256"]:
+                raise ValueError("download size/hash mismatch")
+            with _lock:
+                if generation != _generation:
+                    return
+                os.replace(part, package)
+                _write_json_atomic(metadata, {k: entry.get(k) for k in ("version", "url", "sha256", "size")})
+            _set_state("downloaded", generation, percent=100, size=count, message="更新包已下载，等待安装。")
+    except Exception as exc:
+        _log.warning("Update download/verification failed (%s)", type(exc).__name__)
+        with _lock:
+            if generation == _generation:
+                _discard_cache(mac)
+        _set_state("error", generation, percent=None, message=DOWNLOAD_ERROR)
+    finally:
+        # 代次专属临时文件不能误删另一个版本正在下载的文件。
+        try:
+            part.unlink(missing_ok=True)
+        except OSError:
+            _log.warning("Could not clean updater scratch file")
+
+
+def _start_download(entry: dict, mac: bool, generation: int) -> None:
+    global _worker, _worker_generation, _retry_queued
+    with _lock:
+        if generation != _generation or _state["stage"] == "downloaded":
+            return
+        if _worker and _worker.is_alive() and _worker_generation == generation:
+            if _state["stage"] == "error" and not _retry_queued:
+                _retry_queued = True
+                old = _worker
+                def retry_after_exit():
+                    global _retry_queued
+                    old.join()
+                    with _lock:
+                        _retry_queued = False
+                    _start_download(entry, mac, generation)
+                threading.Thread(target=retry_after_exit, name="update-retry", daemon=True).start()
+            return
+        _retry_queued = False
+        _worker_generation = generation
+        _worker = threading.Thread(target=_download, args=(entry, mac, generation), name="update-download", daemon=True)
+        _worker.start()
+
+
+def _probe(config, mac: bool, notify: bool) -> dict:
+    global _entry, _generation
+    try:
+        entry = _parse_entry(_check_remote(), mac)
+    except Exception as exc:
+        _log.warning("Update check failed (%s)", type(exc).__name__)
+        return {"ok": False, "status": "failed", "current": APP_VERSION, "error": CHECK_ERROR}
+    version = entry["version"]
+    if _version(version) <= _version(APP_VERSION):
+        return {"ok": True, "status": "up-to-date", "current": APP_VERSION}
+    if version in _skipped or version == _skipped_version(config):
+        return {"ok": True, "status": "skipped", "current": APP_VERSION, "version": version}
+    with _lock:
+        if _entry != entry:
+            _generation += 1
+            _entry = entry
+            _state.clear()
+            _state.update(stage="available", version=version, current=APP_VERSION,
+                          notes=entry["notes"], percent=None)
+            if entry.get("size") is not None:
+                _state["size"] = entry["size"]
+        generation = _generation
+        state = {**_state}
+    # 更新窗口可能尚未就绪，回调会重试至多 30 秒；先开下载线程才是真正的
+    # 「后台预下载」，不能让界面初始化时序拖住网络请求。
+    _start_download(entry, mac, generation)
+    if notify:
+        _notify_ui({"stage": "available", "version": version, "current": APP_VERSION,
+                    "notes": entry["notes"], "percent": state["percent"]})
+    state = get_update_status()
+    return {"ok": True, "status": "new", "current": APP_VERSION, "version": version,
+            "notes": entry["notes"], "stage": state["stage"], "percent": state["percent"]}
+
+
+def check_for_update_async(config=None) -> None:
+    if not getattr(sys, "frozen", False):
+        return
+    threading.Thread(target=lambda: _probe(config, False, True), name="update-check", daemon=True).start()
+
+
+def check_for_update_mac_async(config=None) -> None:
+    if not getattr(sys, "frozen", False):
+        return
+    threading.Thread(target=lambda: _probe(config, True, True), name="update-check-mac", daemon=True).start()
+
+
+def check_for_update_manual(config=None) -> dict:
+    with _lock:
+        entry = _entry
+        stage = _state["stage"]
+        generation = _generation
+    if entry and _version(entry["version"]) > _version(APP_VERSION) and stage != "idle":
+        version = entry["version"]
+        if version in _skipped or version == _skipped_version(config):
+            return {"ok": True, "status": "skipped", "current": APP_VERSION, "version": version}
+        if stage == "error":
+            _start_download(entry, sys.platform == "darwin", generation)
+        state = get_update_status()
+        return {"ok": True, "status": "new", "current": APP_VERSION, "version": version,
+                "notes": entry["notes"], "stage": state["stage"], "percent": state["percent"]}
+    return _probe(config, sys.platform == "darwin", False)
+
+
+def skip_update(version: str) -> None:
+    """撤销正在读的版本并清缓存；界面的「取消」绝不能调用它。"""
+    global _entry, _generation
+    if not version:
+        return
+    with _lock:
+        _skipped.add(str(version))
+        if _entry is None or _entry["version"] != str(version):
+            return
+        _generation += 1
+        _entry = None
+        _state.clear()
+        _state.update(stage="idle", version="", current=APP_VERSION, notes="", percent=None)
+        _discard_cache(sys.platform == "darwin")
+    _notify_ui_progress("idle", version="", current=APP_VERSION, notes="", percent=None)
+
+
+def _verified_pending(mac: bool) -> Path | None:
+    with _lock:
+        entry = _entry
+        if not entry or _state["stage"] != "downloaded" or _state["version"] != entry["version"] or entry["version"] in _skipped:
+            return None
+        package = _cached(entry, mac)
+    if package is None:
+        _set_state("error", message="更新包校验失败，请重新下载。", percent=None)
+    return package
+
+
+def _launch_updater(setup: Path, target_exe: Path) -> None:
+    """精确等待本 PID 退出，在原安装目录静默运行 NSIS，再尝试重启。
+
+    安装器拥有程序文件与注册项，绝不能裸复制覆盖被管理的 exe；安装失败时保留
+    已校验的安装包，并且不能提前向用户宣称成功。
+    """
+    target_dir = target_exe.parent.resolve()
+    bat = _update_dir() / "phl_updater.bat"
+    # cmd 引号里不能出现控制字符和命令元字符（&|<>%! 等），否则本地路径可被注入命令。
+    for value in (str(setup), str(target_exe), str(target_dir)):
+        if any(c in value for c in '\r\n"&|<>%!'):
+            raise ValueError("unsafe installer path")
+    body = ("@echo off\r\n"
+            "rem Pinghe Launcher Lite NSIS installer; user-initiated only\r\n"
+            f'set "PARENT_PID={os.getpid()}"\r\n'
+            ':wait\r\n'
+            'tasklist /FI "PID eq %PARENT_PID%" /NH 2>nul | findstr /R /C:"^[^ ]" | findstr /C:"%PARENT_PID%" >nul\r\n'
+            'if not errorlevel 1 (timeout /t 1 /nobreak >nul & goto wait)\r\n'
+            f'"{setup}" /S /D={target_dir}\r\n'
+            'if errorlevel 1 exit /b 1\r\n'
+            f'if not exist "{target_exe}" exit /b 1\r\n'
+            f'start "" "{target_exe}"\r\n'
+            'exit /b 0\r\n')
+    tmp = bat.with_suffix(".bat.part")
+    tmp.write_bytes(body.encode("utf-8"))
+    os.replace(tmp, bat)
+    subprocess.Popen(["cmd.exe", "/c", str(bat)],
+                     creationflags=(getattr(subprocess, "CREATE_NO_WINDOW", 0) |
+                                    getattr(subprocess, "DETACHED_PROCESS", 0)), close_fds=True)
+
+
+def apply_update() -> bool:
+    """只有用户同意才启动「已经下载并通过重新校验」的 NSIS 安装器。"""
+    if not getattr(sys, "frozen", False):
+        return False
+    package = _verified_pending(False)
+    if package is None:
+        return False  # still downloading or corrupt: never initiate another download here
+    target = Path(sys.executable).resolve()
+    if not target.is_file():
+        return False
+    try:
+        _launch_updater(package, target)
+        _set_state("installing", message="正在退出并准备安装…")
+        return True
+    except Exception as exc:
+        _log.warning("Could not launch Windows installer (%s)", type(exc).__name__)
+        _set_state("error", message=INSTALL_ERROR)
+        return False
+
+
 def _current_app_bundle() -> str:
-    """当前 .app 路径（从 sys.executable 上溯找 .app）。非 .app 运行返回空串。"""
-    p = Path(sys.executable).resolve()
+    path = Path(sys.executable).resolve()
     for _ in range(5):
-        if p.name.endswith(".app"):
-            return str(p)
-        if p.parent == p:
+        if path.name.endswith(".app"):
+            return str(path)
+        if path.parent == path:
             break
-        p = p.parent
+        path = path.parent
     return ""
 
 
 def _find_app_bundle(root: Path) -> str:
-    """在解压目录里找 .app（zip 顶层可能直接是 .app，也可能包一层目录）。"""
-    for cur, dirs, _files in os.walk(root):
-        for d in dirs:
-            if d.endswith(".app"):
-                return str(Path(cur) / d)
+    for current, dirs, _ in os.walk(root):
+        for name in dirs:
+            if name.endswith(".app"):
+                return str(Path(current) / name)
     return ""
 
 
-def _download_file(url: str, dest: Path, timeout: float = 600.0) -> None:
-    req = urllib.request.Request(url, headers={"User-Agent": f"PHL-Lite-{APP_VERSION}"})
-    with urllib.request.urlopen(req, timeout=timeout) as resp, open(dest, "wb") as out:
-        while True:
-            chunk = resp.read(1 << 20)
-            if not chunk:
-                break
-            out.write(chunk)
-
-
-def _stage_mac_update(entry, latest: str) -> bool:
-    """下载 zip → 校验 → 解压 → 写替换脚本并启动。成功则调用方应退出主进程。"""
-    from . import paths
-
-    url = str(entry.get("url") or "")
-    sha = str(entry.get("sha256") or "").lower()
-    if not url.endswith(".zip") or not sha:
-        return False
-
-    app_path = _current_app_bundle()
-    if not app_path:
-        return False  # 开发模式（非 .app）不自动替换
-
-    staging = paths.data_dir() / ".update-staging"
-    zip_path = staging / "update.zip"
+def _mac_notify(title: str, body: str) -> None:
     try:
-        if staging.exists():
-            import shutil as _sh
+        import shlex
+        script = f'display notification {shlex.quote(body)} with title {shlex.quote(title)}'
+        subprocess.Popen(["osascript", "-e", script], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except Exception:
+        pass
 
-            _sh.rmtree(staging, ignore_errors=True)
-        staging.mkdir(parents=True, exist_ok=True)
-        _download_file(url, zip_path)
 
-        if _sha256(zip_path) != sha:
-            import shutil as _sh
-
-            _sh.rmtree(staging, ignore_errors=True)
-            return False  # 坏包：丢弃
-
-        # macOS 自带 ditto：解 zip 时保留权限位与符号链接（用 zipfile 会丢）
-        subprocess.run(["/usr/bin/ditto", "-x", "-k", str(zip_path), str(staging)],
-                       check=True, timeout=600)
-        zip_path.unlink(missing_ok=True)
-
-        new_app = _find_app_bundle(staging)
-        if not new_app:
-            import shutil as _sh
-
-            _sh.rmtree(staging, ignore_errors=True)
-            return False
-
-        _write_and_launch_swap_script(app_path, new_app, staging, latest)
-        return True
-    except Exception:  # noqa: BLE001
-        import shutil as _sh
-
-        _sh.rmtree(staging, ignore_errors=True)
-        return False
+def _shq(s: str) -> str:
+    return "'" + str(s).replace("'", "'\\''") + "'"
 
 
 def _write_and_launch_swap_script(app_path: str, new_app: str, staging: Path, latest: str) -> None:
-    """写 bash 脚本：等本进程退出 → 旧 .app 进废纸篓 → 新 .app 就位 → 清隔离 → 重签 → 重启。"""
     script = staging / "swap.sh"
     trash_dir = Path.home() / ".Trash"
     trash_target = trash_dir / f"{Path(app_path).name}.old-{int(time.time())}"
-    body = f"""#!/bin/bash
-# Pinghe Launcher Lite 自动更新替换脚本（生成的）
+    body = f'''#!/bin/bash
+# 用户已确认的更新；安装失败时不能把旧应用弄没。脚本用 UTF-8 注释，bash 可直接读。
 set -u
 TARGET={_shq(app_path)}
 NEW={_shq(new_app)}
 STAGING={_shq(str(staging))}
 TRASH={_shq(str(trash_target))}
 PID={os.getpid()}
-
 for i in $(seq 1 60); do
   if ! kill -0 "$PID" 2>/dev/null; then break; fi
   sleep 1
 done
-sleep 1
-
-if [ -d "$TARGET" ]; then
-  mkdir -p {_shq(str(trash_dir))} 2>/dev/null || true
-  mv "$TARGET" "$TRASH" 2>/dev/null || rm -rf "$TARGET"
+if kill -0 "$PID" 2>/dev/null; then exit 1; fi
+mkdir -p {_shq(str(trash_dir))} || exit 1
+if [ -d "$TARGET" ]; then mv "$TARGET" "$TRASH" || exit 1; fi
+if ! /usr/bin/ditto "$NEW" "$TARGET"; then
+  mv "$TRASH" "$TARGET" 2>/dev/null || true
+  exit 1
 fi
-
-/usr/bin/ditto "$NEW" "$TARGET" || exit 1
 /usr/bin/xattr -dr com.apple.quarantine "$TARGET" 2>/dev/null || true
 /usr/bin/codesign --sign - --deep --force "$TARGET" 2>/dev/null || true
 /usr/bin/open "$TARGET" 2>/dev/null || true
 rm -rf "$STAGING" 2>/dev/null || true
-"""
-    script.write_text(body, encoding="utf-8")
-    script.chmod(0o755)
+'''
+    tmp = script.with_suffix(".sh.part")
+    tmp.write_text(body, encoding="utf-8")
+    tmp.chmod(0o755)
+    os.replace(tmp, script)
     subprocess.Popen(["/bin/bash", str(script)], start_new_session=True,
                      stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    _mac_notify("Pinghe Launcher Lite 正在更新",
-                f"退出后将自动替换为 v{latest}；下次打开请右键 →「打开」一次。")
-
-
-def _shq(s: str) -> str:
-    """shell 单引号转义。"""
-    return "'" + str(s).replace("'", "'\\''") + "'"
-
-
-def _mac_fallback(latest: str) -> None:
-    """自动替换准备失败时的降级：提示 + 打开下载页（至少不让用户自己找）。"""
-    _mac_notify("发现新版本 Pinghe Launcher Lite",
-                f"v{latest} 已发布，请前往官网下载更新。")
-    try:
-        subprocess.Popen(["open", MAC_DOWNLOAD_URL],
-                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    except Exception:  # noqa: BLE001
-        pass
-
-
-def check_for_update_mac_async(config=None) -> None:
-    """macOS：**只检查**是否有新版本，有就通知界面弹卡片（绝不自动替换）。
-
-    config 用来读「跳过本版本」。
-    """
-
-    def _run() -> None:
-        if not getattr(sys, "frozen", False):
-            return
-        try:
-            data = _check_remote()
-            if not data.get("ok"):
-                return
-            latest = str(data.get("latest_version") or "")
-            if not latest or latest == APP_VERSION:
-                return
-            skipped = str(getattr(config, "skipped_update_version", "") or "")
-            if skipped and skipped == latest:
-                return  # 用户点过「跳过本版本」→ 静默
-            _notify_ui({
-                "version": latest,
-                "current": APP_VERSION,
-                "notes": str(data.get("release_notes") or ""),
-            })
-        except Exception:  # noqa: BLE001
-            pass
-
-    threading.Thread(target=_run, name="update-check-mac", daemon=True).start()
 
 
 def apply_update_mac() -> bool:
-    """**用户点过「更新」之后**才调用：下载 zip → 校验 → 解压 → 写替换脚本。
-
-    成功返回 True（调用方应尽快退出，脚本会替换并重启）。
-    """
+    """只有用户点了「安装」才解压已校验的 zip，并准备替换 .app。"""
+    package = _verified_pending(True)
+    if package is None:
+        return False
+    app = _current_app_bundle()
+    if not app:
+        return False
+    staging = _update_dir() / "extract"
     try:
-        data = _check_remote()
-        if not data or not data.get("ok"):
-            _notify_ui_progress("error", message="拿不到更新信息，请稍后再试。")
-            return False
-        latest = str(data.get("latest_version") or "")
-        _notify_ui_progress("downloading", percent=0)
-        if not _stage_mac_update(data, latest):
-            _notify_ui_progress("error", message="下载或校验失败，已为你打开下载页。")
-            _mac_fallback(latest)
-            return False
-        _notify_ui_progress("applying", message="正在替换应用…")
+        if staging.exists():
+            shutil.rmtree(staging)
+        staging.mkdir(parents=True)
+        subprocess.run(["/usr/bin/ditto", "-x", "-k", str(package), str(staging)],
+                       check=True, timeout=600)
+        new_app = _find_app_bundle(staging)
+        if not new_app:
+            raise ValueError("zip contains no app")
+        _write_and_launch_swap_script(app, new_app, _update_dir(), get_update_status()["version"])
+        _set_state("installing", message="正在退出并准备安装…")
         return True
-    except Exception as exc:  # noqa: BLE001
-        _notify_ui_progress("error", message=str(exc))
+    except Exception as exc:
+        _log.warning("Could not install macOS update (%s)", type(exc).__name__)
+        _set_state("error", message=INSTALL_ERROR)
         return False

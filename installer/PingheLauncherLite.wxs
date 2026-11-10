@@ -1,6 +1,11 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
-  Pinghe Launcher Lite Windows 安装包 (WiX 3.x)
+  【已停用】Pinghe Launcher Lite 的旧 WiX MSI 定义（1.2.8 起不再发布）。
+  正式安装入口是 installer/PingheLauncherLite.nsi（标准 NSIS，和 PH Launcher 同款），
+  默认装到 %LOCALAPPDATA%\Programs\PH Launcher 并共用 data。
+  这份 WXS 仅保留供回看历史产物，不要再用它出安装包。
+
+  历史说明：
   - 按用户安装 (perUser): 装到 %LocalAppData%\Programs\PingheLauncherLite, 无需管理员权限
   - 带开始菜单快捷方式, 支持在"应用和功能"里正常卸载与升级
   - 安装时写入 portable.flag 并建好 data 目录: 数据固定在程序目录里, 和 PH Launcher
